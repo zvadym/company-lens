@@ -1,0 +1,36 @@
+companies:
+  - name: Cloudflare
+    ticker: NET
+    cik: "1477333"
+    pdfs:
+      - label: Q4 2025 investor presentation
+        type: investor_presentation
+        url: https://cloudflare2019ipo.q4web.com/files/doc_financials/2025/q4/Q4-2025-NET-Investor-Presentation.pdf
+  - name: Datadog
+    ticker: DDOG
+    cik: "1561550"
+    pdfs:
+      - label: 2024 annual report
+        type: annual_report
+        url: https://www.annualreports.com/Click/28482
+  - name: MongoDB
+    ticker: MDB
+    cik: "1441816"
+    pdfs:
+      - label: fiscal 2024 annual report
+        type: annual_report
+        url: https://www.annualreports.com/Click/28940
+  - name: Snowflake
+    ticker: SNOW
+    cik: "1640147"
+    pdfs:
+      - label: Q4 fiscal 2025 investor presentation
+        type: investor_presentation
+        url: https://s26.q4cdn.com/463892824/files/doc_financials/2025/q4/Q4-FY2025-Investor-Presentation_vFF.pdf
+  - name: Elastic
+    ticker: ESTC
+    cik: "1707753"
+    pdfs:
+      - label: fiscal 2025 annual report
+        type: annual_report
+        url: https://stocklight.com/stocks/us/nyse-estc/elastic-nv/annual-reports/nyse-estc-2025-10K-251035365.pdf

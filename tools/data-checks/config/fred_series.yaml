@@ -1,0 +1,11 @@
+series:
+  - id: FEDFUNDS
+    name: Federal Funds Effective Rate
+  - id: CPIAUCSL
+    name: Consumer Price Index for All Urban Consumers
+  - id: UNRATE
+    name: Unemployment Rate
+  - id: DGS10
+    name: 10-Year Treasury Constant Maturity Rate
+  - id: A191RL1Q225SBEA
+    name: Real Gross Domestic Product Growth
