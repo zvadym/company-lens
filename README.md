@@ -2,134 +2,91 @@
 
 # 🔎 CompanyLens
 
-### Agentic public-company intelligence powered by RAG, structured data, and tool calling
+### Agentic public-company intelligence powered by adaptive RAG, structured data, and tool calling
 
-[![Project Status](https://img.shields.io/badge/status-early%20development-orange)](https://github.com/zvadym/company-lens)
+[![Project Status](https://img.shields.io/badge/status-early%20development-orange)](https://github.com/zvadym/company-lens/issues)
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![LangChain](https://img.shields.io/badge/LangChain-RAG-1C3C3C)](https://python.langchain.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-Agent%20Orchestration-1C3C3C)](https://langchain-ai.github.io/langgraph/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![React](https://img.shields.io/badge/React-Interactive%20UI-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![React](https://img.shields.io/badge/React-TypeScript-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![Evaluation](https://img.shields.io/badge/Evaluation-Golden%20Sets%20%7C%20LLM--as--a--Judge-7B61FF)](https://github.com/zvadym/company-lens/issues/1)
 [![Docker](https://img.shields.io/badge/Docker-Containers-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
-**CompanyLens** is a production-oriented AI research assistant for analysing public companies across regulatory filings, investor documents, financial facts, and macroeconomic data.
+**CompanyLens** is a production-oriented AI research assistant for analysing public companies across regulatory filings, investor documents, structured financial facts, and macroeconomic data.
 
-It combines **retrieval-augmented generation**, **agentic orchestration**, **structured SQL queries**, **external APIs**, **calculations**, **chart generation**, and **source-level citations** in one observable workflow.
+It is designed as both a usable MVP and a hands-on laboratory for **RAG**, **agentic systems**, **tool calling**, **context engineering**, **evaluation**, and **LLM observability**.
 
 </div>
 
 > [!IMPORTANT]
-> CompanyLens is currently in **early development**. This README describes the intended MVP architecture, scope, and engineering standards. Features marked as planned are not yet implemented.
+> CompanyLens is currently in **early development**. The capabilities below describe the target architecture. The implementation backlog is tracked in [GitHub Issues](https://github.com/zvadym/company-lens/issues).
 
 ---
 
-## 📌 Table of contents
+## 📌 Contents
 
-- [Problem](#-problem)
-- [What CompanyLens does](#-what-companylens-does)
-- [Example questions](#-example-questions)
-- [Core capabilities](#-core-capabilities)
+- [Why CompanyLens](#-why-companylens)
+- [Example research question](#-example-research-question)
 - [System architecture](#-system-architecture)
-- [Agent workflow](#-agent-workflow)
 - [Data sources](#-data-sources)
-- [RAG and indexing strategy](#-rag-and-indexing-strategy)
-- [Structured analytics](#-structured-analytics)
-- [Citations and evidence](#-citations-and-evidence)
-- [Execution trace](#-execution-trace)
+- [Hierarchical data model](#-hierarchical-data-model)
+- [Adaptive retrieval](#-adaptive-retrieval)
+- [Agent workflow](#-agent-workflow)
+- [Evidence and citations](#-evidence-and-citations)
+- [Evaluation Lab](#-evaluation-lab)
 - [Technology stack](#-technology-stack)
 - [Planned repository structure](#-planned-repository-structure)
-- [API design](#-api-design)
-- [Evaluation strategy](#-evaluation-strategy)
-- [Observability and reliability](#-observability-and-reliability)
-- [Security](#-security)
-- [Development roadmap](#-development-roadmap)
+- [API and interface](#-api-and-interface)
+- [Implementation roadmap](#-implementation-roadmap)
+- [Quality targets](#-quality-targets)
 - [Local development](#-local-development)
 - [Design principles](#-design-principles)
-- [License](#-license)
 
 ---
 
-## 🎯 Problem
+## 🎯 Why CompanyLens
 
-Public-company research usually requires switching between several incompatible sources:
+Public-company research usually requires moving between several incompatible sources:
 
 - SEC filings in HTML or text form;
 - annual reports and investor presentations in PDF;
-- structured financial facts exposed through APIs;
+- structured XBRL financial facts;
 - macroeconomic time series;
-- manually created spreadsheets and charts;
-- narrative explanations that must remain traceable to their sources.
+- manually created calculations and charts;
+- narrative explanations that must remain traceable to evidence.
 
-A normal document chatbot is not enough for this domain. Some questions require semantic retrieval, some require SQL or API calls, some require calculations, and complex questions require all of them together.
+A conventional document chatbot is not enough.
 
-CompanyLens is designed to choose the correct workflow for each question instead of forcing every request through vector search.
+Different questions require different execution paths:
 
----
+| Question type | Correct data path |
+|---|---|
+| What risks did management report? | RAG over filing sections |
+| What was revenue growth? | Structured facts + deterministic calculation |
+| How did risks change over three years? | Multi-document hierarchical retrieval |
+| Compare growth with interest rates | SEC facts + FRED API + calculation + chart |
+| What does ticker `NET` refer to? | Exact entity lookup, not vector search |
 
-## 🧭 What CompanyLens does
-
-CompanyLens accepts a natural-language research question and plans a multi-step workflow using the available evidence sources and tools.
-
-Depending on the question, it can:
-
-1. identify companies, metrics, reporting periods, and comparison criteria;
-2. retrieve relevant passages from filings and investor documents;
-3. query structured financial facts from PostgreSQL or external APIs;
-4. fetch macroeconomic time series;
-5. calculate growth rates, margins, trends, and comparisons;
-6. generate a chart specification and render it in the UI;
-7. compose a grounded answer with source citations;
-8. expose the execution trace, tool calls, timing, and validation results.
-
-The project is intended to demonstrate production engineering around LLM systems rather than only prompt engineering.
+CompanyLens routes each request to the appropriate combination of retrieval, SQL, APIs, calculations, and generation.
 
 ---
 
-## 💬 Example questions
+## 💬 Example research question
 
-### Document retrieval
+> Compare Cloudflare, Datadog, and MongoDB revenue growth over the last eight quarters. Identify the two most frequently reported business risks for each company, explain whether management's outlook changed, and plot revenue growth against the federal funds rate.
 
-> What competitive risks did Cloudflare identify in its latest annual report?
+A successful run should:
 
-### Structured analytics
-
-> Show Datadog's year-over-year revenue growth for the last eight reported quarters.
-
-### Hybrid RAG + analytics
-
-> Compare the revenue growth of Cloudflare, Datadog, and MongoDB over the last eight quarters. Identify the two most frequently reported business risks for each company and plot growth against the federal funds rate.
-
-### Cross-document comparison
-
-> How did management's discussion of AI-related demand change between the last two annual reports?
-
-### Tool-based research
-
-> Retrieve the latest available federal funds rate and explain whether higher rates overlap with slower SaaS revenue growth.
-
-### Evidence verification
-
-> Which sources support the claim that customer optimisation affected cloud-software growth?
-
----
-
-## ✨ Core capabilities
-
-| Capability | Description | Planned implementation |
-|---|---|---|
-| 🔍 Semantic retrieval | Search narrative sections from filings and PDFs | LangChain + pgvector |
-| 🧭 Agentic routing | Select RAG, SQL, API, calculation, or hybrid workflows | LangGraph |
-| 🧾 Structured extraction | Convert model output into validated typed objects | Pydantic |
-| 🧮 Financial calculations | Compute growth, margins, deltas, and comparisons | Python analytics layer |
-| 📊 Chart generation | Return structured chart specifications to the frontend | Vega-Lite or Recharts |
-| 🔗 Citations | Link claims to exact documents, sections, pages, or API series | Evidence registry |
-| ⚡ Streaming | Stream status events, tool execution, and answer tokens | FastAPI + SSE |
-| 🧠 Conversation context | Preserve user intent without polluting retrieval | LangGraph state/checkpoints |
-| ✅ Validation | Reject unsupported claims and malformed tool output | Deterministic validators |
-| 📈 Observability | Trace nodes, prompts, retrieval, latency, and failures | OpenTelemetry + Langfuse |
-| 🧪 Evaluation | Measure retrieval quality, citation accuracy, and answer quality | Automated eval suite |
-| 🐳 Reproducible runtime | Run services locally and in CI using containers | Docker Compose |
+1. resolve company names, tickers, reporting periods, and metrics;
+2. query structured SEC financial facts;
+3. retrieve relevant 10-K and 10-Q sections;
+4. fetch the federal funds rate from FRED;
+5. calculate year-over-year growth;
+6. generate a validated chart specification;
+7. produce a grounded answer with claim-level citations;
+8. expose a safe execution trace, latency, and quality checks.
 
 ---
 
@@ -138,129 +95,51 @@ The project is intended to demonstrate production engineering around LLM systems
 ```mermaid
 flowchart LR
     U[User] --> UI[React application]
-    UI -->|HTTP + SSE| API[FastAPI gateway]
+    UI -->|HTTP + SSE| API[FastAPI API]
     API --> G[LangGraph research agent]
 
-    G --> R[Retrieval service]
-    G --> S[Structured analytics service]
-    G --> T[External tool adapters]
-    G --> C[Calculation and chart service]
-    G --> V[Evidence validator]
+    G --> ER[Entity resolver]
+    G --> P[Planner]
+    G --> R[Adaptive retrieval]
+    G --> S[Structured analytics]
+    G --> T[External tools]
+    G --> E[Evidence validator]
 
     R --> PG[(PostgreSQL + pgvector)]
-    R --> OBJ[(Document storage)]
-
+    R --> DS[(Document storage)]
     S --> PG
-
-    T --> SEC[SEC EDGAR / XBRL APIs]
+    T --> SEC[SEC EDGAR / XBRL]
     T --> FRED[FRED API]
 
-    C --> PG
-
-    G --> O[Tracing and evaluation]
+    G --> O[Observability and evaluation]
     API --> O
 
-    V --> G
+    E --> G
     G --> API
-    API --> UI
 ```
 
 ### Main boundaries
 
-- **API layer** handles authentication, validation, streaming, rate limits, and request lifecycle.
-- **Agent layer** plans and coordinates work but does not contain provider-specific network code.
-- **Retrieval layer** owns document search, metadata filtering, reranking, and source hydration.
-- **Analytics layer** owns deterministic queries and calculations.
-- **Tool adapters** isolate external APIs behind typed interfaces.
-- **Evidence layer** maps generated claims to retrieved or calculated evidence.
-- **Frontend** renders answers, sources, charts, execution steps, and recoverable errors.
-
----
-
-## 🕸 Agent workflow
-
-The workflow is modelled as an explicit state machine rather than an open-ended autonomous loop.
-
-```mermaid
-flowchart TD
-    A[Receive question] --> B[Parse intent and entities]
-    B --> C[Resolve companies, tickers, and periods]
-    C --> D[Create execution plan]
-
-    D --> E{Required evidence}
-
-    E -->|Narrative evidence| F[Retrieve documents]
-    E -->|Financial metrics| G[Query structured facts]
-    E -->|Macroeconomic data| H[Call external API]
-    E -->|Derived values| I[Run calculations]
-
-    F --> J[Merge evidence]
-    G --> J
-    H --> J
-    I --> J
-
-    J --> K{Chart required?}
-    K -->|Yes| L[Generate chart specification]
-    K -->|No| M[Compose grounded answer]
-    L --> M
-
-    M --> N[Validate claims and citations]
-    N -->|Valid| O[Stream final result]
-    N -->|Missing evidence| P[Repair or abstain]
-    P --> O
-```
-
-### Planned LangGraph nodes
-
-```text
-parse_question
-resolve_entities
-plan_request
-retrieve_documents
-query_financial_facts
-query_macro_series
-calculate_metrics
-generate_chart_spec
-merge_evidence
-generate_answer
-validate_citations
-finalize_response
-```
-
-### Planned agent state
-
-```python
-class AgentState(TypedDict):
-    messages: list
-    question: str
-    intent: str
-    companies: list[str]
-    metrics: list[str]
-    date_range: dict | None
-    plan: list[dict]
-    retrieved_documents: list[dict]
-    tool_results: list[dict]
-    calculations: list[dict]
-    chart_spec: dict | None
-    citations: list[dict]
-    validation_errors: list[str]
-    final_answer: str | None
-```
+- **API layer** — request validation, streaming, rate limits, cancellation, and public errors.
+- **Agent layer** — explicit state transitions, planning, parallel branches, retries, and checkpoints.
+- **Retrieval layer** — exact filters, dense and lexical retrieval, reranking, hierarchy expansion, and context budgets.
+- **Analytics layer** — deterministic queries, calculations, units, and data lineage.
+- **Tool adapters** — SEC, FRED, model providers, and optional external systems behind typed interfaces.
+- **Evidence layer** — claim-to-source mapping, citation validation, and abstention.
+- **Evaluation layer** — golden datasets, deterministic metrics, LLM judges, regression gates, and online feedback.
 
 ---
 
 ## 🗂 Data sources
 
-The MVP will use a deliberately small, high-quality corpus covering a limited set of public software companies.
+### SEC filings — HTML and text
 
-### 1. SEC filings — HTML and text
-
-Planned document types:
+Initial document types:
 
 - 10-K annual reports;
 - 10-Q quarterly reports;
 - selected 8-K filings;
-- filing exhibits where relevant.
+- relevant filing exhibits.
 
 High-value sections include:
 
@@ -272,9 +151,7 @@ High-value sections include:
 - Market Risk;
 - Strategy and Outlook.
 
-### 2. Investor-relations documents — PDF
-
-Planned document types:
+### Investor-relations documents — PDF
 
 - annual reports;
 - investor presentations;
@@ -282,11 +159,11 @@ Planned document types:
 - earnings presentations;
 - selected sustainability reports.
 
-PDF ingestion will preserve page numbers and document structure so the UI can open the exact supporting page.
+PDF ingestion must preserve page-level provenance so citations can open the exact supporting page.
 
-### 3. SEC Company Facts — JSON
+### SEC Company Facts — JSON/XBRL
 
-Structured financial facts may include:
+Structured metrics are normalised into relational tables rather than embedded as prose:
 
 - revenue;
 - net income;
@@ -296,11 +173,9 @@ Structured financial facts may include:
 - R&D expense;
 - operating cash flow.
 
-These values will be normalised into relational tables rather than embedded as text.
+### FRED — time-series API
 
-### 4. FRED — time-series API
-
-Initial macroeconomic series may include:
+Initial series may include:
 
 - federal funds rate;
 - CPI inflation;
@@ -310,7 +185,7 @@ Initial macroeconomic series may include:
 
 ### Initial company universe
 
-The first corpus is expected to cover approximately five public software companies, for example:
+The first corpus is expected to cover approximately five public software companies:
 
 - Cloudflare;
 - Datadog;
@@ -318,217 +193,409 @@ The first corpus is expected to cover approximately five public software compani
 - Snowflake;
 - Elastic.
 
-The exact list may change based on filing consistency and data quality.
+Availability is checked by the standalone diagnostics task in [#2](https://github.com/zvadym/company-lens/issues/2).
 
 ---
 
-## 🧠 RAG and indexing strategy
+## 🧱 Hierarchical data model
 
-CompanyLens separates narrative evidence from structured numerical data.
+CompanyLens will preserve document hierarchy instead of storing unrelated flat chunks.
 
-### Content stored in pgvector
+```text
+Company
+└── Filing or investor document
+    ├── Document metadata
+    ├── Document summary
+    ├── Section
+    │   ├── Section summary
+    │   └── Detailed chunks
+    └── Raw pages or source artifacts
+```
 
-- narrative filing sections;
-- risk disclosures;
-- management commentary;
-- strategy descriptions;
-- investor-presentation text;
-- shareholder letters;
-- official company announcements.
+This supports several retrieval patterns:
 
-### Content stored relationally
+- search summaries and expand to detailed source chunks;
+- search small chunks and return larger parent sections;
+- compare equivalent sections across reporting periods;
+- preserve exact page and filing citations;
+- reprocess summaries, chunks, or embeddings independently.
 
-- company identifiers and tickers;
-- filing metadata;
-- reporting periods;
-- financial facts;
-- macroeconomic observations;
-- calculated metrics;
-- ingestion state;
-- document versions;
-- evaluation datasets.
+### Planned source lineage
 
-### Planned chunk metadata
+```text
+claim
+└── evidence item
+    ├── company and identifiers
+    ├── document and filing metadata
+    ├── section and page
+    ├── retrieved passage or structured observation
+    ├── parser, prompt, embedding, and index versions
+    └── source URL
+```
 
-```python
-class DocumentChunk:
-    id: UUID
-    company_id: UUID
-    source_type: str
-    document_type: str
-    filing_date: date
-    fiscal_period: str | None
-    section: str
-    page_number: int | None
-    text: str
-    source_url: str
-    accession_number: str | None
-    content_hash: str
-    embedding: list[float]
+The data-model work is tracked in [#4](https://github.com/zvadym/company-lens/issues/4).
+
+---
+
+## 🧠 Adaptive retrieval
+
+CompanyLens will not send the same amount of context for every question.
+
+### Retrieval strategies
+
+```text
+none
+summary_only
+section_level
+detailed
+structured_only
+hybrid
+```
+
+Examples:
+
+```text
+“What does Cloudflare do?”
+    → company/document summaries
+
+“What risks did Cloudflare identify?”
+    → section summaries + supporting chunks
+
+“How did those risks change over three years?”
+    → multiple filings + hierarchy expansion + period diversity
+
+“Show revenue for eight quarters.”
+    → structured facts only
 ```
 
 ### Retrieval pipeline
 
 ```mermaid
 flowchart LR
-    Q[Question] --> QE[Query understanding]
-    QE --> MF[Metadata filters]
+    Q[Question] --> ER[Exact entity resolution]
+    ER --> RP[Retrieval plan and token budget]
+    RP --> MF[Metadata constraints]
+
     MF --> VS[Vector search]
-    MF --> KS[Keyword search]
+    MF --> KS[Lexical search]
     VS --> RR[Reranker]
     KS --> RR
-    RR --> DD[Deduplication and diversity]
-    DD --> SH[Source hydration]
-    SH --> EV[Evidence package]
+
+    RR --> HD[Hierarchy expansion]
+    HD --> DD[Deduplication and diversity]
+    DD --> CA[Context assembler]
+    CA --> QE[Context-quality evaluation]
+
+    QE -->|Sufficient| EV[Evidence package]
+    QE -->|Insufficient| ES[Bounded escalation]
+    ES --> RP
 ```
 
-The planned retrieval strategy includes:
+### Exact lookup before embeddings
 
-1. entity-aware metadata filtering;
-2. hybrid dense and lexical retrieval;
-3. reranking;
-4. section and document diversity controls;
-5. near-duplicate removal;
-6. evidence compression only after source preservation;
-7. retrieval diagnostics stored with every answer.
+The following values must be resolved deterministically where possible:
 
-Embeddings answer **where a topic is discussed**. SQL and APIs answer **how much, when, and how values changed**.
+- company names and aliases;
+- tickers and CIKs;
+- filing types and accession numbers;
+- fiscal periods and dates;
+- known financial metrics.
+
+Vector search is then executed inside the correctly filtered corpus.
+
+### Bounded escalation
+
+When context is insufficient, the system may:
+
+- rewrite the query;
+- switch to lexical or exact search;
+- expand a summary to its parent section;
+- increase top-k within a fixed limit;
+- add a structured-data tool;
+- abstain after the maximum number of attempts.
+
+Every retry must change the strategy. Repeating the same failed retrieval is not a recovery mechanism.
+
+Adaptive retrieval is tracked in [#8](https://github.com/zvadym/company-lens/issues/8) and [#9](https://github.com/zvadym/company-lens/issues/9).
 
 ---
 
-## 📊 Structured analytics
+## 🕸 Agent workflow
 
-Financial analysis must be deterministic and reproducible.
+The agent is an explicit bounded state machine rather than an unrestricted autonomous loop.
 
-The LLM may select a metric or request a calculation, but it must not invent values or perform opaque arithmetic inside prose.
+```mermaid
+flowchart TD
+    A[Receive question] --> B[Parse intent and entities]
+    B --> C[Resolve identifiers and periods]
+    C --> D[Create execution plan]
 
-Planned calculation tools include:
+    D --> E{Required evidence}
+    E -->|Narrative| F[Adaptive retrieval]
+    E -->|Financial| G[Query SEC facts]
+    E -->|Macroeconomic| H[Query FRED]
+    E -->|Derived metrics| I[Run calculations]
 
-- quarter-over-quarter growth;
-- year-over-year growth;
-- compound annual growth rate;
-- gross and operating margins;
-- absolute and percentage deltas;
-- rolling averages;
-- normalised index comparisons;
-- simple correlation with explicit caveats.
+    F --> J[Evaluate context]
+    J -->|Insufficient| K[Escalate retrieval]
+    K --> F
+    J -->|Sufficient| L[Merge evidence]
+    G --> L
+    H --> L
+    I --> L
 
-Each calculated value will retain lineage:
+    L --> M{Chart required?}
+    M -->|Yes| N[Generate chart specification]
+    M -->|No| O[Generate grounded answer]
+    N --> O
+
+    O --> P[Extract claims and validate citations]
+    P -->|Valid| Q[Stream result]
+    P -->|Repairable| R[Repair answer]
+    P -->|Unsupported| S[Abstain or return partial result]
+    R --> P
+```
+
+### Planned LangGraph nodes
 
 ```text
-result
-├── formula
-├── input observations
-├── source identifiers
-├── reporting periods
-├── units
-└── calculation timestamp
+parse_question
+resolve_entities
+plan_request
+retrieve_documents
+evaluate_context
+query_financial_facts
+query_macro_series
+calculate_metrics
+generate_chart_spec
+merge_evidence
+generate_answer
+validate_citations
+repair_or_abstain
+finalize_response
 ```
 
-Charts will be generated from validated structured datasets, not extracted from natural-language model output.
+### Planned agent state
+
+```python
+class AgentState(TypedDict):
+    messages: list
+    question: str
+    intent: str
+    resolved_entities: dict
+    retrieval_plan: dict | None
+    execution_plan: list[dict]
+    retrieved_documents: list[dict]
+    tool_results: list[dict]
+    calculations: list[dict]
+    evidence: list[dict]
+    chart_spec: dict | None
+    claims: list[dict]
+    citations: list[dict]
+    validation_errors: list[str]
+    retry_count: int
+    final_answer: str | None
+```
+
+Agent orchestration is tracked in [#12](https://github.com/zvadym/company-lens/issues/12).
 
 ---
 
-## 🔗 Citations and evidence
+## 🔗 Evidence and citations
 
-A citation is treated as a first-class domain object.
+A citation is a first-class domain object, not a URL appended after generation.
 
-Planned citation types:
+Planned evidence types:
 
-- SEC filing section;
-- PDF page;
-- investor-relations document;
+- SEC filing passage;
+- PDF page or text block;
 - structured financial fact;
-- FRED series observation;
-- derived calculation.
+- FRED observation;
+- deterministic calculation;
+- derived chart dataset.
 
-Every externally verifiable claim should map to at least one evidence item. The validator will check that:
+Validation checks include:
 
-- the cited source exists;
-- the cited passage or value was actually available to the model;
-- company and reporting-period metadata match the claim;
-- calculated values reference their inputs;
-- unsupported claims are removed, repaired, or explicitly marked as unavailable.
+- the evidence existed in the assembled model context;
+- company, period, document, page, metric, and unit match the claim;
+- calculated values retain input observations and formula;
+- unsupported factual claims are repaired, removed, or marked unavailable;
+- correlation is not presented as proven causation.
+
+The evidence registry and claim-level validation are tracked in [#13](https://github.com/zvadym/company-lens/issues/13).
 
 ---
 
-## 👣 Execution trace
+## 🧪 Evaluation Lab
 
-The UI will display structured execution events, not hidden model reasoning.
+Evaluation is a separate subsystem, not a final testing step.
 
-Example:
+The umbrella design is tracked in [#1](https://github.com/zvadym/company-lens/issues/1).
 
-```text
-✓ Detected intent: comparative financial analysis
-✓ Resolved entities: Cloudflare [NET], Datadog [DDOG]
-✓ Selected sources: SEC Company Facts, 10-K Risk Factors, FRED
-✓ Retrieved 14 document chunks
-✓ Loaded 16 quarterly revenue observations
-✓ Calculated year-over-year growth
-✓ Generated line-chart specification
-✓ Verified 7 citations
+```mermaid
+flowchart TD
+    G[Canonical golden dataset]
+
+    G --> C[Custom deterministic evaluators]
+    G --> R[Ragas]
+    G --> D[DeepEval]
+    G --> LS[LangSmith]
+    G --> LF[Langfuse]
+    G --> PH[Phoenix / OpenInference]
+
+    H[Human annotations] --> JC[Judge calibration]
+    C --> REP[Cross-framework report]
+    R --> REP
+    D --> REP
+    LS --> REP
+    LF --> REP
+    PH --> REP
+    REP --> JC
+
+    PROD[Production traces and feedback] --> REVIEW[Human review]
+    REVIEW --> G
 ```
 
-Each trace event may include:
+### 1. Manual golden set
 
-- LangGraph node name;
-- status and duration;
-- tool name and typed parameters;
-- cache hit or miss;
-- number of retrieved documents;
-- retrieval scores;
-- API response status;
-- validation result;
-- recoverable error details.
+One framework-neutral dataset will define:
 
-Sensitive prompts, credentials, and hidden chain-of-thought content will never be exposed.
+- question and category;
+- reference answer or required claims;
+- expected entities and date range;
+- expected route and graph nodes;
+- expected tools and arguments;
+- expected documents, sections, and pages;
+- expected calculations and chart properties;
+- abstention expectations;
+- rubric and human labels.
+
+Planned initial size: **40-60 manually reviewed cases**.
+
+Tracked in [#18](https://github.com/zvadym/company-lens/issues/18).
+
+### 2. Deterministic evaluation
+
+Where exact assertions are possible, normal code remains the source of truth:
+
+- ingestion integrity;
+- Recall@K, Precision@K, MRR, and nDCG@K;
+- entity and route accuracy;
+- tool names and arguments;
+- LangGraph trajectories and retry bounds;
+- financial calculations;
+- chart datasets;
+- citation metadata and lineage;
+- latency, token, tool-call, and cost budgets.
+
+Tracked in [#19](https://github.com/zvadym/company-lens/issues/19).
+
+### 3. LLM-as-a-Judge
+
+The project will demonstrate several judge patterns:
+
+- pointwise rubric scoring;
+- reference-based evaluation;
+- reference-free groundedness evaluation;
+- pairwise comparison;
+- claim-level evidence verification;
+- trajectory and tool-efficiency judging.
+
+Judge prompts, models, schemas, and rubric versions will be stored with experiment results.
+
+LLM judges will be calibrated against human labels using agreement, confusion matrices, Cohen's kappa, rank correlation, repeated runs, and position-bias tests.
+
+Tracked in [#20](https://github.com/zvadym/company-lens/issues/20).
+
+### 4. Framework comparison
+
+The same canonical cases will be exposed through adapters for:
+
+| Tool | Learning focus |
+|---|---|
+| pytest + custom metrics | Exact domain assertions and CI gates |
+| Ragas | RAG, tool, agent, and synthetic test metrics |
+| DeepEval | GEval, component tests, agent tests, and CI workflows |
+| LangSmith | LangGraph traces, datasets, experiments, pairwise and human evaluation |
+| Langfuse | Open observability, prompts, datasets, online scoring, cost and latency |
+| Phoenix / OpenInference | OpenTelemetry-based LLM tracing and evaluator instrumentation |
+
+The project intentionally includes overlapping tools for learning and comparison. A normal production deployment would usually select a smaller subset.
+
+Tracked in [#21](https://github.com/zvadym/company-lens/issues/21).
+
+### 5. Offline and online evaluation
+
+```text
+Pull request
+    → fast deterministic regression subset
+
+Main / nightly
+    → complete golden set + model judges + comparison report
+
+Production demo
+    → deterministic checks on every run
+    → sampled LLM judges
+    → explicit user feedback
+    → reviewed failures promoted into regression cases
+```
+
+Tracked in [#22](https://github.com/zvadym/company-lens/issues/22).
 
 ---
 
 ## 🧰 Technology stack
 
-### Backend
+### Backend and data
 
 | Technology | Responsibility |
 |---|---|
 | Python 3.12+ | Core runtime |
-| FastAPI | HTTP API, validation, streaming |
-| Pydantic | Typed contracts and structured outputs |
-| LangChain | Document abstractions, retrieval components, model adapters |
-| LangGraph | Stateful orchestration, branching, retries, checkpoints |
-| SQLAlchemy | Database access and migrations integration |
-| Alembic | Schema migrations |
-| PostgreSQL | Relational data and application state |
-| pgvector | Embedding storage and similarity search |
+| FastAPI | HTTP API, validation, and SSE |
+| Pydantic | Typed contracts and structured model outputs |
+| LangChain | Retrieval components, tools, and model adapters |
+| LangGraph | Stateful orchestration, parallel branches, retries, checkpoints |
+| SQLAlchemy + Alembic | Persistence and migrations |
+| PostgreSQL | Relational application and analytics data |
+| pgvector | Dense retrieval |
+| PostgreSQL full-text search | Lexical retrieval |
 | httpx | Async external API clients |
-| Pandas or Polars | Deterministic data transformations |
+| Pandas or Polars | Deterministic transformations and analysis |
 
 ### Frontend
 
 | Technology | Responsibility |
 |---|---|
-| React | Application UI |
-| TypeScript | Typed frontend contracts |
+| React + TypeScript | Research interface |
 | TanStack Query | Server-state management |
-| SSE client | Streaming agent events |
+| Server-Sent Events | Streaming agent events |
 | Recharts or Vega-Lite | Interactive charts |
 | Markdown renderer | Answers with citations |
+
+### Evaluation and observability
+
+| Technology | Responsibility |
+|---|---|
+| pytest | Unit, integration, trajectory, and regression tests |
+| Ragas | RAG and agent metrics |
+| DeepEval | LLM test cases and rubric-based evaluation |
+| LangSmith | LangChain/LangGraph experiments and annotation |
+| Langfuse | Open LLM observability, datasets, and online evaluation |
+| Phoenix / OpenInference | Standards-based tracing and evaluator experiments |
+| OpenTelemetry | Distributed traces and metrics |
 
 ### Infrastructure and quality
 
 | Technology | Responsibility |
 |---|---|
 | Docker Compose | Local service orchestration |
-| pytest | Unit and integration testing |
 | Ruff | Linting and formatting |
-| mypy or Pyright | Static type checking |
+| Pyright or mypy | Static typing |
 | pre-commit | Local quality gates |
-| GitHub Actions | CI pipeline |
-| OpenTelemetry | Distributed traces and metrics |
-| Langfuse | LLM traces, prompt versions, and evaluation |
-| Redis | Optional caching and rate-limit state |
+| GitHub Actions | CI and evaluation workflows |
+| Redis | Optional cache and rate-limit state |
 
-The model provider will remain configurable so the core application is not tightly coupled to one vendor.
+Provider-specific integrations will remain behind internal interfaces.
 
 ---
 
@@ -537,32 +604,49 @@ The model provider will remain configurable so the core application is not tight
 ```text
 company-lens/
 ├── apps/
-│   ├── api/                     # FastAPI application
-│   └── web/                     # React application
+│   ├── api/                         # FastAPI application
+│   └── web/                         # React application
 ├── src/company_lens/
-│   ├── agents/                  # LangGraph definitions and state
-│   ├── api/                     # Routes, dependencies, SSE contracts
-│   ├── analytics/               # Deterministic calculations
-│   ├── citations/               # Evidence and citation validation
-│   ├── config/                  # Settings and environment handling
-│   ├── db/                      # Models, repositories, migrations
-│   ├── ingestion/               # SEC/PDF ingestion pipelines
-│   ├── llm/                     # Provider-neutral model interfaces
-│   ├── retrieval/               # Search, filters, reranking
-│   ├── tools/                   # SEC, FRED, and internal tools
-│   └── observability/           # Traces, metrics, logging
+│   ├── agents/                      # LangGraph graphs, nodes, and state
+│   ├── analytics/                   # Deterministic calculations
+│   ├── api/                         # Routes, SSE, dependencies, contracts
+│   ├── citations/                   # Evidence registry and validation
+│   ├── config/                      # Settings and environment handling
+│   ├── context/                     # Context budgets and assembly
+│   ├── db/                          # Models, repositories, migrations
+│   ├── ingestion/                   # SEC and PDF pipelines
+│   ├── llm/                         # Provider-neutral model interfaces
+│   ├── observability/               # Traces, logs, metrics, versions
+│   ├── retrieval/                   # Dense, lexical, reranking, hierarchy
+│   └── tools/                       # SEC, FRED, calculations, internal tools
 ├── evals/
-│   ├── datasets/                # Curated evaluation questions
-│   ├── retrieval/               # Retrieval metrics
-│   ├── answers/                 # Groundedness and citation checks
-│   └── regression/              # Versioned regression suites
+│   ├── datasets/
+│   │   ├── golden/
+│   │   ├── synthetic/
+│   │   └── production/
+│   ├── fixtures/
+│   ├── metrics/
+│   ├── judges/
+│   ├── adapters/
+│   │   ├── ragas/
+│   │   ├── deepeval/
+│   │   ├── langsmith/
+│   │   ├── langfuse/
+│   │   └── phoenix/
+│   ├── runners/
+│   └── reports/
 ├── tests/
 │   ├── unit/
 │   ├── integration/
 │   └── end_to_end/
-├── scripts/                     # Development and ingestion commands
-├── infra/                       # Container and deployment assets
-├── docs/                        # Architecture decisions and diagrams
+├── tools/
+│   └── data-checks/                  # Standalone source diagnostics
+├── docs/
+│   ├── architecture/
+│   ├── decisions/
+│   └── operations/
+├── infra/
+├── scripts/
 ├── docker-compose.yml
 ├── pyproject.toml
 └── README.md
@@ -570,9 +654,9 @@ company-lens/
 
 ---
 
-## 🔌 API design
+## 🔌 API and interface
 
-Planned public endpoints:
+Planned endpoints:
 
 ```http
 POST /api/v1/research
@@ -584,20 +668,7 @@ GET  /api/v1/companies
 GET  /api/v1/health
 ```
 
-### Example request
-
-```json
-{
-  "question": "Compare Cloudflare and Datadog revenue growth over the last eight quarters and explain the main risks reported by each company.",
-  "conversation_id": null,
-  "options": {
-    "include_chart": true,
-    "show_execution_trace": true
-  }
-}
-```
-
-### Example streamed event
+Example streamed event:
 
 ```text
 event: agent.step
@@ -610,223 +681,163 @@ data: {
 }
 ```
 
-### Example result shape
+The UI will show structured execution events, not hidden model reasoning:
 
-```json
-{
-  "answer": "...",
-  "citations": [],
-  "chart": {
-    "type": "line",
-    "dataset": [],
-    "x": "quarter",
-    "y": "revenue_growth",
-    "series": "company"
-  },
-  "execution_summary": [],
-  "warnings": []
-}
+```text
+✓ Resolved entities: Cloudflare [NET], Datadog [DDOG]
+✓ Selected strategy: hybrid structured data + detailed retrieval
+✓ Loaded 16 quarterly revenue observations
+✓ Retrieved 14 filing passages from 6 documents
+✓ Calculated year-over-year growth
+✓ Generated chart specification
+✓ Validated 9 claim-level citations
+```
+
+API delivery is tracked in [#14](https://github.com/zvadym/company-lens/issues/14) and the React interface in [#15](https://github.com/zvadym/company-lens/issues/15).
+
+---
+
+## 🗺 Implementation roadmap
+
+The backlog is dependency-aware. Issue numbers below link to the implementation tasks.
+
+### Phase 0 — Source validation
+
+- [#2 — Data-source availability diagnostics](https://github.com/zvadym/company-lens/issues/2)
+
+### Phase 1 — Foundation and domain model
+
+- [#3 — Backend foundation and local environment](https://github.com/zvadym/company-lens/issues/3)
+- [#4 — Hierarchical domain and persistence model](https://github.com/zvadym/company-lens/issues/4)
+
+### Phase 2 — Document ingestion
+
+- [#5 — SEC company and filing ingestion](https://github.com/zvadym/company-lens/issues/5)
+- [#6 — PDF ingestion with page provenance](https://github.com/zvadym/company-lens/issues/6)
+- [#7 — Section extraction, summaries, and hierarchical chunks](https://github.com/zvadym/company-lens/issues/7)
+
+### Phase 3 — Retrieval and context engineering
+
+- [#8 — Dense, lexical, and hybrid retrieval](https://github.com/zvadym/company-lens/issues/8)
+- [#9 — Entity resolution and adaptive hierarchical retrieval](https://github.com/zvadym/company-lens/issues/9)
+
+### Phase 4 — Structured data and deterministic analytics
+
+- [#10 — SEC Company Facts and normalised metrics](https://github.com/zvadym/company-lens/issues/10)
+- [#11 — FRED tools, calculations, and chart specifications](https://github.com/zvadym/company-lens/issues/11)
+
+### Phase 5 — Agent and evidence layer
+
+- [#12 — LangGraph research workflow](https://github.com/zvadym/company-lens/issues/12)
+- [#13 — Evidence registry and claim-level citation validation](https://github.com/zvadym/company-lens/issues/13)
+
+### Phase 6 — Product interface
+
+- [#14 — FastAPI research API and SSE](https://github.com/zvadym/company-lens/issues/14)
+- [#15 — React research interface](https://github.com/zvadym/company-lens/issues/15)
+
+### Phase 7 — Production safeguards and delivery
+
+- [#16 — Observability, reliability, and security](https://github.com/zvadym/company-lens/issues/16)
+- [#17 — Deployment and production demo](https://github.com/zvadym/company-lens/issues/17)
+
+### Continuous track — Evaluation Lab
+
+- [#1 — Evaluation framework umbrella](https://github.com/zvadym/company-lens/issues/1)
+- [#18 — Canonical golden dataset and human rubric](https://github.com/zvadym/company-lens/issues/18)
+- [#19 — Deterministic metrics and CI gates](https://github.com/zvadym/company-lens/issues/19)
+- [#20 — LLM-as-a-Judge and calibration](https://github.com/zvadym/company-lens/issues/20)
+- [#21 — Multi-framework evaluation adapters](https://github.com/zvadym/company-lens/issues/21)
+- [#22 — Online evaluation and production feedback loop](https://github.com/zvadym/company-lens/issues/22)
+
+### Dependency overview
+
+```mermaid
+flowchart LR
+    I2[#2 Source diagnostics] --> I5[#5 SEC ingestion]
+    I2 --> I6[#6 PDF ingestion]
+    I2 --> I10[#10 SEC facts]
+    I2 --> I11[#11 FRED]
+
+    I3[#3 Foundation] --> I4[#4 Data model]
+    I4 --> I5
+    I4 --> I6
+    I5 --> I7[#7 Hierarchy and chunks]
+    I6 --> I7
+    I7 --> I8[#8 Hybrid retrieval]
+    I8 --> I9[#9 Adaptive retrieval]
+
+    I9 --> I12[#12 LangGraph agent]
+    I10 --> I12
+    I11 --> I12
+    I12 --> I13[#13 Evidence validation]
+    I13 --> I14[#14 FastAPI + SSE]
+    I14 --> I15[#15 React UI]
+    I15 --> I17[#17 Deploy demo]
+    I16[#16 Production safeguards] --> I17
+
+    I18[#18 Golden set] --> I19[#19 Deterministic evals]
+    I18 --> I20[#20 LLM judges]
+    I19 --> I21[#21 Framework adapters]
+    I20 --> I21
+    I14 --> I22[#22 Online evals]
 ```
 
 ---
 
-## 🧪 Evaluation strategy
+## 📏 Quality targets
 
-CompanyLens will include evaluation from the beginning rather than treating it as a final polish step.
+These are engineering targets, not current benchmark claims.
 
-### Retrieval evaluation
+```yaml
+retrieval:
+  recall_at_10: 0.90
+  precision_at_10: 0.70
+  duplicate_rate_max: 0.10
 
-- Recall@K;
-- Precision@K;
-- Mean Reciprocal Rank;
-- metadata-filter accuracy;
-- section diversity;
-- duplicate rate;
-- reranker lift.
+routing:
+  accuracy: 0.95
+  unnecessary_tool_rate_max: 0.10
 
-### Answer evaluation
+citations:
+  precision: 0.95
+  recall: 0.90
 
-- factual correctness;
-- evidence completeness;
-- citation precision;
-- citation recall;
-- numerical accuracy;
-- instruction following;
-- appropriate abstention;
-- chart-to-answer consistency.
+calculations:
+  deterministic_fixture_correctness: 1.00
 
-### Agent evaluation
+operations:
+  first_event_local_ms: 500
+  simple_query_p95_seconds: 5
+  hybrid_query_p95_seconds: 15
+  max_tool_calls_per_run: 10
 
-- correct route selection;
-- unnecessary tool-call rate;
-- tool argument validity;
-- successful recovery from transient failures;
-- latency and cost by workflow;
-- deterministic regression tests for graph transitions.
+agent:
+  successful_completion_rate: 0.95
+  unbounded_loop_rate: 0
+```
 
-### Evaluation dataset
-
-The repository will contain a versioned set of questions covering:
-
-- single-document retrieval;
-- cross-document comparison;
-- numerical analysis;
-- hybrid document and API questions;
-- ambiguous company names;
-- missing data;
-- conflicting evidence;
-- adversarial or unsupported requests.
-
-LLM-as-a-judge may be used as one signal, but deterministic checks and source-grounded assertions remain primary wherever possible.
-
----
-
-## 📡 Observability and reliability
-
-Production-oriented safeguards are part of the planned MVP.
-
-### Observability
-
-- structured JSON logs;
-- correlation and run IDs;
-- per-node latency;
-- token and model cost tracking;
-- retrieval diagnostics;
-- external API timings;
-- cache metrics;
-- citation-validation results;
-- user feedback linked to execution traces.
-
-### Reliability
-
-- explicit timeouts;
-- bounded retries with exponential backoff;
-- circuit breakers for external APIs;
-- idempotent ingestion;
-- document content hashes;
-- database transactions;
-- graceful degradation when one source is unavailable;
-- resumable LangGraph checkpoints;
-- typed error taxonomy;
-- provider fallback where appropriate.
-
-### Performance goals for the MVP
-
-These are initial engineering targets, not current benchmark results:
-
-- first streamed status event in under 500 ms locally;
-- simple retrieval answer in under 5 seconds under normal API conditions;
-- hybrid analysis in under 15 seconds under normal API conditions;
-- no silent citation failures;
-- reproducible calculations for identical inputs;
-- ingestion safe to rerun without duplicate records.
-
----
-
-## 🔐 Security
-
-Planned security controls include:
-
-- secrets loaded only from environment or a secret manager;
-- no credentials stored in prompts, traces, or source metadata;
-- outbound requests restricted to approved tool adapters;
-- input-size limits;
-- rate limiting;
-- prompt-injection-aware document handling;
-- HTML sanitisation;
-- source URL validation;
-- least-privilege database roles;
-- dependency and container scanning;
-- audit events for privileged operations.
-
-Retrieved documents are treated as untrusted data, not as system instructions.
-
----
-
-## 🗺 Development roadmap
-
-### Phase 1 — Foundation
-
-- [ ] Bootstrap Python project and quality tooling
-- [ ] Add PostgreSQL and pgvector through Docker Compose
-- [ ] Define database schema and migrations
-- [ ] Add FastAPI health endpoint
-- [ ] Add CI for linting, typing, and tests
-
-### Phase 2 — Ingestion
-
-- [ ] Implement company and filing metadata ingestion
-- [ ] Download and parse selected SEC filings
-- [ ] Add PDF ingestion with page metadata
-- [ ] Implement deterministic section extraction
-- [ ] Add idempotency and content hashing
-
-### Phase 3 — Retrieval
-
-- [ ] Generate embeddings
-- [ ] Add pgvector search
-- [ ] Add metadata filters
-- [ ] Add lexical retrieval
-- [ ] Add reranking and deduplication
-- [ ] Create retrieval evaluation dataset
-
-### Phase 4 — Structured data and tools
-
-- [ ] Implement SEC Company Facts adapter
-- [ ] Normalise financial observations
-- [ ] Implement FRED adapter
-- [ ] Add typed calculation tools
-- [ ] Add caching and rate-limit handling
-
-### Phase 5 — LangGraph agent
-
-- [ ] Add intent and entity extraction
-- [ ] Add explicit planning and route selection
-- [ ] Run independent tools in parallel
-- [ ] Add checkpoints and recoverable errors
-- [ ] Add evidence merge and citation validation
-
-### Phase 6 — User interface
-
-- [ ] Build React chat interface
-- [ ] Stream execution events over SSE
-- [ ] Render source cards and document previews
-- [ ] Render interactive charts
-- [ ] Add feedback controls
-
-### Phase 7 — Production readiness
-
-- [ ] Add OpenTelemetry and Langfuse
-- [ ] Add end-to-end and regression tests
-- [ ] Add security checks
-- [ ] Add performance benchmarks
-- [ ] Add deployment configuration
-- [ ] Publish architecture decision records
+Thresholds will be adjusted after the first baseline evaluation run.
 
 ---
 
 ## 🚀 Local development
 
-The executable development environment will be added during Phase 1.
+The runnable environment will be added in [#3](https://github.com/zvadym/company-lens/issues/3).
 
-The intended workflow is:
+Intended workflow:
 
 ```bash
-# Clone the repository
 git clone https://github.com/zvadym/company-lens.git
 cd company-lens
 
-# Copy local configuration
 cp .env.example .env
 
-# Start PostgreSQL, pgvector, API, and supporting services
 docker compose up --build
 
-# Run backend checks
 make check
-
-# Run the evaluation suite
-make eval
+make eval-fast
+make eval-full
 ```
 
 Planned environment variables:
@@ -841,48 +852,41 @@ FRED_API_KEY=
 LANGFUSE_PUBLIC_KEY=
 LANGFUSE_SECRET_KEY=
 LANGFUSE_HOST=
+LANGCHAIN_API_KEY=
+LANGCHAIN_PROJECT=company-lens
 ```
 
-Do not commit real credentials. A complete `.env.example` will be added with the first runnable version.
+Do not commit real credentials.
 
 ---
 
 ## 🧱 Design principles
 
 1. **Use the right data path.** Narrative questions use retrieval; numerical questions use structured data and deterministic calculations.
-2. **Make orchestration explicit.** Agent behaviour is represented as inspectable LangGraph nodes and transitions.
-3. **Treat evidence as data.** Citations, calculations, and source lineage are stored and validated.
-4. **Keep model providers replaceable.** Business logic depends on internal interfaces, not directly on vendor SDKs.
-5. **Prefer bounded autonomy.** Tools, retries, loops, and repair attempts have clear limits.
-6. **Evaluate continuously.** Retrieval, answers, citations, routing, latency, and cost are regression-tested.
-7. **Expose operational behaviour.** The user can see execution status and sources without exposing hidden reasoning.
-8. **Fail visibly.** Missing data, conflicting evidence, and unavailable tools are represented explicitly.
-9. **Build for reproducibility.** Calculations and ingestion are deterministic and traceable.
-10. **Keep the MVP focused.** A small, curated company universe is preferable to a large, unreliable corpus.
-
----
-
-## 🤝 Contributing
-
-The contribution workflow will be documented after the project skeleton is in place. Planned standards include:
-
-- focused pull requests;
-- tests for behavioural changes;
-- typed public interfaces;
-- architecture decision records for major design changes;
-- no provider-specific logic inside domain services;
-- benchmark evidence for retrieval or performance changes.
+2. **Resolve exact identifiers before semantic search.** Tickers, CIKs, periods, and filing IDs are not embedding problems.
+3. **Retrieve progressively.** Start with the smallest useful representation and expand only when evidence requires it.
+4. **Budget context explicitly.** Documents, chunks, tokens, companies, and periods have bounded budgets.
+5. **Make orchestration inspectable.** Agent behaviour is represented as typed LangGraph nodes and transitions.
+6. **Prefer bounded autonomy.** Tools, loops, retries, and repair attempts have strict limits.
+7. **Treat evidence as data.** Claims, citations, calculations, and source lineage are stored and validated.
+8. **Evaluate every layer.** Ingestion, retrieval, routing, tools, calculations, claims, latency, and cost have separate metrics.
+9. **Calibrate LLM judges.** Model-based scores are compared with human labels and deterministic checks.
+10. **Keep integrations replaceable.** Model, evaluation, tracing, and API providers sit behind adapters.
+11. **Expose safe execution traces.** Show structured operations, not hidden chain-of-thought.
+12. **Fail visibly.** Missing data, conflicting evidence, partial results, and abstention are explicit states.
+13. **Version everything that changes behaviour.** Data, parsers, prompts, models, embeddings, indexes, and evaluation sets.
+14. **Keep the initial corpus focused.** A small, curated company universe is preferable to a large unreliable corpus.
 
 ---
 
 ## 📄 License
 
-A license has not been selected yet. Until a license is added, the repository remains publicly viewable but does not grant general permission to copy, modify, or redistribute the code.
+A license has not been selected yet. Until a license is added, the repository is publicly viewable but does not grant general permission to copy, modify, or redistribute the code.
 
 ---
 
 <div align="center">
 
-Built as a production-oriented demonstration of **RAG**, **agentic workflows**, **tool calling**, **structured analytics**, and **observable AI systems**.
+Built as a production-oriented demonstration of **adaptive RAG**, **agentic workflows**, **tool calling**, **structured analytics**, **evaluation engineering**, and **observable LLM systems**.
 
 </div>
