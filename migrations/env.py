@@ -6,6 +6,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from company_lens.config import get_settings
+from company_lens.db import models  # noqa: F401
 from company_lens.db.base import Base
 
 config = context.config
