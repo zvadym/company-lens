@@ -1,0 +1,38 @@
+services:
+  api:
+    build: .
+    environment:
+      COMPANY_LENS_ENVIRONMENT: local
+      COMPANY_LENS_LOG_LEVEL: INFO
+      COMPANY_LENS_DATABASE_URL: postgresql+psycopg://company_lens:company_lens@postgres:5432/company_lens
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: company_lens
+      POSTGRES_USER: company_lens
+      POSTGRES_PASSWORD: company_lens
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U company_lens -d company_lens"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+

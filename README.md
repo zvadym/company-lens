@@ -21,7 +21,7 @@ It is designed as both a usable MVP and a hands-on laboratory for **RAG**, **age
 </div>
 
 > [!IMPORTANT]
-> CompanyLens is currently in **early development**. The capabilities below describe the target architecture. The implementation backlog is tracked in [GitHub Issues](https://github.com/zvadym/company-lens/issues).
+> CompanyLens is currently in **early development**. The backend foundation is runnable; later RAG, agent, ingestion, evaluation, and UI capabilities are tracked in [GitHub Issues](https://github.com/zvadym/company-lens/issues).
 
 ---
 
@@ -707,7 +707,7 @@ The backlog is dependency-aware. Issue numbers below link to the implementation 
 
 ### Phase 1 — Foundation and domain model
 
-- [#3 — Backend foundation and local environment](https://github.com/zvadym/company-lens/issues/3)
+- [x] [#3 — Backend foundation and local environment](https://github.com/zvadym/company-lens/issues/3)
 - [#4 — Hierarchical domain and persistence model](https://github.com/zvadym/company-lens/issues/4)
 
 ### Phase 2 — Document ingestion
@@ -823,9 +823,7 @@ Thresholds will be adjusted after the first baseline evaluation run.
 
 ## 🚀 Local development
 
-The runnable environment will be added in [#3](https://github.com/zvadym/company-lens/issues/3).
-
-Intended workflow:
+The backend foundation can be run locally with Docker Compose or directly from a Python virtual environment.
 
 ```bash
 git clone https://github.com/zvadym/company-lens.git
@@ -833,17 +831,38 @@ cd company-lens
 
 cp .env.example .env
 
+# Start PostgreSQL/pgvector and the API
 docker compose up --build
-
-make check
-make eval-fast
-make eval-full
 ```
 
-Planned environment variables:
+The API is available at `http://localhost:8000`, and readiness is exposed at:
+
+```bash
+curl http://localhost:8000/api/v1/health
+```
+
+For local Python development:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+
+# Apply database migrations
+alembic upgrade head
+
+# Run the API without Docker
+make run-api
+
+make check
+```
+
+Environment variables:
 
 ```dotenv
-DATABASE_URL=postgresql+psycopg://company_lens:company_lens@localhost:5432/company_lens
+COMPANY_LENS_ENVIRONMENT=local
+COMPANY_LENS_LOG_LEVEL=INFO
+COMPANY_LENS_DATABASE_URL=postgresql+psycopg://company_lens:company_lens@localhost:5432/company_lens
 LLM_PROVIDER=openai
 LLM_MODEL=
 EMBEDDING_MODEL=
@@ -856,7 +875,7 @@ LANGCHAIN_API_KEY=
 LANGCHAIN_PROJECT=company-lens
 ```
 
-Do not commit real credentials.
+Do not commit real credentials. Root `.env*` files are ignored except for `.env.example`.
 
 ---
 
@@ -881,7 +900,7 @@ Do not commit real credentials.
 
 ## 📄 License
 
-A license has not been selected yet. Until a license is added, the repository is publicly viewable but does not grant general permission to copy, modify, or redistribute the code.
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
 
 ---
 
