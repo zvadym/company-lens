@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "company-lens"
+version = "0.1.0"
+description = "Agentic public-company intelligence backend."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+  "alembic>=1.13.2",
+  "fastapi>=0.115.0",
+  "pydantic>=2.8.2",
+  "pydantic-settings>=2.4.0",
+  "psycopg[binary]>=3.2.1",
+  "sqlalchemy>=2.0.32",
+  "uvicorn[standard]>=0.30.6",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27.2",
+  "mypy>=1.11.2",
+  "pytest>=8.3.2",
+  "ruff>=0.6.3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/company_lens"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["tools/data-checks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["company_lens"]
