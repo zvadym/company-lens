@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,6 +11,13 @@ from company_lens.config import get_settings
 from company_lens.db.models import CompanyTicker, IngestionFailure
 from company_lens.db.session import build_session_factory
 from company_lens.ingestion.artifacts import ArtifactStore
+from company_lens.ingestion.pdf_manifest import load_investor_pdf_manifest
+from company_lens.ingestion.pdf_service import (
+    InvestorPdfClientError,
+    InvestorPdfIngestionOptions,
+    InvestorPdfIngestionService,
+    build_investor_pdf_client_from_settings,
+)
 from company_lens.ingestion.sec_client import SecClientError
 from company_lens.ingestion.sec_service import (
     DEFAULT_FORMS,
@@ -50,9 +58,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Retry companies with unresolved prior ingestion failures.",
     )
 
+    pdf_parser = subparsers.add_parser("ingest-pdfs", help="Ingest investor-relations PDFs.")
+    pdf_parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=None,
+        help="Path to a reviewed investor PDF manifest.",
+    )
+
     args = parser.parse_args(argv)
     if args.command == "ingest-sec":
         return _run_ingest_sec(args)
+    if args.command == "ingest-pdfs":
+        return _run_ingest_pdfs(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -89,6 +107,39 @@ def _run_ingest_sec(args: argparse.Namespace) -> int:
         f"run_id={result.run_id} status={result.status} "
         f"companies={result.companies_seen} filings={result.filings_seen} "
         f"artifacts={result.artifacts_seen} failures={result.failures}"
+    )
+    return 0 if result.status == "success" else 1
+
+
+def _run_ingest_pdfs(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    manifest_path = args.manifest or settings.investor_pdf_manifest_path
+    try:
+        documents = load_investor_pdf_manifest(manifest_path)
+    except (OSError, ValueError) as exc:
+        print(f"Investor PDF ingestion failed: {exc}")
+        return 1
+
+    session_factory = build_session_factory(settings.database_url)
+    with session_factory() as session:
+        artifact_store = ArtifactStore(settings.investor_pdf_artifact_root)
+        try:
+            with build_investor_pdf_client_from_settings(settings) as client:
+                result = InvestorPdfIngestionService(
+                    session=session,
+                    client=client,
+                    artifact_store=artifact_store,
+                ).ingest(InvestorPdfIngestionOptions(documents=documents))
+        except InvestorPdfClientError as exc:
+            print(f"Investor PDF ingestion failed: {exc}")
+            return 1
+
+    print(
+        "Investor PDF ingestion completed: "
+        f"run_id={result.run_id} status={result.status} "
+        f"documents={result.documents_seen} pages={result.pages_seen} "
+        f"blocks={result.blocks_seen} artifacts={result.artifacts_seen} "
+        f"failures={result.failures}"
     )
     return 0 if result.status == "success" else 1
 

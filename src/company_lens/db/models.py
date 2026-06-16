@@ -309,6 +309,10 @@ class DocumentVersion(Base, TimestampMixin):
         back_populates="document_version",
         cascade="all, delete-orphan",
     )
+    pdf_blocks: Mapped[list[PdfBlock]] = relationship(
+        back_populates="document_version",
+        cascade="all, delete-orphan",
+    )
     artifacts: Mapped[list[SourceArtifact]] = relationship(
         back_populates="document_version",
         cascade="all, delete-orphan",
@@ -403,6 +407,36 @@ class PdfPage(Base, TimestampMixin):
     height_points: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
 
     document_version: Mapped[DocumentVersion] = relationship(back_populates="pages")
+    blocks: Mapped[list[PdfBlock]] = relationship(
+        back_populates="page",
+        cascade="all, delete-orphan",
+    )
+
+
+class PdfBlock(Base, TimestampMixin):
+    __tablename__ = "pdf_blocks"
+    __table_args__ = (UniqueConstraint("page_id", "block_index", name="uq_pdf_block_page_index"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("document_versions.id"),
+        nullable=False,
+    )
+    page_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pdf_pages.id"), nullable=False)
+    block_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    block_type: Mapped[str] = mapped_column(String(64), nullable=False, default="text")
+    text: Mapped[str | None] = mapped_column(Text)
+    text_hash: Mapped[str | None] = mapped_column(String(128))
+    x0_points: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    y0_points: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    x1_points: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    y1_points: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    char_start: Mapped[int | None] = mapped_column(Integer)
+    char_end: Mapped[int | None] = mapped_column(Integer)
+    metadata_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+
+    document_version: Mapped[DocumentVersion] = relationship(back_populates="pdf_blocks")
+    page: Mapped[PdfPage] = relationship(back_populates="blocks")
 
 
 class SourceArtifact(Base, TimestampMixin):
