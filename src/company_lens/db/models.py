@@ -30,14 +30,14 @@ JsonObject = dict[str, Any]
 JSON_TYPE = JSONB().with_variant(JSON(), "sqlite")
 
 
-class AliasKind(str, enum.Enum):
+class AliasKind(enum.StrEnum):
     LEGAL = "legal"
     BRAND = "brand"
     FORMER = "former"
     COMMON = "common"
 
 
-class IdentifierKind(str, enum.Enum):
+class IdentifierKind(enum.StrEnum):
     CIK = "cik"
     LEI = "lei"
     CUSIP = "cusip"
@@ -46,7 +46,7 @@ class IdentifierKind(str, enum.Enum):
     OTHER = "other"
 
 
-class DocumentKind(str, enum.Enum):
+class DocumentKind(enum.StrEnum):
     SEC_FILING = "sec_filing"
     INVESTOR_PDF = "investor_pdf"
     SEC_COMPANY_FACTS = "sec_company_facts"
@@ -54,20 +54,20 @@ class DocumentKind(str, enum.Enum):
     OTHER = "other"
 
 
-class DocumentVersionState(str, enum.Enum):
+class DocumentVersionState(enum.StrEnum):
     CURRENT = "current"
     SUPERSEDED = "superseded"
     RESTATED = "restated"
 
 
-class IngestionRunStatus(str, enum.Enum):
+class IngestionRunStatus(enum.StrEnum):
     STARTED = "started"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     PARTIAL = "partial"
 
 
-class ArtifactKind(str, enum.Enum):
+class ArtifactKind(enum.StrEnum):
     RAW_HTML = "raw_html"
     RAW_TEXT = "raw_text"
     RAW_PDF = "raw_pdf"
@@ -76,7 +76,7 @@ class ArtifactKind(str, enum.Enum):
     OTHER = "other"
 
 
-class EvidenceKind(str, enum.Enum):
+class EvidenceKind(enum.StrEnum):
     SECTION = "section"
     CHUNK = "chunk"
     PAGE = "page"
