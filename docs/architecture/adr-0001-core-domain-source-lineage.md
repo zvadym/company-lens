@@ -18,7 +18,7 @@ and version context required for grounded answers.
 ## Decision
 
 Use a hierarchical relational model centered on `Company`, `SourceDocument`,
-`DocumentVersion`, `FilingSection`, and `DocumentChunk`.
+`DocumentVersion`, `FilingSection`, `DocumentChunk`, `PdfPage`, and `PdfBlock`.
 
 `SourceDocument` stores stable document identity and filing metadata. `DocumentVersion`
 stores the ingested content hash, source hash, current/restated state, and the ingestion
@@ -35,6 +35,10 @@ Narrative retrieval and structured analytics are separated:
 Embeddings are versioned through `EmbeddingIndex`, so the same chunk can be indexed by
 multiple embedding models or index versions.
 
+PDF extraction preserves both page-level text through `PdfPage` and parsed layout/text
+blocks through `PdfBlock`. Retrieval chunks can be rebuilt from these parsed blocks
+without redownloading the raw PDF artifact.
+
 Citations are represented by `EvidenceRecord` and `CitationRecord`. Evidence can point to
 a document version, section, chunk, page, financial fact, or macro observation and always
 keeps source URL, source ID, and content hash.
@@ -47,6 +51,7 @@ The schema supports these retrieval paths:
   version;
 - start from a chunk and expand to its parent section and document;
 - compare sections across document versions and reporting periods;
+- trace parsed PDF blocks back to exact pages and document versions;
 - answer numeric questions from typed facts rather than untyped embedded prose;
 - run multiple embedding indexes over the same content.
 

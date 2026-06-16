@@ -17,6 +17,8 @@ erDiagram
     filing_sections ||--o{ document_chunks : split_into
     document_versions ||--o{ document_chunks : contains
     document_versions ||--o{ pdf_pages : renders_as
+    document_versions ||--o{ pdf_blocks : extracts
+    pdf_pages ||--o{ pdf_blocks : contains
     document_versions ||--o{ source_artifacts : stores
     document_chunks ||--o{ chunk_embeddings : embedded_as
     embedding_indexes ||--o{ chunk_embeddings : indexes
@@ -76,6 +78,22 @@ erDiagram
         string content_hash
         int page_start
         int page_end
+    }
+
+    pdf_blocks {
+        uuid id PK
+        uuid document_version_id FK
+        uuid page_id FK
+        int block_index
+        string block_type
+        text text
+        string text_hash
+        numeric x0_points
+        numeric y0_points
+        numeric x1_points
+        numeric y1_points
+        int char_start
+        int char_end
     }
 
     embedding_indexes {
