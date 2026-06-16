@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     sec_retry_attempts: int = Field(default=3)
     sec_filings_per_form: int = Field(default=3)
     sec_download_exhibits: bool = Field(default=False)
+    investor_pdf_manifest_path: Path = Field(default=Path("config/investor_pdfs.yaml"))
+    investor_pdf_artifact_root: Path = Field(default=Path("data/investor-pdf-artifacts"))
+    investor_pdf_user_agent: str = Field(default="CompanyLens PDF ingestion")
+    investor_pdf_request_timeout_seconds: float = Field(default=30.0)
+    investor_pdf_retry_attempts: int = Field(default=3)
 
     model_config = SettingsConfigDict(
         env_file=".env",

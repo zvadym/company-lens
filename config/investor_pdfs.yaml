@@ -1,0 +1,48 @@
+documents:
+  - id: net-q4-2025-investor-presentation
+    company_name: Cloudflare
+    ticker: NET
+    cik: "1477333"
+    title: Q4 2025 investor presentation
+    document_type: investor_presentation
+    fiscal_year: 2025
+    fiscal_period: Q4
+    period_end: 2025-12-31
+    url: https://cloudflare2019ipo.q4web.com/files/doc_financials/2025/q4/Q4-2025-NET-Investor-Presentation.pdf
+  - id: ddog-2024-annual-report
+    company_name: Datadog
+    ticker: DDOG
+    cik: "1561550"
+    title: 2024 annual report
+    document_type: annual_report
+    fiscal_year: 2024
+    period_end: 2024-12-31
+    url: https://www.annualreports.com/Click/28482
+  - id: mdb-fy-2024-annual-report
+    company_name: MongoDB
+    ticker: MDB
+    cik: "1441816"
+    title: Fiscal 2024 annual report
+    document_type: annual_report
+    fiscal_year: 2024
+    period_end: 2024-01-31
+    url: https://www.annualreports.com/Click/28940
+  - id: snow-q4-fy-2025-investor-presentation
+    company_name: Snowflake
+    ticker: SNOW
+    cik: "1640147"
+    title: Q4 fiscal 2025 investor presentation
+    document_type: investor_presentation
+    fiscal_year: 2025
+    fiscal_period: Q4
+    period_end: 2025-01-31
+    url: https://s26.q4cdn.com/463892824/files/doc_financials/2025/q4/Q4-FY2025-Investor-Presentation_vFF.pdf
+  - id: estc-fy-2025-annual-report
+    company_name: Elastic
+    ticker: ESTC
+    cik: "1707753"
+    title: Fiscal 2025 annual report
+    document_type: annual_report
+    fiscal_year: 2025
+    period_end: 2025-04-30
+    url: https://stocklight.com/stocks/us/nyse-estc/elastic-nv/annual-reports/nyse-estc-2025-10K-251035365.pdf
