@@ -12,6 +12,7 @@ license = { text = "MIT" }
 dependencies = [
   "alembic>=1.13.2",
   "fastapi>=0.115.0",
+  "httpx>=0.27.2",
   "pydantic>=2.8.2",
   "pydantic-settings>=2.4.0",
   "psycopg[binary]>=3.2.1",
@@ -19,9 +20,11 @@ dependencies = [
   "uvicorn[standard]>=0.30.6",
 ]
 
+[project.scripts]
+company-lens = "company_lens.cli:main"
+
 [project.optional-dependencies]
 dev = [
-  "httpx>=0.27.2",
   "mypy>=1.11.2",
   "pytest>=8.3.2",
   "ruff>=0.6.3",

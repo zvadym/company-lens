@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Date,
     DateTime,
@@ -26,16 +27,17 @@ from company_lens.db.base import Base
 from company_lens.db.types import PgVector
 
 JsonObject = dict[str, Any]
+JSON_TYPE = JSONB().with_variant(JSON(), "sqlite")
 
 
-class AliasKind(str, enum.Enum):
+class AliasKind(enum.StrEnum):
     LEGAL = "legal"
     BRAND = "brand"
     FORMER = "former"
     COMMON = "common"
 
 
-class IdentifierKind(str, enum.Enum):
+class IdentifierKind(enum.StrEnum):
     CIK = "cik"
     LEI = "lei"
     CUSIP = "cusip"
@@ -44,7 +46,7 @@ class IdentifierKind(str, enum.Enum):
     OTHER = "other"
 
 
-class DocumentKind(str, enum.Enum):
+class DocumentKind(enum.StrEnum):
     SEC_FILING = "sec_filing"
     INVESTOR_PDF = "investor_pdf"
     SEC_COMPANY_FACTS = "sec_company_facts"
@@ -52,20 +54,20 @@ class DocumentKind(str, enum.Enum):
     OTHER = "other"
 
 
-class DocumentVersionState(str, enum.Enum):
+class DocumentVersionState(enum.StrEnum):
     CURRENT = "current"
     SUPERSEDED = "superseded"
     RESTATED = "restated"
 
 
-class IngestionRunStatus(str, enum.Enum):
+class IngestionRunStatus(enum.StrEnum):
     STARTED = "started"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     PARTIAL = "partial"
 
 
-class ArtifactKind(str, enum.Enum):
+class ArtifactKind(enum.StrEnum):
     RAW_HTML = "raw_html"
     RAW_TEXT = "raw_text"
     RAW_PDF = "raw_pdf"
@@ -74,7 +76,7 @@ class ArtifactKind(str, enum.Enum):
     OTHER = "other"
 
 
-class EvidenceKind(str, enum.Enum):
+class EvidenceKind(enum.StrEnum):
     SECTION = "section"
     CHUNK = "chunk"
     PAGE = "page"
@@ -201,13 +203,40 @@ class IngestionRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     code_version: Mapped[str | None] = mapped_column(String(64))
     config_hash: Mapped[str | None] = mapped_column(String(128))
-    parameters: Mapped[JsonObject] = mapped_column(JSONB, nullable=False, default=dict)
+    parameters: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text)
 
     document_versions: Mapped[list[DocumentVersion]] = relationship(back_populates="ingestion_run")
     macro_observations: Mapped[list[MacroObservation]] = relationship(
         back_populates="ingestion_run"
     )
+    failures: Mapped[list[IngestionFailure]] = relationship(
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+
+
+class IngestionFailure(Base):
+    __tablename__ = "ingestion_failures"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ingestion_runs.id"), nullable=False)
+    company_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("companies.id"))
+    source_document_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("source_documents.id"))
+    stage: Mapped[str] = mapped_column(String(128), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    retryable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    details_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    run: Mapped[IngestionRun] = relationship(back_populates="failures")
+    company: Mapped[Company | None] = relationship()
+    source_document: Mapped[SourceDocument | None] = relationship()
 
 
 class SourceDocument(Base, TimestampMixin):
@@ -230,7 +259,7 @@ class SourceDocument(Base, TimestampMixin):
     period_end: Mapped[date | None] = mapped_column(Date)
     fiscal_year: Mapped[int | None] = mapped_column(Integer)
     fiscal_period: Mapped[str | None] = mapped_column(String(16))
-    metadata_json: Mapped[JsonObject] = mapped_column(JSONB, nullable=False, default=dict)
+    metadata_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
 
     company: Mapped[Company | None] = relationship(back_populates="documents")
     versions: Mapped[list[DocumentVersion]] = relationship(
@@ -263,7 +292,7 @@ class DocumentVersion(Base, TimestampMixin):
     supersedes_version_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("document_versions.id")
     )
-    metadata_json: Mapped[JsonObject] = mapped_column(JSONB, nullable=False, default=dict)
+    metadata_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
 
     document: Mapped[SourceDocument] = relationship(back_populates="versions")
     ingestion_run: Mapped[IngestionRun | None] = relationship(back_populates="document_versions")
@@ -430,7 +459,7 @@ class EmbeddingIndex(Base, TimestampMixin):
     embedding_model: Mapped[str] = mapped_column(String(128), nullable=False)
     dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
     distance_metric: Mapped[str] = mapped_column(String(32), nullable=False, default="cosine")
-    metadata_json: Mapped[JsonObject] = mapped_column(JSONB, nullable=False, default=dict)
+    metadata_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
 
     embeddings: Mapped[list[ChunkEmbedding]] = relationship(back_populates="embedding_index")
 
@@ -472,7 +501,7 @@ class FinancialFact(Base, TimestampMixin):
     fiscal_year: Mapped[int | None] = mapped_column(Integer)
     fiscal_period: Mapped[str | None] = mapped_column(String(16))
     accession_number: Mapped[str | None] = mapped_column(String(64))
-    dimensions: Mapped[JsonObject] = mapped_column(JSONB, nullable=False, default=dict)
+    dimensions: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     source_hash: Mapped[str] = mapped_column(String(128), nullable=False)
 
@@ -551,6 +580,6 @@ class CitationRecord(Base, TimestampMixin):
     claim_key: Mapped[str | None] = mapped_column(String(255))
     citation_label: Mapped[str] = mapped_column(String(64), nullable=False)
     display_text: Mapped[str] = mapped_column(String(512), nullable=False)
-    metadata_json: Mapped[JsonObject] = mapped_column(JSONB, nullable=False, default=dict)
+    metadata_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
 
     evidence: Mapped[EvidenceRecord] = relationship(back_populates="citations")

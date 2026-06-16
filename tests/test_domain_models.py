@@ -26,6 +26,7 @@ def test_core_domain_tables_are_registered() -> None:
         "financial_facts",
         "macro_observations",
         "ingestion_runs",
+        "ingestion_failures",
         "evidence_records",
         "citation_records",
     }
