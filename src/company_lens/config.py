@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,6 +13,13 @@ class Settings(BaseSettings):
     database_url: str = Field(
         default="postgresql+psycopg://company_lens:company_lens@localhost:5432/company_lens"
     )
+    sec_user_agent: str | None = Field(default=None)
+    sec_artifact_root: Path = Field(default=Path("data/sec-artifacts"))
+    sec_rate_limit_per_second: float = Field(default=9.0)
+    sec_request_timeout_seconds: float = Field(default=30.0)
+    sec_retry_attempts: int = Field(default=3)
+    sec_filings_per_form: int = Field(default=3)
+    sec_download_exhibits: bool = Field(default=False)
 
     model_config = SettingsConfigDict(
         env_file=".env",
