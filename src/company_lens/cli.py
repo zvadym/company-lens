@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import uuid
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -8,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from company_lens.config import get_settings
-from company_lens.db.models import CompanyTicker, IngestionFailure
+from company_lens.db.models import CompanyTicker, DocumentKind, IngestionFailure
 from company_lens.db.session import build_session_factory
 from company_lens.ingestion.artifacts import ArtifactStore
 from company_lens.ingestion.pdf_manifest import load_investor_pdf_manifest
@@ -25,6 +27,13 @@ from company_lens.ingestion.sec_service import (
     build_default_options,
     build_sec_client_from_settings,
 )
+from company_lens.processing.service import (
+    DEFAULT_CHUNKING_VERSION,
+    DEFAULT_SUMMARY_PROMPT_VERSION,
+    DocumentProcessingOptions,
+    DocumentProcessingService,
+)
+from company_lens.processing.stats import corpus_stats, demo_chunks
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -66,11 +75,71 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Path to a reviewed investor PDF manifest.",
     )
 
+    process_parser = subparsers.add_parser(
+        "process-documents",
+        help="Create summaries and retrieval chunks from ingested documents.",
+    )
+    process_parser.add_argument(
+        "--document-version-id",
+        action="append",
+        dest="document_version_ids",
+        default=None,
+        help="Specific document version UUID to process. Can be repeated.",
+    )
+    process_parser.add_argument(
+        "--kind",
+        action="append",
+        choices=[DocumentKind.SEC_FILING.value, DocumentKind.INVESTOR_PDF.value],
+        default=None,
+        help="Document kind to process. Defaults to SEC filings and investor PDFs.",
+    )
+    process_parser.add_argument("--limit", type=int, default=None, help="Maximum documents.")
+    process_parser.add_argument(
+        "--strategy",
+        choices=["fixed-token", "semantic"],
+        default="fixed-token",
+        help="Chunking strategy.",
+    )
+    process_parser.add_argument("--max-tokens", type=int, default=320, help="Chunk token target.")
+    process_parser.add_argument(
+        "--overlap-tokens",
+        type=int,
+        default=40,
+        help="Token overlap for adjacent chunks.",
+    )
+    process_parser.add_argument(
+        "--chunking-version",
+        default=DEFAULT_CHUNKING_VERSION,
+        help="Version label stored on chunks.",
+    )
+    process_parser.add_argument(
+        "--summary-prompt-version",
+        default=DEFAULT_SUMMARY_PROMPT_VERSION,
+        help="Version label stored on summaries.",
+    )
+    process_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Rebuild outputs even if this processing version already ran.",
+    )
+
+    stats_parser = subparsers.add_parser("corpus-stats", help="Print corpus statistics.")
+    stats_parser.add_argument(
+        "--demo-chunks",
+        type=int,
+        default=0,
+        help="Include this many representative chunks.",
+    )
+
     args = parser.parse_args(argv)
     if args.command == "ingest-sec":
         return _run_ingest_sec(args)
     if args.command == "ingest-pdfs":
         return _run_ingest_pdfs(args)
+    if args.command == "process-documents":
+        return _run_process_documents(args)
+    if args.command == "corpus-stats":
+        return _run_corpus_stats(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -142,6 +211,67 @@ def _run_ingest_pdfs(args: argparse.Namespace) -> int:
         f"failures={result.failures}"
     )
     return 0 if result.status == "success" else 1
+
+
+def _run_process_documents(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    try:
+        document_version_ids = tuple(
+            uuid.UUID(value) for value in (args.document_version_ids or ())
+        )
+    except ValueError as exc:
+        print(f"Document processing failed: invalid document version UUID: {exc}")
+        return 1
+
+    kinds = (
+        tuple(DocumentKind(value) for value in args.kind)
+        if args.kind
+        else (DocumentKind.SEC_FILING, DocumentKind.INVESTOR_PDF)
+    )
+    options = DocumentProcessingOptions(
+        document_version_ids=document_version_ids,
+        document_kinds=kinds,
+        limit=args.limit,
+        chunking_strategy=args.strategy,
+        max_tokens=args.max_tokens,
+        overlap_tokens=args.overlap_tokens,
+        chunking_version=args.chunking_version,
+        summary_prompt_version=args.summary_prompt_version,
+        force=bool(args.force),
+    )
+
+    session_factory = build_session_factory(settings.database_url)
+    with session_factory() as session:
+        try:
+            result = DocumentProcessingService(session=session).process(options)
+        except (OSError, ValueError) as exc:
+            print(f"Document processing failed: {exc}")
+            return 1
+
+    print(
+        "Document processing completed: "
+        f"status={result.status} documents_seen={result.documents_seen} "
+        f"processed={result.documents_processed} skipped={result.documents_skipped} "
+        f"sections={result.sections_seen} summaries={result.summaries_written} "
+        f"chunks={result.chunks_written} tokens={result.token_count} "
+        f"duplicates_removed={result.duplicate_chunks_removed} "
+        f"duplicate_rate={result.duplicate_chunk_rate} "
+        f"boilerplate_removed={result.boilerplate_chunks_removed} "
+        f"boilerplate_rate={result.boilerplate_chunk_rate}"
+    )
+    return 0
+
+
+def _run_corpus_stats(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    session_factory = build_session_factory(settings.database_url)
+    with session_factory() as session:
+        payload = corpus_stats(session)
+        if args.demo_chunks:
+            payload["demo_chunks"] = demo_chunks(session, limit=args.demo_chunks)
+
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
 
 
 def _find_failed_tickers(session: Session) -> tuple[str, ...]:

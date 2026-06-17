@@ -332,6 +332,7 @@ class DocumentSummary(Base, TimestampMixin):
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
     prompt_hash: Mapped[str | None] = mapped_column(String(128))
     content_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    metadata_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
 
     document_version: Mapped[DocumentVersion] = relationship(back_populates="summaries")
 
@@ -384,6 +385,7 @@ class SectionSummary(Base, TimestampMixin):
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
     prompt_hash: Mapped[str | None] = mapped_column(String(128))
     content_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    metadata_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
 
     section: Mapped[FilingSection] = relationship(back_populates="summaries")
 
@@ -474,6 +476,7 @@ class DocumentChunk(Base, TimestampMixin):
     char_end: Mapped[int | None] = mapped_column(Integer)
     page_start: Mapped[int | None] = mapped_column(Integer)
     page_end: Mapped[int | None] = mapped_column(Integer)
+    metadata_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
 
     document_version: Mapped[DocumentVersion] = relationship(back_populates="chunks")
     section: Mapped[FilingSection] = relationship(back_populates="chunks")
