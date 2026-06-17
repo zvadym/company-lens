@@ -153,9 +153,7 @@ class DocumentProcessingService:
             documents=tuple(stats),
         )
 
-    def _find_document_versions(
-        self, options: DocumentProcessingOptions
-    ) -> list[DocumentVersion]:
+    def _find_document_versions(self, options: DocumentProcessingOptions) -> list[DocumentVersion]:
         if options.document_version_ids:
             statement = (
                 select(DocumentVersion)
@@ -314,9 +312,7 @@ class DocumentProcessingService:
             ).all()
         )
         page_texts = [
-            (page.page_number, page.text or "")
-            for page in pages
-            if (page.text or "").strip()
+            (page.page_number, page.text or "") for page in pages if (page.text or "").strip()
         ]
         document_text = "\n\n".join(text for _, text in page_texts)
         if not document_text.strip():
