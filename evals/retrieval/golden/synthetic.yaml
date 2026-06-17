@@ -1,0 +1,61 @@
+name: synthetic-company-retrieval-v1
+company:
+  legal_name: Cloudflare, Inc.
+  display_name: Cloudflare
+  cik: "0001477333"
+documents:
+  - stable_source_id: synthetic:cloudflare:2025:10-k
+    title: Cloudflare 2025 Form 10-K
+    kind: sec_filing
+    source_system: sec_edgar
+    filing_form: 10-K
+    fiscal_year: 2025
+    fiscal_period: FY
+    sections:
+      - section_code: business
+        title: Business
+        ordinal_path: "1"
+        chunks:
+          - key: cf-business-platform
+            text: Cloudflare operates a connectivity cloud platform for security, networking, and developer services.
+          - key: cf-business-enterprise
+            text: Enterprise customers expanded usage as the platform added more security and application services.
+      - section_code: risk_factors
+        title: Risk Factors
+        ordinal_path: "1A"
+        chunks:
+          - key: cf-risk-competition
+            text: Cloudflare faces meaningful competition from security, networking, and cloud platform vendors.
+          - key: cf-risk-outages
+            text: Service outages or platform failures could harm customer trust and reduce demand.
+  - stable_source_id: synthetic:cloudflare:2024:10-k
+    title: Cloudflare 2024 Form 10-K
+    kind: sec_filing
+    source_system: sec_edgar
+    filing_form: 10-K
+    fiscal_year: 2024
+    fiscal_period: FY
+    sections:
+      - section_code: business
+        title: Business
+        ordinal_path: "1"
+        chunks:
+          - key: cf-business-2024-growth
+            text: Revenue growth was supported by new customers and expansion from existing enterprise accounts.
+      - section_code: risk_factors
+        title: Risk Factors
+        ordinal_path: "1A"
+        chunks:
+          - key: cf-risk-2024-macro
+            text: Macroeconomic uncertainty may reduce customer spending and lengthen sales cycles.
+queries:
+  - query: connectivity cloud security platform
+    expected_chunk_keys:
+      - cf-business-platform
+      - cf-business-enterprise
+  - query: competition risk from security vendors
+    expected_chunk_keys:
+      - cf-risk-competition
+  - query: macroeconomic uncertainty customer spending
+    expected_chunk_keys:
+      - cf-risk-2024-macro

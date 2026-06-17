@@ -1,0 +1,270 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from company_lens import cli
+from company_lens.config import Settings
+from company_lens.db.base import Base
+from company_lens.db.models import (
+    Company,
+    DocumentChunk,
+    DocumentKind,
+    DocumentVersion,
+    DocumentVersionState,
+    FilingSection,
+    SourceDocument,
+)
+from company_lens.processing.text import content_hash
+from company_lens.retrieval.benchmark import run_benchmark
+from company_lens.retrieval.embeddings import LocalFeatureHashingEmbedder
+from company_lens.retrieval.indexing import EmbeddingIndexingService
+from company_lens.retrieval.schemas import (
+    EmbeddingIndexingRequest,
+    RetrievalFilters,
+    RetrievalRequest,
+)
+from company_lens.retrieval.service import RetrievalService
+
+
+def test_retrieval_request_rejects_blank_query() -> None:
+    with pytest.raises(ValidationError):
+        RetrievalRequest(query="   ")
+
+
+def test_local_feature_hashing_embeddings_are_deterministic() -> None:
+    embedder = LocalFeatureHashingEmbedder(dimensions=16)
+    first = embedder.embed_text("Revenue growth from enterprise customers")
+    second = embedder.embed_text("Revenue growth from enterprise customers")
+
+    assert first == second
+    assert len(first) == 16
+    assert sum(value * value for value in first) == pytest.approx(1.0)
+
+
+def test_indexing_skips_fresh_embeddings_and_rebuilds_stale(session: Session) -> None:
+    chunks = _seed_corpus(session)
+    service = EmbeddingIndexingService(session=session)
+
+    first = service.index_chunks(EmbeddingIndexingRequest(batch_size=2))
+    second = service.index_chunks(EmbeddingIndexingRequest(batch_size=2))
+    chunks[0].text = "Updated security platform text."
+    chunks[0].content_hash = content_hash(chunks[0].text)
+    session.commit()
+    third = service.index_chunks(EmbeddingIndexingRequest(batch_size=2))
+
+    assert first.indexed == len(chunks)
+    assert second.skipped == len(chunks)
+    assert third.stale_rebuilt == 1
+
+
+def test_dense_lexical_and_hybrid_retrieval_with_filters(session: Session) -> None:
+    _seed_corpus(session)
+    EmbeddingIndexingService(session=session).index_chunks(EmbeddingIndexingRequest())
+
+    lexical = RetrievalService(session=session).retrieve(
+        RetrievalRequest(
+            query="competition security vendors",
+            mode="lexical",
+            filters=RetrievalFilters(section_codes=("risk_factors",)),
+        )
+    )
+    dense = RetrievalService(session=session).retrieve(
+        RetrievalRequest(query="connectivity cloud platform", mode="dense")
+    )
+    hybrid = RetrievalService(session=session).retrieve(
+        RetrievalRequest(query="enterprise security platform", mode="hybrid")
+    )
+
+    assert lexical.results
+    assert lexical.results[0].section_code == "risk_factors"
+    assert lexical.results[0].scores.lexical_score is not None
+    assert dense.results
+    assert dense.results[0].scores.vector_score is not None
+    assert hybrid.results
+    assert hybrid.results[0].scores.hybrid_score is not None
+    assert hybrid.results[0].diagnostics.embedding_index_version == "local-feature-hashing.v1"
+
+
+def test_hybrid_continues_lexical_when_embeddings_are_missing(session: Session) -> None:
+    _seed_corpus(session)
+
+    response = RetrievalService(session=session).retrieve(
+        RetrievalRequest(query="competition security vendors", mode="hybrid")
+    )
+
+    assert response.results
+    assert "missing_embedding_index" in response.diagnostics["warnings"]
+    assert response.results[0].scores.lexical_score is not None
+
+
+def test_dedupe_removes_near_identical_results(session: Session) -> None:
+    _seed_corpus(session, include_duplicate=True)
+
+    response = RetrievalService(session=session).retrieve(
+        RetrievalRequest(
+            query="competition security platform vendors",
+            mode="lexical",
+            top_k=10,
+            near_duplicate_threshold=0.8,
+        )
+    )
+
+    hashes = [result.content_hash for result in response.results]
+    assert len(hashes) == len(set(hashes))
+    assert response.diagnostics["deduped_candidates"] >= 1
+
+
+def test_cli_indexes_retrieves_and_runs_benchmark(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    _seed_corpus(session)
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False)
+    settings = Settings(database_url="sqlite+pysqlite:///unused.db")
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "build_session_factory", lambda _: factory)
+
+    assert cli.main(["index-embeddings", "--batch-size", "2"]) == 0
+    capsys.readouterr()
+    assert (
+        cli.main(["retrieve", "--query", "competition security vendors", "--mode", "hybrid"]) == 0
+    )
+    retrieve_output = json.loads(capsys.readouterr().out)
+    assert retrieve_output["results"]
+
+    report_path = tmp_path / "report.json"
+    assert (
+        cli.main(
+            [
+                "benchmark-retrieval",
+                "--dataset",
+                "evals/retrieval/golden/synthetic.yaml",
+                "--output-json",
+                str(report_path),
+            ]
+        )
+        == 0
+    )
+    assert report_path.exists()
+
+
+def test_benchmark_runs_all_modes() -> None:
+    report = run_benchmark(Path("evals/retrieval/golden/synthetic.yaml"))
+
+    assert {row["mode"] for row in report["rows"]} == {"dense", "lexical", "hybrid"}
+    assert all(row["queries"] == 3 for row in report["rows"])
+
+
+def _seed_corpus(session: Session, *, include_duplicate: bool = False) -> list[DocumentChunk]:
+    company = Company(
+        legal_name="Cloudflare, Inc.",
+        display_name="Cloudflare",
+        cik="0001477333",
+    )
+    session.add(company)
+    session.flush()
+    document = SourceDocument(
+        company_id=company.id,
+        kind=DocumentKind.SEC_FILING,
+        source_system="sec_edgar",
+        stable_source_id="0001477333-26-000001",
+        source_url="https://example.com/form10k.htm",
+        title="Cloudflare 10-K",
+        accession_number="0001477333-26-000001",
+        filing_form="10-K",
+        fiscal_year=2025,
+        fiscal_period="FY",
+        metadata_json={},
+    )
+    session.add(document)
+    session.flush()
+    version = DocumentVersion(
+        document_id=document.id,
+        version_label="0001477333-26-000001",
+        content_hash="version-hash",
+        source_hash="version-hash",
+        state=DocumentVersionState.CURRENT,
+        is_current=True,
+        metadata_json={},
+    )
+    session.add(version)
+    session.flush()
+    business = FilingSection(
+        document_version_id=version.id,
+        section_code="business",
+        title="Business",
+        ordinal_path="1",
+        heading_level=1,
+        content_hash="business-hash",
+    )
+    risks = FilingSection(
+        document_version_id=version.id,
+        section_code="risk_factors",
+        title="Risk Factors",
+        ordinal_path="1A",
+        heading_level=1,
+        content_hash="risk-hash",
+    )
+    session.add_all([business, risks])
+    session.flush()
+    chunk_texts = [
+        (
+            business,
+            "Cloudflare operates a connectivity cloud platform for security and networking.",
+        ),
+        (
+            business,
+            "Enterprise customers expanded usage of developer and application services.",
+        ),
+        (
+            risks,
+            "Competition from security and cloud platform vendors remains meaningful.",
+        ),
+        (
+            risks,
+            "Macroeconomic pressure can reduce customer spending and lengthen sales cycles.",
+        ),
+    ]
+    if include_duplicate:
+        chunk_texts.append(
+            (
+                risks,
+                "Competition from security and cloud platform vendors remains meaningful.",
+            )
+        )
+    chunks: list[DocumentChunk] = []
+    section_indexes: dict[str, int] = {"business": 0, "risk_factors": 0}
+    for section, text in chunk_texts:
+        section_key = section.section_code or ""
+        chunk = DocumentChunk(
+            document_version_id=version.id,
+            section_id=section.id,
+            chunk_index=section_indexes[section_key],
+            text=text,
+            content_hash=content_hash(text),
+            token_count=len(text.split()),
+            metadata_json={},
+        )
+        section_indexes[section_key] += 1
+        session.add(chunk)
+        chunks.append(chunk)
+    session.commit()
+    return chunks
+
+
+@pytest.fixture
+def session() -> Iterator[Session]:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as db_session:
+        yield db_session

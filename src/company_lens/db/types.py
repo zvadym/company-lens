@@ -22,3 +22,26 @@ class PgVector(UserDefinedType[Sequence[float]]):
             return "[" + ",".join(str(float(item)) for item in value) + "]"
 
         return process
+
+    def result_processor(
+        self,
+        dialect: Dialect,
+        coltype: object,
+    ) -> Callable[[object], list[float] | None]:
+        def process(value: object) -> list[float] | None:
+            if value is None:
+                return None
+            if isinstance(value, list):
+                return [float(item) for item in value]
+            if isinstance(value, tuple):
+                return [float(item) for item in value]
+            if isinstance(value, str):
+                cleaned = value.strip()
+                if cleaned.startswith("[") and cleaned.endswith("]"):
+                    cleaned = cleaned[1:-1]
+                if not cleaned:
+                    return []
+                return [float(item) for item in cleaned.split(",")]
+            raise TypeError(f"Unsupported pgvector value: {type(value)!r}")
+
+        return process
