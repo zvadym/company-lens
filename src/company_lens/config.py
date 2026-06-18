@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     investor_pdf_user_agent: str = Field(default="CompanyLens PDF ingestion")
     investor_pdf_request_timeout_seconds: float = Field(default=30.0)
     investor_pdf_retry_attempts: int = Field(default=3)
+    fred_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("COMPANY_LENS_FRED_API_KEY", "FRED_API_KEY"),
+    )
+    fred_base_url: str = Field(default="https://api.stlouisfed.org/fred")
+    fred_request_timeout_seconds: float = Field(default=30.0)
+    fred_retry_attempts: int = Field(default=3)
 
     model_config = SettingsConfigDict(
         env_file=".env",

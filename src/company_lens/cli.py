@@ -35,6 +35,9 @@ from company_lens.ingestion.sec_service import (
     build_default_options,
     build_sec_client_from_settings,
 )
+from company_lens.macro.client import FredClient, FredClientError
+from company_lens.macro.schemas import FredSeriesQuery
+from company_lens.macro.service import FredIngestionService, FredQueryService
 from company_lens.processing.service import (
     DEFAULT_CHUNKING_VERSION,
     DEFAULT_SUMMARY_PROMPT_VERSION,
@@ -121,6 +124,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     facts_query_parser.add_argument("--period-end", default=None)
     facts_query_parser.add_argument("--exclude-amendments", action="store_true")
     facts_query_parser.add_argument("--limit", type=int, default=200)
+
+    fred_ingest_parser = subparsers.add_parser(
+        "ingest-fred",
+        help="Fetch and cache revision-aware FRED observations.",
+    )
+    fred_ingest_parser.add_argument("--series", action="append", dest="series_ids", required=True)
+    fred_ingest_parser.add_argument("--observation-start", default=None)
+    fred_ingest_parser.add_argument("--observation-end", default=None)
+
+    fred_query_parser = subparsers.add_parser(
+        "query-fred",
+        help="Query cached typed FRED observations.",
+    )
+    fred_query_parser.add_argument("--series", action="append", dest="series_ids", required=True)
+    fred_query_parser.add_argument("--observation-start", default=None)
+    fred_query_parser.add_argument("--observation-end", default=None)
+    fred_query_parser.add_argument("--include-missing", action="store_true")
+    fred_query_parser.add_argument("--limit", type=int, default=1000)
 
     pdf_parser = subparsers.add_parser("ingest-pdfs", help="Ingest investor-relations PDFs.")
     pdf_parser.add_argument(
@@ -271,6 +292,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_ingest_company_facts(args)
     if args.command == "query-financial-facts":
         return _run_query_financial_facts(args)
+    if args.command == "ingest-fred":
+        return _run_ingest_fred(args)
+    if args.command == "query-fred":
+        return _run_query_fred(args)
     if args.command == "ingest-pdfs":
         return _run_ingest_pdfs(args)
     if args.command == "process-documents":
@@ -380,6 +405,56 @@ def _run_query_financial_facts(args: argparse.Namespace) -> int:
     session_factory = build_session_factory(settings.database_url)
     with session_factory() as session:
         result = FinancialFactQueryService(session=session).query(request)
+    print(result.model_dump_json(indent=2))
+    return 0
+
+
+def _run_ingest_fred(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    if not settings.fred_api_key:
+        print("FRED ingestion failed: set FRED_API_KEY or COMPANY_LENS_FRED_API_KEY.")
+        return 1
+    try:
+        observation_start = _optional_date(args.observation_start)
+        observation_end = _optional_date(args.observation_end)
+        session_factory = build_session_factory(settings.database_url)
+        with (
+            session_factory() as session,
+            FredClient(
+                api_key=settings.fred_api_key,
+                base_url=settings.fred_base_url,
+                timeout_seconds=settings.fred_request_timeout_seconds,
+                retry_attempts=settings.fred_retry_attempts,
+            ) as client,
+        ):
+            result = FredIngestionService(session=session, client=client).ingest(
+                tuple(args.series_ids),
+                observation_start=observation_start,
+                observation_end=observation_end,
+            )
+    except (OSError, TypeError, ValueError, FredClientError) as exc:
+        print(f"FRED ingestion failed: {exc}")
+        return 1
+    print(result.model_dump_json(indent=2))
+    return 0 if result.status == "success" else 1
+
+
+def _run_query_fred(args: argparse.Namespace) -> int:
+    try:
+        request = FredSeriesQuery(
+            series_ids=tuple(args.series_ids),
+            observation_start=_optional_date(args.observation_start),
+            observation_end=_optional_date(args.observation_end),
+            include_missing=bool(args.include_missing),
+            limit=args.limit,
+        )
+    except (TypeError, ValueError) as exc:
+        print(f"FRED query failed: {exc}")
+        return 1
+    settings = get_settings()
+    session_factory = build_session_factory(settings.database_url)
+    with session_factory() as session:
+        result = FredQueryService(session=session).query(request)
     print(result.model_dump_json(indent=2))
     return 0
 

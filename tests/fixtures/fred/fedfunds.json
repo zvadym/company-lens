@@ -1,0 +1,42 @@
+{
+  "metadata": {
+    "seriess": [
+      {
+        "id": "FEDFUNDS",
+        "title": "Federal Funds Effective Rate",
+        "observation_start": "1954-07-01",
+        "observation_end": "2026-05-01",
+        "frequency": "Monthly",
+        "frequency_short": "M",
+        "units": "Percent",
+        "units_short": "%",
+        "seasonal_adjustment": "Not Seasonally Adjusted",
+        "seasonal_adjustment_short": "NSA",
+        "last_updated": "2026-06-01 15:18:00-05",
+        "notes": "Deterministic test fixture."
+      }
+    ]
+  },
+  "observations": {
+    "observations": [
+      {
+        "realtime_start": "2026-06-01",
+        "realtime_end": "2026-06-01",
+        "date": "2025-01-01",
+        "value": "4.33"
+      },
+      {
+        "realtime_start": "2026-06-01",
+        "realtime_end": "2026-06-01",
+        "date": "2025-02-01",
+        "value": "."
+      },
+      {
+        "realtime_start": "2026-06-01",
+        "realtime_end": "2026-06-01",
+        "date": "2025-03-01",
+        "value": "4.33"
+      }
+    ]
+  }
+}
