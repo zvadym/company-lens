@@ -922,6 +922,9 @@ LANGCHAIN_API_KEY=
 LANGCHAIN_PROJECT=company-lens
 ```
 
+FRED ingestion, cached CLI queries, deterministic calculations, and chart validation are
+documented in [`docs/macro-analytics.md`](docs/macro-analytics.md).
+
 Do not commit real credentials. Root `.env*` files are ignored except for `.env.example`.
 
 ---

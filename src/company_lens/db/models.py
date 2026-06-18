@@ -558,29 +558,59 @@ class FinancialFact(Base, TimestampMixin):
     document_version: Mapped[DocumentVersion | None] = relationship()
 
 
+class MacroSeries(Base, TimestampMixin):
+    __tablename__ = "macro_series"
+
+    series_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    frequency: Mapped[str] = mapped_column(String(128), nullable=False)
+    frequency_short: Mapped[str] = mapped_column(String(32), nullable=False)
+    units: Mapped[str] = mapped_column(String(128), nullable=False)
+    units_short: Mapped[str] = mapped_column(String(64), nullable=False)
+    seasonal_adjustment: Mapped[str] = mapped_column(String(255), nullable=False)
+    seasonal_adjustment_short: Mapped[str] = mapped_column(String(64), nullable=False)
+    observation_start: Mapped[date] = mapped_column(Date, nullable=False)
+    observation_end: Mapped[date] = mapped_column(Date, nullable=False)
+    last_updated_at_source: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[str | None] = mapped_column(Text)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+
+    observations: Mapped[list[MacroObservation]] = relationship(
+        back_populates="series",
+        cascade="all, delete-orphan",
+    )
+
+
 class MacroObservation(Base, TimestampMixin):
     __tablename__ = "macro_observations"
     __table_args__ = (
         UniqueConstraint(
             "series_id",
             "observed_at",
-            "vintage_date",
+            "realtime_start",
+            "realtime_end",
             name="uq_macro_observation_vintage",
         ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     ingestion_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ingestion_runs.id"))
-    series_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    series_id: Mapped[str] = mapped_column(ForeignKey("macro_series.series_id"), nullable=False)
     source_name: Mapped[str] = mapped_column(String(128), nullable=False)
     observed_at: Mapped[date] = mapped_column(Date, nullable=False)
     vintage_date: Mapped[date | None] = mapped_column(Date)
-    value: Mapped[Decimal] = mapped_column(Numeric(28, 6), nullable=False)
+    realtime_start: Mapped[date] = mapped_column(Date, nullable=False)
+    realtime_end: Mapped[date] = mapped_column(Date, nullable=False)
+    value: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    raw_value: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_missing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     unit: Mapped[str] = mapped_column(String(64), nullable=False)
+    frequency: Mapped[str] = mapped_column(String(32), nullable=False)
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     source_hash: Mapped[str] = mapped_column(String(128), nullable=False)
 
     ingestion_run: Mapped[IngestionRun | None] = relationship(back_populates="macro_observations")
+    series: Mapped[MacroSeries] = relationship(back_populates="observations")
 
 
 class EvidenceRecord(Base, TimestampMixin):
