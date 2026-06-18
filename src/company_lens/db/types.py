@@ -12,8 +12,15 @@ class PgVector(UserDefinedType[Sequence[float]]):
 
     cache_ok = True
 
+    def __init__(self, dimensions: int | None = None) -> None:
+        if dimensions is not None and dimensions <= 0:
+            raise ValueError("dimensions must be positive.")
+        self.dimensions = dimensions
+
     def get_col_spec(self, **_: Any) -> str:
-        return "vector"
+        if self.dimensions is None:
+            return "vector"
+        return f"vector({self.dimensions})"
 
     def bind_processor(self, dialect: Dialect) -> Callable[[Sequence[float] | None], str | None]:
         def process(value: Sequence[float] | None) -> str | None:

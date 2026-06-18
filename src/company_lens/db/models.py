@@ -513,7 +513,7 @@ class ChunkEmbedding(Base, TimestampMixin):
         ForeignKey("embedding_indexes.id"),
         nullable=False,
     )
-    embedding: Mapped[list[float]] = mapped_column(PgVector(), nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(PgVector(384), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(128), nullable=False)
 
     chunk: Mapped[DocumentChunk] = relationship(back_populates="embeddings")

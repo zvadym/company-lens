@@ -4,6 +4,7 @@ from sqlalchemy import ForeignKeyConstraint, UniqueConstraint
 
 from company_lens.db import models
 from company_lens.db.base import Base
+from company_lens.db.types import PgVector
 
 
 def test_core_domain_tables_are_registered() -> None:
@@ -34,6 +35,14 @@ def test_core_domain_tables_are_registered() -> None:
 
     assert expected_tables.issubset(Base.metadata.tables)
     assert models.Company.__tablename__ == "companies"
+
+
+def test_chunk_embedding_vector_has_fixed_dimensions_for_hnsw() -> None:
+    embedding_type = Base.metadata.tables["chunk_embeddings"].columns["embedding"].type
+
+    assert isinstance(embedding_type, PgVector)
+    assert embedding_type.dimensions == 384
+    assert embedding_type.get_col_spec() == "vector(384)"
 
 
 def test_chunk_preserves_section_and_document_lineage() -> None:

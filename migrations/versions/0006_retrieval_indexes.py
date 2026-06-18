@@ -28,6 +28,11 @@ def upgrade() -> None:
         "ON document_chunks USING gin (search_vector)"
     )
     op.execute(
+        "ALTER TABLE chunk_embeddings "
+        "ALTER COLUMN embedding TYPE vector(384) "
+        "USING embedding::vector(384)"
+    )
+    op.execute(
         "CREATE INDEX IF NOT EXISTS ix_chunk_embeddings_embedding_hnsw "
         "ON chunk_embeddings USING hnsw (embedding vector_cosine_ops)"
     )
@@ -69,5 +74,8 @@ def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS ix_document_chunks_document_version")
     op.execute("DROP INDEX IF EXISTS ix_chunk_embeddings_index_hash")
     op.execute("DROP INDEX IF EXISTS ix_chunk_embeddings_embedding_hnsw")
+    op.execute(
+        "ALTER TABLE chunk_embeddings ALTER COLUMN embedding TYPE vector USING embedding::vector"
+    )
     op.execute("DROP INDEX IF EXISTS ix_document_chunks_search_vector")
     op.execute("ALTER TABLE document_chunks DROP COLUMN IF EXISTS search_vector")
