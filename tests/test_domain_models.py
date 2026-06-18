@@ -86,5 +86,10 @@ def test_structured_facts_are_separate_from_chunks() -> None:
     assert "value" in facts.columns
     assert "unit" in facts.columns
     assert "period_end" in facts.columns
+    assert "canonical_metric" in facts.columns
+    assert "metric_mapping_version" in facts.columns
+    assert "period_type" in facts.columns
+    assert "filed_date" in facts.columns
+    assert "form" in facts.columns
     assert "text" not in facts.columns
     assert "value" not in chunks.columns

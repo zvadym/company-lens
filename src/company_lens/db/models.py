@@ -522,14 +522,20 @@ class ChunkEmbedding(Base, TimestampMixin):
 
 class FinancialFact(Base, TimestampMixin):
     __tablename__ = "financial_facts"
+    __table_args__ = (UniqueConstraint("source_hash", name="uq_financial_fact_source_hash"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     company_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("companies.id"), nullable=False)
+    ingestion_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ingestion_runs.id"))
     document_version_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("document_versions.id")
     )
     taxonomy: Mapped[str] = mapped_column(String(64), nullable=False)
     concept: Mapped[str] = mapped_column(String(255), nullable=False)
+    canonical_metric: Mapped[str] = mapped_column(String(64), nullable=False, default="legacy")
+    metric_mapping_version: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="legacy"
+    )
     label: Mapped[str | None] = mapped_column(String(512))
     value: Mapped[Decimal] = mapped_column(Numeric(28, 6), nullable=False)
     unit: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -537,12 +543,18 @@ class FinancialFact(Base, TimestampMixin):
     period_end: Mapped[date] = mapped_column(Date, nullable=False)
     fiscal_year: Mapped[int | None] = mapped_column(Integer)
     fiscal_period: Mapped[str | None] = mapped_column(String(16))
+    period_type: Mapped[str] = mapped_column(String(32), nullable=False, default="other")
+    form: Mapped[str | None] = mapped_column(String(32))
+    filed_date: Mapped[date | None] = mapped_column(Date)
+    frame: Mapped[str | None] = mapped_column(String(64))
+    is_amendment: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     accession_number: Mapped[str | None] = mapped_column(String(64))
     dimensions: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     source_hash: Mapped[str] = mapped_column(String(128), nullable=False)
 
     company: Mapped[Company] = relationship(back_populates="facts")
+    ingestion_run: Mapped[IngestionRun | None] = relationship()
     document_version: Mapped[DocumentVersion | None] = relationship()
 
 

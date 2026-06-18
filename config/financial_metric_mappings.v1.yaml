@@ -1,0 +1,33 @@
+version: sec-company-facts.v1
+metrics:
+  revenue:
+    us-gaap:
+      - RevenueFromContractWithCustomerExcludingAssessedTax
+      - Revenues
+      - SalesRevenueNet
+      - SalesRevenueGoodsNet
+      - SalesRevenueServicesNet
+  net_income:
+    us-gaap:
+      - NetIncomeLoss
+      - ProfitLoss
+  operating_income:
+    us-gaap:
+      - OperatingIncomeLoss
+  assets:
+    us-gaap:
+      - Assets
+  cash_and_equivalents:
+    us-gaap:
+      - CashAndCashEquivalentsAtCarryingValue
+      - CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
+  research_and_development_expense:
+    us-gaap:
+      - ResearchAndDevelopmentExpense
+  operating_cash_flow:
+    us-gaap:
+      - NetCashProvidedByUsedInOperatingActivities
+
+# Optional issuer-specific extensions are keyed by zero-padded CIK. They override no
+# global mappings; they add concepts that an issuer reports in a custom taxonomy.
+company_overrides: {}
