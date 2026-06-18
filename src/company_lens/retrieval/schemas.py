@@ -14,6 +14,7 @@ RetrievalMode = Literal["dense", "lexical", "hybrid"]
 class RetrievalFilters(BaseModel):
     company_ids: tuple[uuid.UUID, ...] = ()
     document_version_ids: tuple[uuid.UUID, ...] = ()
+    accession_numbers: tuple[str, ...] = ()
     document_kinds: tuple[DocumentKind, ...] = ()
     filing_forms: tuple[str, ...] = ()
     filing_date_from: date | None = None
@@ -25,7 +26,13 @@ class RetrievalFilters(BaseModel):
     section_codes: tuple[str, ...] = ()
     source_systems: tuple[str, ...] = ()
 
-    @field_validator("filing_forms", "fiscal_periods", "section_codes", "source_systems")
+    @field_validator(
+        "accession_numbers",
+        "filing_forms",
+        "fiscal_periods",
+        "section_codes",
+        "source_systems",
+    )
     @classmethod
     def _strip_strings(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(value.strip() for value in values if value.strip())
