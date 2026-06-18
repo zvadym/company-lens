@@ -173,6 +173,14 @@ Structured metrics are normalised into relational tables rather than embedded as
 - R&D expense;
 - operating cash flow.
 
+The implemented Company Facts pipeline uses a [versioned canonical mapping](docs/financial-metrics.md),
+retains duplicate/restatement provenance, and exposes typed ingestion and query commands:
+
+```bash
+company-lens ingest-company-facts --ticker NET
+company-lens query-financial-facts --ticker NET --metric revenue --fiscal-year 2025
+```
+
 ### FRED — time-series API
 
 Initial series may include:

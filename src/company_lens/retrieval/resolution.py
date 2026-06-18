@@ -35,8 +35,23 @@ METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "revenue": ("revenue", "revenues", "sales", "net sales", "дохід", "виручка"),
     "net_income": ("net income", "net earnings", "profit", "чистий прибуток"),
     "operating_income": ("operating income", "operating profit", "операційний прибуток"),
-    "total_assets": ("total assets", "assets", "активи"),
-    "cash": ("cash and cash equivalents", "cash", "грошові кошти"),
+    "assets": ("total assets", "assets", "активи"),
+    "cash_and_equivalents": (
+        "cash and cash equivalents",
+        "cash",
+        "грошові кошти",
+    ),
+    "research_and_development_expense": (
+        "research and development",
+        "r&d expense",
+        "r&d",
+        "витрати на дослідження",
+    ),
+    "operating_cash_flow": (
+        "operating cash flow",
+        "cash from operations",
+        "операційний грошовий потік",
+    ),
     "free_cash_flow": ("free cash flow", "fcf", "вільний грошовий потік"),
     "employees": ("employees", "headcount", "працівники", "штат"),
 }

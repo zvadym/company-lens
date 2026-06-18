@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import re
 import uuid
 from collections import defaultdict
 from decimal import Decimal
@@ -30,7 +29,7 @@ from company_lens.retrieval.adaptive_schemas import (
     RetrievalTrace,
 )
 from company_lens.retrieval.planning import RetrievalPlanner
-from company_lens.retrieval.resolution import EntityResolver, metric_aliases
+from company_lens.retrieval.resolution import EntityResolver
 from company_lens.retrieval.schemas import RetrievalFilters, RetrievalRequest
 from company_lens.retrieval.service import RetrievalService
 
@@ -267,8 +266,10 @@ class AdaptiveRetrievalService:
     def _financial_facts(self, plan: RetrievalPlan) -> list[ContextEvidence]:
         if not plan.metrics:
             return []
-        statement = select(FinancialFact, Company).join(
-            Company, Company.id == FinancialFact.company_id
+        statement = (
+            select(FinancialFact, Company)
+            .join(Company, Company.id == FinancialFact.company_id)
+            .where(FinancialFact.canonical_metric.in_(plan.metrics))
         )
         if plan.filters.company_ids:
             statement = statement.where(FinancialFact.company_id.in_(plan.filters.company_ids))
@@ -281,13 +282,6 @@ class AdaptiveRetrievalService:
         rows = self._session.execute(statement).all()
         evidence: list[ContextEvidence] = []
         for fact, company in rows:
-            searchable = f"{fact.concept} {fact.label or ''}".casefold()
-            if not any(
-                _metric_matches(searchable, alias)
-                for metric in plan.metrics
-                for alias in metric_aliases(metric)
-            ):
-                continue
             value = _decimal_text(fact.value)
             period = fact.fiscal_period or fact.period_end.isoformat()
             content = (
@@ -436,11 +430,6 @@ def _period_key(item: ContextEvidence) -> str | None:
     if item.fiscal_year is not None:
         return str(item.fiscal_year)
     return None
-
-
-def _metric_matches(searchable: str, alias: str) -> bool:
-    tokens = re.sub(r"[^\w]+", " ", alias.casefold()).strip()
-    return bool(tokens and re.search(rf"(?<!\w){re.escape(tokens)}(?!\w)", searchable))
 
 
 def _decimal_text(value: Decimal) -> str:

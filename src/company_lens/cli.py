@@ -13,7 +13,14 @@ from sqlalchemy.orm import Session
 from company_lens.config import get_settings
 from company_lens.db.models import CompanyTicker, DocumentKind, IngestionFailure
 from company_lens.db.session import build_session_factory
+from company_lens.financials.schemas import FinancialFactQuery
+from company_lens.financials.service import FinancialFactQueryService
 from company_lens.ingestion.artifacts import ArtifactStore
+from company_lens.ingestion.company_facts import (
+    CompanyFactsIngestionService,
+    build_company_facts_client,
+    build_company_facts_options,
+)
 from company_lens.ingestion.pdf_manifest import load_investor_pdf_manifest
 from company_lens.ingestion.pdf_service import (
     InvestorPdfClientError,
@@ -81,6 +88,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Retry companies with unresolved prior ingestion failures.",
     )
+
+    facts_parser = subparsers.add_parser(
+        "ingest-company-facts",
+        help="Ingest canonical financial metrics from SEC Company Facts.",
+    )
+    facts_parser.add_argument("--ticker", action="append", dest="tickers")
+    facts_parser.add_argument("--all", action="store_true", help="Ingest the configured universe.")
+    facts_parser.add_argument(
+        "--mapping",
+        type=Path,
+        default=Path("config/financial_metric_mappings.v1.yaml"),
+        help="Versioned canonical metric mapping YAML.",
+    )
+
+    facts_query_parser = subparsers.add_parser(
+        "query-financial-facts",
+        help="Query typed canonical financial observations.",
+    )
+    facts_query_parser.add_argument("--ticker", action="append", dest="tickers", default=None)
+    facts_query_parser.add_argument("--metric", action="append", dest="metrics", required=True)
+    facts_query_parser.add_argument("--fiscal-year", action="append", type=int, default=None)
+    facts_query_parser.add_argument("--fiscal-period", action="append", default=None)
+    facts_query_parser.add_argument(
+        "--period-type",
+        action="append",
+        choices=["instant", "quarter", "year_to_date", "annual", "other"],
+        default=None,
+    )
+    facts_query_parser.add_argument("--unit", action="append", dest="units", default=None)
+    facts_query_parser.add_argument("--period-start", default=None)
+    facts_query_parser.add_argument("--period-end", default=None)
+    facts_query_parser.add_argument("--exclude-amendments", action="store_true")
+    facts_query_parser.add_argument("--limit", type=int, default=200)
 
     pdf_parser = subparsers.add_parser("ingest-pdfs", help="Ingest investor-relations PDFs.")
     pdf_parser.add_argument(
@@ -227,6 +267,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "ingest-sec":
         return _run_ingest_sec(args)
+    if args.command == "ingest-company-facts":
+        return _run_ingest_company_facts(args)
+    if args.command == "query-financial-facts":
+        return _run_query_financial_facts(args)
     if args.command == "ingest-pdfs":
         return _run_ingest_pdfs(args)
     if args.command == "process-documents":
@@ -279,6 +323,65 @@ def _run_ingest_sec(args: argparse.Namespace) -> int:
         f"artifacts={result.artifacts_seen} failures={result.failures}"
     )
     return 0 if result.status == "success" else 1
+
+
+def _run_ingest_company_facts(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    try:
+        options = build_company_facts_options(
+            tickers=tuple(args.tickers or ()),
+            all_companies=bool(args.all),
+            mapping_path=args.mapping,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"SEC Company Facts ingestion failed: {exc}")
+        return 1
+
+    session_factory = build_session_factory(settings.database_url)
+    with session_factory() as session:
+        try:
+            with build_company_facts_client(settings) as client:
+                result = CompanyFactsIngestionService(
+                    session=session,
+                    client=client,
+                    artifact_store=ArtifactStore(settings.sec_artifact_root),
+                ).ingest(options)
+        except (OSError, ValueError, SecClientError) as exc:
+            print(f"SEC Company Facts ingestion failed: {exc}")
+            return 1
+    print(
+        "SEC Company Facts ingestion completed: "
+        f"run_id={result.run_id} status={result.status} "
+        f"companies={result.companies_seen} facts_seen={result.facts_seen} "
+        f"inserted={result.facts_inserted} duplicates={result.duplicates_skipped} "
+        f"unmapped_concepts={result.unmapped_concepts} failures={result.failures}"
+    )
+    return 0 if result.status == "success" else 1
+
+
+def _run_query_financial_facts(args: argparse.Namespace) -> int:
+    try:
+        request = FinancialFactQuery(
+            tickers=tuple(args.tickers or ()),
+            metrics=tuple(args.metrics),
+            fiscal_years=tuple(args.fiscal_year or ()),
+            fiscal_periods=tuple(args.fiscal_period or ()),
+            period_types=tuple(args.period_type or ()),
+            units=tuple(args.units or ()),
+            period_start=_optional_date(args.period_start),
+            period_end=_optional_date(args.period_end),
+            include_amendments=not bool(args.exclude_amendments),
+            limit=args.limit,
+        )
+    except (TypeError, ValueError) as exc:
+        print(f"Financial facts query failed: {exc}")
+        return 1
+    settings = get_settings()
+    session_factory = build_session_factory(settings.database_url)
+    with session_factory() as session:
+        result = FinancialFactQueryService(session=session).query(request)
+    print(result.model_dump_json(indent=2))
+    return 0
 
 
 def _run_ingest_pdfs(args: argparse.Namespace) -> int:

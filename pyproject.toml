@@ -32,6 +32,9 @@ dev = [
   "ruff>=0.6.3",
   "types-PyYAML>=6.0.12.20250822",
 ]
+agent = [
+  "langchain-core>=0.3.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/company_lens"]

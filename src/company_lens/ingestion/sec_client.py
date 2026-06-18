@@ -10,6 +10,7 @@ import httpx
 
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
+SEC_COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 SEC_ARCHIVE_BASE_URL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_path}"
 
 
@@ -116,6 +117,9 @@ class SecClient:
 
     def fetch_submissions(self, cik: str) -> dict[str, Any]:
         return self.get_json(SEC_SUBMISSIONS_URL.format(cik=cik.zfill(10)))
+
+    def fetch_company_facts(self, cik: str) -> dict[str, Any]:
+        return self.get_json(SEC_COMPANY_FACTS_URL.format(cik=cik.zfill(10)))
 
     def iter_recent_filings(
         self,
