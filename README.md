@@ -239,7 +239,7 @@ The data-model work is tracked in [#4](https://github.com/zvadym/company-lens/is
 
 ## 🧠 Adaptive retrieval
 
-CompanyLens will not send the same amount of context for every question.
+CompanyLens does not send the same amount of context for every question.
 
 ### Retrieval strategies
 
@@ -328,6 +328,11 @@ company-lens retrieve \
 company-lens benchmark-retrieval \
   --dataset evals/retrieval/golden/synthetic.yaml \
   --output-json retrieval-report.json
+
+# Resolve entities, select a strategy, and return budgeted evidence with a trace
+company-lens adaptive-retrieve \
+  --query "Compare Cloudflare and Fastly risks in 2025" \
+  --max-attempts 3
 ```
 
 Every result includes source and parent IDs, document/section metadata, page and character
@@ -346,6 +351,9 @@ When context is insufficient, the system may:
 - abstain after the maximum number of attempts.
 
 Every retry must change the strategy. Repeating the same failed retrieval is not a recovery mechanism.
+
+`adaptive-retrieve` returns evidence and citations rather than a generated prose answer.
+Answer synthesis is handled by the later agent workflow.
 
 Adaptive retrieval is tracked in [#8](https://github.com/zvadym/company-lens/issues/8) and [#9](https://github.com/zvadym/company-lens/issues/9).
 

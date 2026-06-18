@@ -541,6 +541,13 @@ class RetrievalService:
         self._add_in_sql(
             clauses,
             params,
+            "sd.accession_number",
+            "accession_number",
+            filters.accession_numbers,
+        )
+        self._add_in_sql(
+            clauses,
+            params,
             "sd.kind",
             "document_kind",
             tuple(item.name for item in filters.document_kinds),
@@ -619,6 +626,8 @@ def _apply_filter_conditions(
         statement = statement.where(SourceDocument.company_id.in_(filters.company_ids))
     if filters.document_version_ids:
         statement = statement.where(DocumentVersion.id.in_(filters.document_version_ids))
+    if filters.accession_numbers:
+        statement = statement.where(SourceDocument.accession_number.in_(filters.accession_numbers))
     if filters.document_kinds:
         statement = statement.where(SourceDocument.kind.in_(filters.document_kinds))
     if filters.filing_forms:

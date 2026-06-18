@@ -1,5 +1,12 @@
-"""Baseline retrieval services for dense, lexical, and hybrid chunk search."""
+"""Baseline and adaptive hierarchical retrieval services."""
 
+from company_lens.retrieval.adaptive import AdaptiveRetrievalService, ContextAssembler
+from company_lens.retrieval.adaptive_schemas import (
+    AdaptiveRetrievalRequest,
+    AdaptiveRetrievalResponse,
+    RetrievalPlan,
+    RetrievalTrace,
+)
 from company_lens.retrieval.embeddings import (
     DEFAULT_LOCAL_EMBEDDING_DIMENSIONS,
     DEFAULT_LOCAL_EMBEDDING_MODEL,
@@ -18,6 +25,10 @@ from company_lens.retrieval.schemas import (
 from company_lens.retrieval.service import RetrievalService
 
 __all__ = [
+    "AdaptiveRetrievalRequest",
+    "AdaptiveRetrievalResponse",
+    "AdaptiveRetrievalService",
+    "ContextAssembler",
     "DEFAULT_LOCAL_EMBEDDING_DIMENSIONS",
     "DEFAULT_LOCAL_EMBEDDING_MODEL",
     "EmbeddingIndexingRequest",
@@ -26,8 +37,10 @@ __all__ = [
     "LocalFeatureHashingEmbedder",
     "RetrievalFilters",
     "RetrievalMode",
+    "RetrievalPlan",
     "RetrievalRequest",
     "RetrievalResponse",
     "RetrievalResult",
     "RetrievalService",
+    "RetrievalTrace",
 ]

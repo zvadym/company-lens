@@ -35,6 +35,8 @@ from company_lens.processing.service import (
     DocumentProcessingService,
 )
 from company_lens.processing.stats import corpus_stats, demo_chunks
+from company_lens.retrieval.adaptive import AdaptiveRetrievalService
+from company_lens.retrieval.adaptive_schemas import AdaptiveRetrievalRequest
 from company_lens.retrieval.benchmark import (
     print_benchmark_report,
     run_benchmark,
@@ -178,6 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     retrieve_parser.add_argument("--company-id", action="append", default=None)
     retrieve_parser.add_argument("--document-version-id", action="append", default=None)
+    retrieve_parser.add_argument("--accession-number", action="append", default=None)
     retrieve_parser.add_argument(
         "--kind",
         action="append",
@@ -194,6 +197,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     retrieve_parser.add_argument("--section-code", action="append", default=None)
     retrieve_parser.add_argument("--source-system", action="append", default=None)
     retrieve_parser.add_argument("--include-parent-text", action="store_true")
+
+    adaptive_parser = subparsers.add_parser(
+        "adaptive-retrieve",
+        help="Resolve exact entities and build a budgeted evidence context.",
+    )
+    adaptive_parser.add_argument("--query", required=True, help="Natural-language question.")
+    adaptive_parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=3,
+        help="Maximum bounded retrieval attempts.",
+    )
+    adaptive_parser.add_argument("--index-name", default="default")
+    adaptive_parser.add_argument("--index-version", default="local-feature-hashing.v1")
 
     benchmark_parser = subparsers.add_parser(
         "benchmark-retrieval",
@@ -220,6 +237,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_index_embeddings(args)
     if args.command == "retrieve":
         return _run_retrieve(args)
+    if args.command == "adaptive-retrieve":
+        return _run_adaptive_retrieve(args)
     if args.command == "benchmark-retrieval":
         return _run_benchmark_retrieval(args)
     parser.error(f"Unknown command: {args.command}")
@@ -378,6 +397,7 @@ def _run_retrieve(args: argparse.Namespace) -> int:
         filters = RetrievalFilters(
             company_ids=_uuid_tuple(args.company_id or ()),
             document_version_ids=_uuid_tuple(args.document_version_id or ()),
+            accession_numbers=tuple(args.accession_number or ()),
             document_kinds=tuple(DocumentKind(value) for value in (args.kind or ())),
             filing_forms=tuple(args.filing_form or ()),
             filing_date_from=_optional_date(args.filing_date_from),
@@ -405,6 +425,26 @@ def _run_retrieve(args: argparse.Namespace) -> int:
     session_factory = build_session_factory(settings.database_url)
     with session_factory() as session:
         response = RetrievalService(session=session).retrieve(request)
+    print(json.dumps(response.model_dump(mode="json"), indent=2, sort_keys=True))
+    return 0
+
+
+def _run_adaptive_retrieve(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    try:
+        request = AdaptiveRetrievalRequest(
+            query=args.query,
+            max_attempts=args.max_attempts,
+            index_name=args.index_name,
+            index_version=args.index_version,
+        )
+    except (ValueError, TypeError) as exc:
+        print(f"Adaptive retrieval failed: {exc}")
+        return 1
+
+    session_factory = build_session_factory(settings.database_url)
+    with session_factory() as session:
+        response = AdaptiveRetrievalService(session=session).retrieve(request)
     print(json.dumps(response.model_dump(mode="json"), indent=2, sort_keys=True))
     return 0
 
