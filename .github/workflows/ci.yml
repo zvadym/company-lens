@@ -8,6 +8,22 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: company_lens
+          POSTGRES_USER: company_lens
+          POSTGRES_PASSWORD: company_lens
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U company_lens -d company_lens"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      COMPANY_LENS_TEST_DATABASE_URL: postgresql+psycopg://company_lens:company_lens@localhost:5432/company_lens
 
     steps:
       - uses: actions/checkout@v4
@@ -22,4 +38,3 @@ jobs:
 
       - name: Run checks
         run: make check
-

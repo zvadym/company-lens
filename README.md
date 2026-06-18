@@ -303,6 +303,37 @@ The following values must be resolved deterministically where possible:
 
 Vector search is then executed inside the correctly filtered corpus.
 
+### Baseline retrieval commands
+
+The first retrieval layer ranks `DocumentChunk` records, then attaches parent section,
+document, company, and source metadata. It supports independent dense, lexical, and
+hybrid modes.
+
+```bash
+# Build local deterministic feature-hashing embeddings for chunks
+company-lens index-embeddings \
+  --index-name default \
+  --index-version local-feature-hashing.v1 \
+  --batch-size 100
+
+# Run hybrid retrieval with exact metadata filters applied before ranking
+company-lens retrieve \
+  --mode hybrid \
+  --query "competition risk from security vendors" \
+  --filing-form 10-K \
+  --section-code risk_factors \
+  --top-k 10
+
+# Compare dense, lexical, and hybrid variants on the synthetic labelled set
+company-lens benchmark-retrieval \
+  --dataset evals/retrieval/golden/synthetic.yaml \
+  --output-json retrieval-report.json
+```
+
+Every result includes source and parent IDs, document/section metadata, page and character
+location when available, lexical/vector/reranker/hybrid scores, embedding index version,
+the selected retrieval strategy, and deterministic diagnostics.
+
 ### Bounded escalation
 
 When context is insufficient, the system may:
