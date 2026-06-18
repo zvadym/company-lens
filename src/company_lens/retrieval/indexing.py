@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from company_lens.db.models import ChunkEmbedding, DocumentChunk, EmbeddingIndex
-from company_lens.retrieval.embeddings import LocalFeatureHashingEmbedder
+from company_lens.retrieval.embeddings import Embedder, LocalFeatureHashingEmbedder
 from company_lens.retrieval.schemas import EmbeddingIndexingRequest, EmbeddingIndexingResult
 
 
@@ -13,7 +13,7 @@ class EmbeddingIndexingService:
         self,
         *,
         session: Session,
-        embedder: LocalFeatureHashingEmbedder | None = None,
+        embedder: Embedder | None = None,
     ) -> None:
         self._session = session
         self._embedder = embedder or LocalFeatureHashingEmbedder()
@@ -29,6 +29,7 @@ class EmbeddingIndexingService:
 
         for batch_start in range(0, len(chunks), request.batch_size):
             batch = chunks[batch_start : batch_start + request.batch_size]
+            pending: list[tuple[DocumentChunk, ChunkEmbedding | None]] = []
             for chunk in batch:
                 existing = self._session.scalar(
                     select(ChunkEmbedding).where(
@@ -43,26 +44,33 @@ class EmbeddingIndexingService:
                 ):
                     skipped += 1
                     continue
+                pending.append((chunk, existing))
 
-                if existing is not None:
-                    self._session.delete(existing)
-                    self._session.flush()
-                    if existing.content_hash != chunk.content_hash:
-                        stale_rebuilt += 1
-
-                try:
+            try:
+                vectors = self._embedder.embed_texts([chunk.text for chunk, _ in pending])
+                batch_indexed = 0
+                batch_stale_rebuilt = 0
+                for (chunk, existing), vector in zip(pending, vectors, strict=True):
+                    if existing is not None:
+                        self._session.delete(existing)
+                        self._session.flush()
+                        if existing.content_hash != chunk.content_hash:
+                            batch_stale_rebuilt += 1
                     self._session.add(
                         ChunkEmbedding(
                             chunk_id=chunk.id,
                             embedding_index_id=embedding_index.id,
-                            embedding=self._embedder.embed_text(chunk.text),
+                            embedding=vector,
                             content_hash=chunk.content_hash,
                         )
                     )
-                    indexed += 1
-                except Exception:
-                    failed += 1
-            self._session.commit()
+                    batch_indexed += 1
+                self._session.commit()
+                indexed += batch_indexed
+                stale_rebuilt += batch_stale_rebuilt
+            except Exception:
+                self._session.rollback()
+                failed += len(pending)
 
         return EmbeddingIndexingResult(
             index_id=embedding_index.id,
@@ -84,6 +92,13 @@ class EmbeddingIndexingService:
             )
         )
         if embedding_index is not None:
+            if (
+                embedding_index.embedding_model != self._embedder.model_name
+                or embedding_index.dimensions != self._embedder.dimensions
+            ):
+                raise ValueError(
+                    "Embedding index version already exists with a different model or dimensions."
+                )
             return embedding_index
 
         embedding_index = EmbeddingIndex(
@@ -92,7 +107,7 @@ class EmbeddingIndexingService:
             embedding_model=self._embedder.model_name,
             dimensions=self._embedder.dimensions,
             distance_metric="cosine",
-            metadata_json={"provider": "local_feature_hashing"},
+            metadata_json={"provider": self._embedder.provider},
         )
         self._session.add(embedding_index)
         self._session.commit()

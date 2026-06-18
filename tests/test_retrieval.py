@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -23,7 +24,7 @@ from company_lens.db.models import (
 )
 from company_lens.processing.text import content_hash
 from company_lens.retrieval.benchmark import run_benchmark
-from company_lens.retrieval.embeddings import LocalFeatureHashingEmbedder
+from company_lens.retrieval.embeddings import LocalFeatureHashingEmbedder, OpenAIEmbedder
 from company_lens.retrieval.indexing import EmbeddingIndexingService
 from company_lens.retrieval.schemas import (
     EmbeddingIndexingRequest,
@@ -46,6 +47,31 @@ def test_local_feature_hashing_embeddings_are_deterministic() -> None:
     assert first == second
     assert len(first) == 16
     assert sum(value * value for value in first) == pytest.approx(1.0)
+
+
+def test_openai_embedder_batches_inputs_and_preserves_response_order() -> None:
+    class FakeEmbeddings:
+        def create(self, **kwargs: object) -> SimpleNamespace:
+            assert kwargs == {
+                "model": "text-embedding-3-small",
+                "input": ["first", "second"],
+                "dimensions": 3,
+                "encoding_format": "float",
+            }
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(index=1, embedding=[0.0, 1.0, 0.0]),
+                    SimpleNamespace(index=0, embedding=[1.0, 0.0, 0.0]),
+                ]
+            )
+
+    client = SimpleNamespace(embeddings=FakeEmbeddings())
+    embedder = OpenAIEmbedder(client=client, dimensions=3)
+
+    assert embedder.embed_texts(["first", "second"]) == [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ]
 
 
 def test_indexing_skips_fresh_embeddings_and_rebuilds_stale(session: Session) -> None:
@@ -133,10 +159,36 @@ def test_cli_indexes_retrieves_and_runs_benchmark(
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
     monkeypatch.setattr(cli, "build_session_factory", lambda _: factory)
 
-    assert cli.main(["index-embeddings", "--batch-size", "2"]) == 0
+    assert (
+        cli.main(
+            [
+                "index-embeddings",
+                "--batch-size",
+                "2",
+                "--embedding-provider",
+                "local",
+                "--index-version",
+                "local-feature-hashing.v1",
+            ]
+        )
+        == 0
+    )
     capsys.readouterr()
     assert (
-        cli.main(["retrieve", "--query", "competition security vendors", "--mode", "hybrid"]) == 0
+        cli.main(
+            [
+                "retrieve",
+                "--query",
+                "competition security vendors",
+                "--mode",
+                "hybrid",
+                "--embedding-provider",
+                "local",
+                "--index-version",
+                "local-feature-hashing.v1",
+            ]
+        )
+        == 0
     )
     retrieve_output = json.loads(capsys.readouterr().out)
     assert retrieve_output["results"]

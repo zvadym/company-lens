@@ -6,11 +6,12 @@ import uuid
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from company_lens.config import get_settings
+from company_lens.config import Settings, get_settings
 from company_lens.db.models import CompanyTicker, DocumentKind, IngestionFailure
 from company_lens.db.session import build_session_factory
 from company_lens.financials.schemas import FinancialFactQuery
@@ -51,6 +52,12 @@ from company_lens.retrieval.benchmark import (
     print_benchmark_report,
     run_benchmark,
     write_json_report,
+)
+from company_lens.retrieval.embeddings import (
+    DEFAULT_OPENAI_INDEX_VERSION,
+    Embedder,
+    EmbeddingProvider,
+    build_embedder,
 )
 from company_lens.retrieval.indexing import EmbeddingIndexingService
 from company_lens.retrieval.schemas import (
@@ -214,8 +221,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     index_parser.add_argument("--index-name", default="default", help="Embedding index name.")
     index_parser.add_argument(
         "--index-version",
-        default="local-feature-hashing.v1",
+        default=DEFAULT_OPENAI_INDEX_VERSION,
         help="Embedding index version.",
+    )
+    index_parser.add_argument(
+        "--embedding-provider",
+        choices=["openai", "local"],
+        default="openai",
+        help="Embedding provider. OpenAI is the production default; local is deterministic.",
     )
     index_parser.add_argument("--limit", type=int, default=None, help="Maximum chunks to index.")
     index_parser.add_argument("--batch-size", type=int, default=100, help="Commit batch size.")
@@ -236,8 +249,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     retrieve_parser.add_argument("--index-name", default="default", help="Embedding index name.")
     retrieve_parser.add_argument(
         "--index-version",
-        default="local-feature-hashing.v1",
+        default=DEFAULT_OPENAI_INDEX_VERSION,
         help="Embedding index version.",
+    )
+    retrieve_parser.add_argument(
+        "--embedding-provider",
+        choices=["openai", "local"],
+        default="openai",
+        help="Provider used to embed the query; it must match the selected index.",
     )
     retrieve_parser.add_argument("--company-id", action="append", default=None)
     retrieve_parser.add_argument("--document-version-id", action="append", default=None)
@@ -271,7 +290,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Maximum bounded retrieval attempts.",
     )
     adaptive_parser.add_argument("--index-name", default="default")
-    adaptive_parser.add_argument("--index-version", default="local-feature-hashing.v1")
+    adaptive_parser.add_argument("--index-version", default=DEFAULT_OPENAI_INDEX_VERSION)
+    adaptive_parser.add_argument(
+        "--embedding-provider",
+        choices=["openai", "local"],
+        default="openai",
+        help="Provider used for dense retrieval queries.",
+    )
 
     benchmark_parser = subparsers.add_parser(
         "benchmark-retrieval",
@@ -555,6 +580,11 @@ def _run_corpus_stats(args: argparse.Namespace) -> int:
 
 def _run_index_embeddings(args: argparse.Namespace) -> int:
     settings = get_settings()
+    try:
+        embedder = _build_embedder(args.embedding_provider, settings)
+    except ValueError as exc:
+        print(f"Embedding configuration failed: {exc}")
+        return 1
     session_factory = build_session_factory(settings.database_url)
     request = EmbeddingIndexingRequest(
         index_name=args.index_name,
@@ -564,7 +594,7 @@ def _run_index_embeddings(args: argparse.Namespace) -> int:
         force=bool(args.force),
     )
     with session_factory() as session:
-        result = EmbeddingIndexingService(session=session).index_chunks(request)
+        result = EmbeddingIndexingService(session=session, embedder=embedder).index_chunks(request)
     print(result.model_dump_json(indent=2))
     return 0 if result.failed == 0 else 1
 
@@ -572,6 +602,7 @@ def _run_index_embeddings(args: argparse.Namespace) -> int:
 def _run_retrieve(args: argparse.Namespace) -> int:
     settings = get_settings()
     try:
+        embedder = _build_embedder(args.embedding_provider, settings)
         filters = RetrievalFilters(
             company_ids=_uuid_tuple(args.company_id or ()),
             document_version_ids=_uuid_tuple(args.document_version_id or ()),
@@ -602,7 +633,7 @@ def _run_retrieve(args: argparse.Namespace) -> int:
 
     session_factory = build_session_factory(settings.database_url)
     with session_factory() as session:
-        response = RetrievalService(session=session).retrieve(request)
+        response = RetrievalService(session=session, embedder=embedder).retrieve(request)
     print(json.dumps(response.model_dump(mode="json"), indent=2, sort_keys=True))
     return 0
 
@@ -610,6 +641,7 @@ def _run_retrieve(args: argparse.Namespace) -> int:
 def _run_adaptive_retrieve(args: argparse.Namespace) -> int:
     settings = get_settings()
     try:
+        embedder = _build_embedder(args.embedding_provider, settings)
         request = AdaptiveRetrievalRequest(
             query=args.query,
             max_attempts=args.max_attempts,
@@ -622,9 +654,23 @@ def _run_adaptive_retrieve(args: argparse.Namespace) -> int:
 
     session_factory = build_session_factory(settings.database_url)
     with session_factory() as session:
-        response = AdaptiveRetrievalService(session=session).retrieve(request)
+        response = AdaptiveRetrievalService(session=session, embedder=embedder).retrieve(request)
     print(json.dumps(response.model_dump(mode="json"), indent=2, sort_keys=True))
     return 0
+
+
+def _build_embedder(provider: str, settings: Settings) -> Embedder:
+    if provider not in {"local", "openai"}:
+        raise ValueError(f"Unsupported embedding provider: {provider}")
+    api_key = settings.openai_api_key.get_secret_value() if settings.openai_api_key else None
+    return build_embedder(
+        cast(EmbeddingProvider, provider),
+        openai_api_key=api_key,
+        openai_model=settings.openai_embedding_model,
+        dimensions=settings.openai_embedding_dimensions,
+        timeout_seconds=settings.openai_request_timeout_seconds,
+        max_retries=settings.openai_retry_attempts,
+    )
 
 
 def _run_benchmark_retrieval(args: argparse.Namespace) -> int:

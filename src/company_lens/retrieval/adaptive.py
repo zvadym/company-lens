@@ -28,6 +28,7 @@ from company_lens.retrieval.adaptive_schemas import (
     RetrievalStrategy,
     RetrievalTrace,
 )
+from company_lens.retrieval.embeddings import Embedder
 from company_lens.retrieval.planning import RetrievalPlanner
 from company_lens.retrieval.resolution import EntityResolver
 from company_lens.retrieval.schemas import RetrievalFilters, RetrievalRequest
@@ -99,12 +100,12 @@ class ContextAssembler:
 
 
 class AdaptiveRetrievalService:
-    def __init__(self, *, session: Session) -> None:
+    def __init__(self, *, session: Session, embedder: Embedder | None = None) -> None:
         self._session = session
         self._resolver = EntityResolver(session=session)
         self._planner = RetrievalPlanner()
         self._assembler = ContextAssembler()
-        self._retrieval = RetrievalService(session=session)
+        self._retrieval = RetrievalService(session=session, embedder=embedder)
 
     def retrieve(self, request: AdaptiveRetrievalRequest) -> AdaptiveRetrievalResponse:
         resolved = self._resolver.resolve(request.query)

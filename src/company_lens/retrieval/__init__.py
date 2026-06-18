@@ -10,7 +10,12 @@ from company_lens.retrieval.adaptive_schemas import (
 from company_lens.retrieval.embeddings import (
     DEFAULT_LOCAL_EMBEDDING_DIMENSIONS,
     DEFAULT_LOCAL_EMBEDDING_MODEL,
+    DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
+    DEFAULT_OPENAI_EMBEDDING_MODEL,
+    DEFAULT_OPENAI_INDEX_VERSION,
     LocalFeatureHashingEmbedder,
+    OpenAIEmbedder,
+    build_embedder,
 )
 from company_lens.retrieval.indexing import EmbeddingIndexingService
 from company_lens.retrieval.schemas import (
@@ -31,10 +36,14 @@ __all__ = [
     "ContextAssembler",
     "DEFAULT_LOCAL_EMBEDDING_DIMENSIONS",
     "DEFAULT_LOCAL_EMBEDDING_MODEL",
+    "DEFAULT_OPENAI_EMBEDDING_DIMENSIONS",
+    "DEFAULT_OPENAI_EMBEDDING_MODEL",
+    "DEFAULT_OPENAI_INDEX_VERSION",
     "EmbeddingIndexingRequest",
     "EmbeddingIndexingResult",
     "EmbeddingIndexingService",
     "LocalFeatureHashingEmbedder",
+    "OpenAIEmbedder",
     "RetrievalFilters",
     "RetrievalMode",
     "RetrievalPlan",
@@ -43,4 +52,5 @@ __all__ = [
     "RetrievalResult",
     "RetrievalService",
     "RetrievalTrace",
+    "build_embedder",
 ]

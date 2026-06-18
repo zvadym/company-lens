@@ -4,11 +4,29 @@ import hashlib
 import math
 import re
 from collections.abc import Sequence
+from typing import Any, Literal, Protocol
+
+from openai import OpenAI
 
 DEFAULT_LOCAL_EMBEDDING_MODEL = "local-feature-hashing-v1"
 DEFAULT_LOCAL_EMBEDDING_DIMENSIONS = 384
+DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_OPENAI_EMBEDDING_DIMENSIONS = 384
+DEFAULT_OPENAI_INDEX_VERSION = "openai-text-embedding-3-small-384.v1"
+
+EmbeddingProvider = Literal["local", "openai"]
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+
+
+class Embedder(Protocol):
+    model_name: str
+    dimensions: int
+    provider: str
+
+    def embed_query(self, text: str) -> list[float]: ...
+
+    def embed_texts(self, texts: Sequence[str]) -> list[list[float]]: ...
 
 
 class LocalFeatureHashingEmbedder:
@@ -24,6 +42,7 @@ class LocalFeatureHashingEmbedder:
             raise ValueError("dimensions must be positive.")
         self.model_name = model_name
         self.dimensions = dimensions
+        self.provider = "local_feature_hashing"
 
     def embed_query(self, text: str) -> list[float]:
         return self.embed_text(text)
@@ -43,6 +62,78 @@ class LocalFeatureHashingEmbedder:
         if norm == 0:
             return vector
         return [value / norm for value in vector]
+
+
+class OpenAIEmbedder:
+    """OpenAI embeddings backend with configurable reduced dimensions."""
+
+    provider = "openai"
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        model_name: str = DEFAULT_OPENAI_EMBEDDING_MODEL,
+        dimensions: int = DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
+        timeout_seconds: float = 30.0,
+        max_retries: int = 2,
+        client: Any | None = None,
+    ) -> None:
+        if dimensions <= 0:
+            raise ValueError("dimensions must be positive.")
+        self.model_name = model_name
+        self.dimensions = dimensions
+        self._client = client or OpenAI(
+            api_key=api_key,
+            timeout=timeout_seconds,
+            max_retries=max_retries,
+        )
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed_texts((text,))[0]
+
+    def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
+        inputs = [text.strip() for text in texts]
+        if not inputs:
+            return []
+        if any(not text for text in inputs):
+            raise ValueError("OpenAI embedding inputs must not be empty.")
+
+        response = self._client.embeddings.create(
+            model=self.model_name,
+            input=inputs,
+            dimensions=self.dimensions,
+            encoding_format="float",
+        )
+        ordered = sorted(response.data, key=lambda item: item.index)
+        vectors = [list(item.embedding) for item in ordered]
+        if len(vectors) != len(inputs):
+            raise RuntimeError("OpenAI returned an unexpected number of embeddings.")
+        if any(len(vector) != self.dimensions for vector in vectors):
+            raise RuntimeError("OpenAI returned an embedding with unexpected dimensions.")
+        return vectors
+
+
+def build_embedder(
+    provider: EmbeddingProvider,
+    *,
+    openai_api_key: str | None = None,
+    openai_model: str = DEFAULT_OPENAI_EMBEDDING_MODEL,
+    dimensions: int = DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
+    timeout_seconds: float = 30.0,
+    max_retries: int = 2,
+) -> Embedder:
+    if provider == "local":
+        return LocalFeatureHashingEmbedder(dimensions=dimensions)
+    if not openai_api_key:
+        raise ValueError("OPENAI_API_KEY is required for the OpenAI embedding provider.")
+    return OpenAIEmbedder(
+        api_key=openai_api_key,
+        model_name=openai_model,
+        dimensions=dimensions,
+        timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
+    )
 
 
 def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
