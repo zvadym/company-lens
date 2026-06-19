@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -10,10 +11,11 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Literal, cast
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
-from langgraph.types import Send
+from langgraph.types import Overwrite, Send
 from pydantic import BaseModel
 
 from company_lens.agent.model import (
@@ -32,6 +34,7 @@ from company_lens.agent.schemas import (
     AnswerValidation,
     BranchOutcome,
     BranchStatus,
+    CachedSourceResult,
     CalculationBranch,
     CalculationBranchResult,
     ChartBranch,
@@ -52,6 +55,7 @@ from company_lens.agent.schemas import (
     QuestionAnalysis,
     ResearchRoute,
     RetrievalBranchResult,
+    SessionMemory,
     SessionMessage,
     TrajectoryEvent,
     TrajectoryStatus,
@@ -86,6 +90,8 @@ SOURCE_KINDS = {"retrieve_documents", "query_financial_facts", "query_macro_seri
 class ResearchAgentRuntime:
     model_provider: ResearchModelProvider
     tools: ResearchTools
+    max_session_messages: int = 20
+    max_cached_source_results: int = 20
 
 
 class ResearchAgent:
@@ -142,6 +148,7 @@ def create_initial_agent_state(
         "policy": policy or ExecutionPolicy(),
         "status": AgentRunStatus.RUNNING,
         "messages": (SessionMessage(role="user", content=cleaned, created_at=now),),
+        "session_memory": SessionMemory(),
         "retrieval_results": (),
         "financial_results": (),
         "macro_results": (),
@@ -160,18 +167,22 @@ def create_initial_agent_state(
     }
 
 
-def build_research_graph() -> CompiledStateGraph[
-    AgentState, ResearchAgentRuntime, AgentState, AgentState
-]:
+def build_research_graph(
+    checkpointer: BaseCheckpointSaver[str] | None = None,
+    *,
+    interrupt_before: list[str] | None = None,
+) -> CompiledStateGraph[AgentState, ResearchAgentRuntime, AgentState, AgentState]:
     builder = StateGraph(
         AgentState,
         context_schema=ResearchAgentRuntime,
         input_schema=AgentState,
         output_schema=AgentState,
     )
+    builder.add_node("start_turn", _start_turn)
     builder.add_node("parse_question", _parse_question)
     builder.add_node("resolve_entities", _resolve_entities)
     builder.add_node("plan_request", _plan_request)
+    builder.add_node("hydrate_cached_results", _hydrate_cached_results)
     builder.add_node("retrieve_documents", _retrieve_documents)
     builder.add_node("query_financial_facts", _query_financial_facts)
     builder.add_node("query_macro_series", _query_macro_series)
@@ -184,11 +195,13 @@ def build_research_graph() -> CompiledStateGraph[
     builder.add_node("repair_or_abstain", _repair_or_abstain)
     builder.add_node("finalize_response", _finalize_response)
 
-    builder.add_edge(START, "parse_question")
+    builder.add_edge(START, "start_turn")
+    builder.add_edge("start_turn", "parse_question")
     builder.add_edge("parse_question", "resolve_entities")
     builder.add_edge("resolve_entities", "plan_request")
+    builder.add_edge("plan_request", "hydrate_cached_results")
     builder.add_conditional_edges(
-        "plan_request",
+        "hydrate_cached_results",
         _dispatch_source_branches,
         [
             "retrieve_documents",
@@ -232,7 +245,45 @@ def build_research_graph() -> CompiledStateGraph[
         ["validate_citations", "finalize_response"],
     )
     builder.add_edge("finalize_response", END)
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer, interrupt_before=interrupt_before)
+
+
+def _start_turn(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> dict[str, object]:
+    started = time.monotonic()
+    retained = max(1, runtime.context.max_session_messages - 1)
+    messages = tuple(state.get("messages", ())[-retained:])
+    return {
+        "status": AgentRunStatus.RUNNING,
+        "messages": Overwrite(messages),
+        "analysis": None,
+        "resolved_query": None,
+        "execution_plan": None,
+        "retrieval_results": Overwrite(()),
+        "financial_results": Overwrite(()),
+        "macro_results": Overwrite(()),
+        "calculations": Overwrite(()),
+        "branch_outcomes": Overwrite(()),
+        "evidence": (),
+        "chart_spec": None,
+        "draft_answer": None,
+        "final_answer": None,
+        "answer_validation": None,
+        "repair_attempts": 0,
+        "citations": (),
+        "errors": Overwrite(()),
+        "trajectory": Overwrite(
+            (
+                _event(
+                    "start_turn",
+                    TrajectoryStatus.COMPLETED,
+                    "Research turn initialized.",
+                    started,
+                ),
+            )
+        ),
+        "node_attempts": Overwrite(()),
+        "tool_calls_used": Overwrite(0),
+    }
 
 
 def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> dict[str, object]:
@@ -249,7 +300,10 @@ def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -
                 "financial facts, cached macro series, deterministic calculations, or charts."
             ),
         ),
-        ModelMessage(role="user", content=state["question"]),
+        *tuple(
+            ModelMessage(role=message.role, content=message.content)
+            for message in state["messages"]
+        ),
     )
     output, attempts, error = _generate_structured_with_retries(
         runtime.context.model_provider,
@@ -275,6 +329,15 @@ def _resolve_entities(
     started = time.monotonic()
     try:
         resolved = runtime.context.tools.resolve_entities(state["question"])
+        analysis = state.get("analysis")
+        memory = state.get("session_memory")
+        if (
+            analysis is not None
+            and analysis.is_follow_up
+            and memory is not None
+            and memory.last_resolved_query is not None
+        ):
+            resolved = _merge_follow_up_resolution(resolved, memory.last_resolved_query)
     except ResearchToolError as exc:
         error = exc.error.model_copy(update={"node": "resolve_entities"})
         return {
@@ -320,12 +383,17 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         missing_error = _validation_error("plan_request", "missing_planning_inputs")
         return {"status": AgentRunStatus.FAILED, "errors": (missing_error,)}
     started = time.monotonic()
+    memory = state.get("session_memory")
+    previous_plan = memory.last_execution_plan if memory is not None else None
     planning_context = json.dumps(
         {
             "question": state["question"],
             "analysis": analysis.model_dump(mode="json"),
             "resolved_query": resolved.model_dump(mode="json"),
             "policy": state["policy"].model_dump(mode="json"),
+            "previous_plan": (
+                previous_plan.model_dump(mode="json") if previous_plan is not None else None
+            ),
         },
         sort_keys=True,
     )
@@ -368,6 +436,63 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
     return update
 
 
+def _hydrate_cached_results(state: AgentState) -> dict[str, object]:
+    started = time.monotonic()
+    if state["status"] is not AgentRunStatus.RUNNING:
+        return _skipped("hydrate_cached_results")
+    plan = state.get("execution_plan")
+    memory = state.get("session_memory")
+    if plan is None or memory is None:
+        return _skipped("hydrate_cached_results")
+    cache = {(item.kind, item.request_fingerprint): item for item in memory.cached_source_results}
+    retrieval_results: list[RetrievalBranchResult] = []
+    financial_results: list[FinancialBranchResult] = []
+    macro_results: list[MacroBranchResult] = []
+    outcomes: list[BranchOutcome] = []
+    for branch in _source_branches(plan):
+        cached = cache.get((branch.kind, _source_request_fingerprint(branch)))
+        if cached is None:
+            continue
+        if isinstance(branch, DocumentRetrievalBranch) and cached.retrieval_result is not None:
+            retrieval_results.append(
+                RetrievalBranchResult(branch_id=branch.branch_id, result=cached.retrieval_result)
+            )
+        elif isinstance(branch, FinancialFactsBranch) and cached.financial_result is not None:
+            financial_results.append(
+                FinancialBranchResult(branch_id=branch.branch_id, result=cached.financial_result)
+            )
+        elif isinstance(branch, MacroSeriesBranch) and cached.macro_result is not None:
+            macro_results.append(
+                MacroBranchResult(branch_id=branch.branch_id, result=cached.macro_result)
+            )
+        else:
+            continue
+        outcomes.append(
+            BranchOutcome(
+                branch_id=branch.branch_id,
+                kind=branch.kind,
+                status=BranchStatus.COMPLETED,
+                optional=branch.optional,
+                attempts=0,
+            )
+        )
+    return {
+        "retrieval_results": tuple(retrieval_results),
+        "financial_results": tuple(financial_results),
+        "macro_results": tuple(macro_results),
+        "branch_outcomes": tuple(outcomes),
+        "trajectory": (
+            _event(
+                "hydrate_cached_results",
+                TrajectoryStatus.COMPLETED,
+                "Exact-match session results were hydrated.",
+                started,
+                details={"reused_results": len(outcomes)},
+            ),
+        ),
+    }
+
+
 def _dispatch_source_branches(state: AgentState) -> list[Send] | str:
     if state["status"] is not AgentRunStatus.RUNNING:
         return "evaluate_context"
@@ -375,8 +500,13 @@ def _dispatch_source_branches(state: AgentState) -> list[Send] | str:
     if plan is None:
         return "evaluate_context"
     sends: list[Send] = []
+    completed = {
+        outcome.branch_id
+        for outcome in state.get("branch_outcomes", ())
+        if outcome.status is BranchStatus.COMPLETED
+    }
     for branch in plan.branches:
-        if branch.kind in SOURCE_KINDS:
+        if branch.kind in SOURCE_KINDS and branch.branch_id not in completed:
             sends.append(Send(branch.kind, {**state, "active_branch": branch}))
     return sends or "evaluate_context"
 
@@ -758,6 +888,10 @@ def _generate_answer(
         [item.model_dump(mode="json") for item in state.get("evidence", ())],
         sort_keys=True,
     )
+    conversation = json.dumps(
+        [message.model_dump(mode="json") for message in state["messages"]],
+        sort_keys=True,
+    )
     messages = (
         ModelMessage(
             role="system",
@@ -768,7 +902,12 @@ def _generate_answer(
                 "state the limitation explicitly."
             ),
         ),
-        ModelMessage(role="user", content=f"Question: {state['question']}\nEvidence: {context}"),
+        ModelMessage(
+            role="user",
+            content=(
+                f"Conversation: {conversation}\nQuestion: {state['question']}\nEvidence: {context}"
+            ),
+        ),
     )
     text, attempts, error = _generate_text_with_retries(
         runtime.context.model_provider,
@@ -906,11 +1045,14 @@ def _route_after_repair(
     )
 
 
-def _finalize_response(state: AgentState) -> dict[str, object]:
+def _finalize_response(
+    state: AgentState, runtime: Runtime[ResearchAgentRuntime]
+) -> dict[str, object]:
     started = time.monotonic()
     status = state["status"]
     validation = state.get("answer_validation")
     answer = state.get("draft_answer")
+    memory = _updated_session_memory(state, runtime.context.max_cached_source_results)
     if status in {AgentRunStatus.RUNNING, AgentRunStatus.PARTIAL}:
         if answer and validation is not None and validation.valid:
             final_status = (
@@ -922,9 +1064,9 @@ def _finalize_response(state: AgentState) -> dict[str, object]:
                 "status": final_status,
                 "final_answer": answer,
                 "messages": (
-                    *state["messages"],
                     SessionMessage(role="assistant", content=answer, created_at=datetime.now(UTC)),
                 ),
+                "session_memory": memory,
                 "trajectory": (
                     _event(
                         "finalize_response",
@@ -938,6 +1080,7 @@ def _finalize_response(state: AgentState) -> dict[str, object]:
     return {
         "status": status,
         "final_answer": None,
+        "session_memory": memory,
         "trajectory": (
             _event(
                 "finalize_response",
@@ -947,6 +1090,54 @@ def _finalize_response(state: AgentState) -> dict[str, object]:
             ),
         ),
     }
+
+
+def _updated_session_memory(state: AgentState, cache_limit: int) -> SessionMemory:
+    previous = state.get("session_memory") or SessionMemory()
+    cached = {
+        (item.kind, item.request_fingerprint): item for item in previous.cached_source_results
+    }
+    plan = state.get("execution_plan")
+    branches = {branch.branch_id: branch for branch in plan.branches} if plan else {}
+    stored_at = datetime.now(UTC)
+    for retrieval in state.get("retrieval_results", ()):
+        branch = branches.get(retrieval.branch_id)
+        if isinstance(branch, DocumentRetrievalBranch) and retrieval.result.context:
+            entry = CachedSourceResult(
+                kind=branch.kind,
+                request_fingerprint=_source_request_fingerprint(branch),
+                stored_at=stored_at,
+                retrieval_result=retrieval.result,
+            )
+            cached[(entry.kind, entry.request_fingerprint)] = entry
+    for financial in state.get("financial_results", ()):
+        branch = branches.get(financial.branch_id)
+        if isinstance(branch, FinancialFactsBranch) and financial.result.observations:
+            entry = CachedSourceResult(
+                kind=branch.kind,
+                request_fingerprint=_source_request_fingerprint(branch),
+                stored_at=stored_at,
+                financial_result=financial.result,
+            )
+            cached[(entry.kind, entry.request_fingerprint)] = entry
+    for macro in state.get("macro_results", ()):
+        branch = branches.get(macro.branch_id)
+        if isinstance(branch, MacroSeriesBranch) and macro.result.observations:
+            entry = CachedSourceResult(
+                kind=branch.kind,
+                request_fingerprint=_source_request_fingerprint(branch),
+                stored_at=stored_at,
+                macro_result=macro.result,
+            )
+            cached[(entry.kind, entry.request_fingerprint)] = entry
+    entries = tuple(sorted(cached.values(), key=lambda item: item.stored_at)[-cache_limit:])
+    return SessionMemory(
+        last_resolved_query=state.get("resolved_query") or previous.last_resolved_query,
+        last_execution_plan=plan or previous.last_execution_plan,
+        cached_source_results=entries,
+        evidence=state.get("evidence", ()) or previous.evidence,
+        updated_at=stored_at,
+    )
 
 
 def _normalize_and_validate_plan(
@@ -1124,6 +1315,8 @@ def _represented_capabilities(plan: ExecutionPlan) -> set[AgentCapability]:
 
 def _source_branch_max_attempts(state: AgentState, branch_id: str) -> int:
     plan = state["execution_plan"]
+    if plan is None:
+        return 1
     branches = _source_branches(plan)
     extra = state["policy"].max_tool_calls - len(branches)
     for branch in branches:
@@ -1141,6 +1334,39 @@ def _source_branches(
         item
         for item in plan.branches
         if isinstance(item, (DocumentRetrievalBranch, FinancialFactsBranch, MacroSeriesBranch))
+    )
+
+
+def _source_request_fingerprint(
+    branch: DocumentRetrievalBranch | FinancialFactsBranch | MacroSeriesBranch,
+) -> str:
+    payload = json.dumps(
+        {
+            "kind": branch.kind,
+            "request": branch.request.model_dump(mode="json"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _merge_follow_up_resolution(current: ResolvedQuery, previous: ResolvedQuery) -> ResolvedQuery:
+    current_kinds = {entity.kind for entity in current.entities}
+    inherited_entities = tuple(
+        entity for entity in previous.entities if entity.kind not in current_kinds
+    )
+    return current.model_copy(
+        update={
+            "entities": (*current.entities, *inherited_entities),
+            "company_ids": current.company_ids or previous.company_ids,
+            "accession_numbers": current.accession_numbers or previous.accession_numbers,
+            "filing_forms": current.filing_forms or previous.filing_forms,
+            "fiscal_years": current.fiscal_years or previous.fiscal_years,
+            "fiscal_periods": current.fiscal_periods or previous.fiscal_periods,
+            "dates": current.dates or previous.dates,
+            "metrics": current.metrics or previous.metrics,
+        }
     )
 
 
@@ -1191,6 +1417,8 @@ def _failed_planned_branches[BranchT: ExecutionBranch](
     state: AgentState, branch_type: type[BranchT]
 ) -> tuple[BranchT, ...]:
     plan = state["execution_plan"]
+    if plan is None:
+        return ()
     outcomes = {item.branch_id: item for item in state.get("branch_outcomes", ())}
     return tuple(
         branch

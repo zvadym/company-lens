@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import enum
-import operator
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -366,22 +365,68 @@ class AnswerValidation(FrozenModel):
     reason_codes: tuple[str, ...] = ()
 
 
+class CachedSourceResult(FrozenModel):
+    kind: Literal["retrieve_documents", "query_financial_facts", "query_macro_series"]
+    request_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    stored_at: datetime
+    retrieval_result: AdaptiveRetrievalResponse | None = None
+    financial_result: FinancialFactQueryResult | None = None
+    macro_result: FredSeriesResult | None = None
+
+    @model_validator(mode="after")
+    def validate_typed_result(self) -> CachedSourceResult:
+        populated = sum(
+            result is not None
+            for result in (self.retrieval_result, self.financial_result, self.macro_result)
+        )
+        expected = {
+            "retrieve_documents": self.retrieval_result,
+            "query_financial_facts": self.financial_result,
+            "query_macro_series": self.macro_result,
+        }[self.kind]
+        if populated != 1 or expected is None:
+            raise ValueError("Cached source result must match its branch kind.")
+        return self
+
+
+class SessionMemory(FrozenModel):
+    last_resolved_query: ResolvedQuery | None = None
+    last_execution_plan: ExecutionPlan | None = None
+    cached_source_results: tuple[CachedSourceResult, ...] = ()
+    evidence: tuple[EvidenceEnvelope, ...] = ()
+    updated_at: datetime | None = None
+
+
+def append_tuple[ItemT](
+    left: tuple[ItemT, ...] | list[ItemT],
+    right: tuple[ItemT, ...] | list[ItemT],
+) -> tuple[ItemT, ...]:
+    """Append checkpointed collection values while restoring tuple immutability."""
+
+    return (*tuple(left), *tuple(right))
+
+
+def add_int(left: int, right: int) -> int:
+    return left + right
+
+
 class AgentState(TypedDict, total=False):
     run_id: Required[uuid.UUID]
     session_id: Required[str]
     question: Required[str]
     policy: Required[ExecutionPolicy]
     status: Required[AgentRunStatus]
-    messages: Required[tuple[SessionMessage, ...]]
-    analysis: NotRequired[QuestionAnalysis]
-    resolved_query: NotRequired[ResolvedQuery]
-    execution_plan: NotRequired[ExecutionPlan]
+    messages: Annotated[tuple[SessionMessage, ...], append_tuple]
+    session_memory: NotRequired[SessionMemory]
+    analysis: NotRequired[QuestionAnalysis | None]
+    resolved_query: NotRequired[ResolvedQuery | None]
+    execution_plan: NotRequired[ExecutionPlan | None]
     active_branch: NotRequired[ExecutionBranch]
-    retrieval_results: Annotated[tuple[RetrievalBranchResult, ...], operator.add]
-    financial_results: Annotated[tuple[FinancialBranchResult, ...], operator.add]
-    macro_results: Annotated[tuple[MacroBranchResult, ...], operator.add]
-    calculations: Annotated[tuple[CalculationBranchResult, ...], operator.add]
-    branch_outcomes: Annotated[tuple[BranchOutcome, ...], operator.add]
+    retrieval_results: Annotated[tuple[RetrievalBranchResult, ...], append_tuple]
+    financial_results: Annotated[tuple[FinancialBranchResult, ...], append_tuple]
+    macro_results: Annotated[tuple[MacroBranchResult, ...], append_tuple]
+    calculations: Annotated[tuple[CalculationBranchResult, ...], append_tuple]
+    branch_outcomes: Annotated[tuple[BranchOutcome, ...], append_tuple]
     evidence: NotRequired[tuple[EvidenceEnvelope, ...]]
     chart_spec: NotRequired[ChartSpecification | None]
     draft_answer: NotRequired[str | None]
@@ -389,10 +434,10 @@ class AgentState(TypedDict, total=False):
     answer_validation: NotRequired[AnswerValidation]
     repair_attempts: NotRequired[int]
     citations: NotRequired[tuple[CitationReference, ...]]
-    errors: Annotated[tuple[AgentError, ...], operator.add]
-    trajectory: Annotated[tuple[TrajectoryEvent, ...], operator.add]
-    node_attempts: Annotated[tuple[NodeAttempt, ...], operator.add]
-    tool_calls_used: Annotated[int, operator.add]
+    errors: Annotated[tuple[AgentError, ...], append_tuple]
+    trajectory: Annotated[tuple[TrajectoryEvent, ...], append_tuple]
+    node_attempts: Annotated[tuple[NodeAttempt, ...], append_tuple]
+    tool_calls_used: Annotated[int, add_int]
 
 
 def _is_reason_code(value: str) -> bool:

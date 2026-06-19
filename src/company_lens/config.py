@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     openai_answer_max_output_tokens: int = Field(default=8_000, ge=1)
     openai_request_timeout_seconds: float = Field(default=30.0, gt=0)
     openai_retry_attempts: int = Field(default=2, ge=0)
+    agent_session_ttl_hours: int = Field(default=24, ge=1, le=24 * 365)
+    agent_session_max_messages: int = Field(default=20, ge=2, le=1000)
+    agent_session_max_cached_results: int = Field(default=20, ge=0, le=1000)
+    agent_session_lease_minutes: int = Field(default=15, ge=1, le=24 * 60)
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -455,8 +455,14 @@ separate SQLAlchemy session for every concurrent branch. The architecture, produ
 flows, and extension path are documented in
 [ADR 0004](docs/architecture/adr-0004-langgraph-research-tools.md).
 
-Checkpoint persistence, session-scoped follow-up memory, resume/expiry controls, and CLI execution
-remain the next #12 implementation steps. Full claim-level citation support remains in #13.
+Checkpoint persistence, session-scoped follow-up memory, and resume/expiry controls are provided by
+the persistent research-session layer. It stores LangGraph checkpoints in
+PostgreSQL, uses exact typed-request matching for safe source-result reuse, and supports inspect,
+resume, hard clear, and sliding expiry. Stateless execution remains available for tests and one-shot
+use cases. See [ADR 0005](docs/architecture/adr-0005-persistent-research-sessions.md).
+
+CLI execution remains the next #12 implementation step. Full claim-level citation support remains
+in #13.
 
 Agent orchestration is tracked in [#12](https://github.com/zvadym/company-lens/issues/12).
 
