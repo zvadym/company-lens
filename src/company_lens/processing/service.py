@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -27,7 +28,6 @@ from company_lens.processing.text import (
     decode_document_content,
     estimate_token_count,
     fixed_token_chunks,
-    jaccard,
     looks_like_boilerplate,
     prompt_hash,
     semantic_chunks,
@@ -37,7 +37,7 @@ from company_lens.processing.text import (
 
 ChunkingStrategy = Literal["fixed-token", "semantic"]
 
-DEFAULT_CHUNKING_VERSION = "chunking.v1"
+DEFAULT_CHUNKING_VERSION = "chunking.cl100k.v2"
 DEFAULT_SUMMARY_PROMPT_VERSION = "summary.extractive.v1"
 DEFAULT_SUMMARY_MODEL = "local-extractive-v1"
 PROCESSING_SOURCE_NAME = "document_processing"
@@ -116,6 +116,44 @@ class _SectionInput:
 class _ChunkCandidate:
     section: FilingSection
     span: TextSpan
+
+
+class _FingerprintIndex:
+    def __init__(self) -> None:
+        self._fingerprints: list[frozenset[str]] = []
+        self._postings: defaultdict[str, list[int]] = defaultdict(list)
+        self._empty_count = 0
+
+    def contains_near_duplicate(
+        self,
+        fingerprint: frozenset[str],
+        threshold: float,
+    ) -> bool:
+        if not self._fingerprints:
+            return False
+        if threshold <= 0:
+            return True
+        if not fingerprint:
+            return self._empty_count > 0
+
+        intersections: Counter[int] = Counter()
+        for shingle in fingerprint:
+            intersections.update(self._postings[shingle])
+        for index, intersection_size in intersections.items():
+            accepted = self._fingerprints[index]
+            union_size = len(fingerprint) + len(accepted) - intersection_size
+            if union_size and intersection_size / union_size >= threshold:
+                return True
+        return False
+
+    def add(self, fingerprint: frozenset[str]) -> None:
+        index = len(self._fingerprints)
+        self._fingerprints.append(fingerprint)
+        if not fingerprint:
+            self._empty_count += 1
+            return
+        for shingle in fingerprint:
+            self._postings[shingle].append(index)
 
 
 class DocumentProcessingService:
@@ -534,7 +572,7 @@ class DocumentProcessingService:
         candidates: list[_ChunkCandidate],
         options: DocumentProcessingOptions,
     ) -> tuple[int, int, int, int]:
-        accepted_fingerprints: list[frozenset[str]] = []
+        fingerprint_index = _FingerprintIndex()
         section_indexes: dict[uuid.UUID, int] = {}
         chunks_written = 0
         duplicate_count = 0
@@ -547,13 +585,13 @@ class DocumentProcessingService:
                 continue
 
             fingerprint = shingle_fingerprint(candidate.span.text)
-            if any(
-                jaccard(fingerprint, accepted) >= options.duplicate_threshold
-                for accepted in accepted_fingerprints
+            if fingerprint_index.contains_near_duplicate(
+                fingerprint,
+                options.duplicate_threshold,
             ):
                 duplicate_count += 1
                 continue
-            accepted_fingerprints.append(fingerprint)
+            fingerprint_index.add(fingerprint)
 
             chunk_index = section_indexes.get(candidate.section.id, 0)
             section_indexes[candidate.section.id] = chunk_index + 1

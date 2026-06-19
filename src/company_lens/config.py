@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     fred_base_url: str = Field(default="https://api.stlouisfed.org/fred")
     fred_request_timeout_seconds: float = Field(default=30.0)
     fred_retry_attempts: int = Field(default=3)
+    openai_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENAI_API_KEY", "COMPANY_LENS_OPENAI_API_KEY"),
+    )
+    openai_embedding_model: str = Field(default="text-embedding-3-small")
+    openai_embedding_dimensions: int = Field(default=384, ge=1)
+    openai_request_timeout_seconds: float = Field(default=30.0, gt=0)
+    openai_retry_attempts: int = Field(default=2, ge=0)
 
     model_config = SettingsConfigDict(
         env_file=".env",

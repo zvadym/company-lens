@@ -69,6 +69,12 @@ class EmbeddingIndexingRequest(BaseModel):
     force: bool = False
 
 
+class EmbeddingFailure(BaseModel):
+    chunk_id: uuid.UUID
+    error_type: str
+    message: str
+
+
 class EmbeddingIndexingResult(BaseModel):
     index_id: uuid.UUID
     index_name: str
@@ -79,6 +85,7 @@ class EmbeddingIndexingResult(BaseModel):
     skipped: int
     stale_rebuilt: int
     failed: int
+    failures: tuple[EmbeddingFailure, ...] = ()
 
 
 class RetrievalScores(BaseModel):

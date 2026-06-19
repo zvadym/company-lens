@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -23,7 +24,11 @@ from company_lens.db.models import (
 )
 from company_lens.processing.text import content_hash
 from company_lens.retrieval.benchmark import run_benchmark
-from company_lens.retrieval.embeddings import LocalFeatureHashingEmbedder
+from company_lens.retrieval.embeddings import (
+    EmbeddingInputTooLongError,
+    LocalFeatureHashingEmbedder,
+    OpenAIEmbedder,
+)
 from company_lens.retrieval.indexing import EmbeddingIndexingService
 from company_lens.retrieval.schemas import (
     EmbeddingIndexingRequest,
@@ -46,6 +51,74 @@ def test_local_feature_hashing_embeddings_are_deterministic() -> None:
     assert first == second
     assert len(first) == 16
     assert sum(value * value for value in first) == pytest.approx(1.0)
+
+
+def test_openai_embedder_batches_inputs_and_preserves_response_order() -> None:
+    class FakeEmbeddings:
+        def create(self, **kwargs: object) -> SimpleNamespace:
+            assert kwargs == {
+                "model": "text-embedding-3-small",
+                "input": ["first", "second"],
+                "dimensions": 3,
+                "encoding_format": "float",
+            }
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(index=1, embedding=[0.0, 1.0, 0.0]),
+                    SimpleNamespace(index=0, embedding=[1.0, 0.0, 0.0]),
+                ]
+            )
+
+    client = SimpleNamespace(embeddings=FakeEmbeddings())
+    embedder = OpenAIEmbedder(client=client, dimensions=3)
+
+    assert embedder.embed_texts(["first", "second"]) == [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ]
+
+
+def test_openai_embedder_rejects_oversized_input_before_api_call() -> None:
+    class UnexpectedEmbeddings:
+        def create(self, **_kwargs: object) -> None:
+            raise AssertionError("OpenAI API must not be called for oversized input")
+
+    embedder = OpenAIEmbedder(
+        client=SimpleNamespace(embeddings=UnexpectedEmbeddings()),
+        dimensions=3,
+    )
+
+    with pytest.raises(EmbeddingInputTooLongError, match="maximum is 8192"):
+        embedder.embed_texts(["token " * 9000])
+
+
+def test_indexing_isolates_one_invalid_chunk_from_the_batch(session: Session) -> None:
+    chunks = _seed_corpus(session)
+    chunks[0].text = "reject-me"
+    chunks[0].content_hash = content_hash(chunks[0].text)
+    session.commit()
+
+    class SelectiveEmbedder:
+        model_name = "selective-test-v1"
+        dimensions = 384
+        provider = "test"
+
+        def embed_texts(self, texts: list[str]) -> list[list[float]]:
+            if "reject-me" in texts:
+                raise ValueError("invalid embedding input")
+            return [[1.0] + [0.0] * 383 for _text in texts]
+
+        def embed_query(self, text: str) -> list[float]:
+            return self.embed_texts([text])[0]
+
+    result = EmbeddingIndexingService(session=session, embedder=SelectiveEmbedder()).index_chunks(
+        EmbeddingIndexingRequest(index_version="selective-test.v1", batch_size=100)
+    )
+
+    assert result.indexed == len(chunks) - 1
+    assert result.failed == 1
+    assert result.failures[0].chunk_id == chunks[0].id
+    assert result.failures[0].message == "invalid embedding input"
 
 
 def test_indexing_skips_fresh_embeddings_and_rebuilds_stale(session: Session) -> None:
@@ -133,10 +206,36 @@ def test_cli_indexes_retrieves_and_runs_benchmark(
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
     monkeypatch.setattr(cli, "build_session_factory", lambda _: factory)
 
-    assert cli.main(["index-embeddings", "--batch-size", "2"]) == 0
+    assert (
+        cli.main(
+            [
+                "index-embeddings",
+                "--batch-size",
+                "2",
+                "--embedding-provider",
+                "local",
+                "--index-version",
+                "local-feature-hashing.v1",
+            ]
+        )
+        == 0
+    )
     capsys.readouterr()
     assert (
-        cli.main(["retrieve", "--query", "competition security vendors", "--mode", "hybrid"]) == 0
+        cli.main(
+            [
+                "retrieve",
+                "--query",
+                "competition security vendors",
+                "--mode",
+                "hybrid",
+                "--embedding-provider",
+                "local",
+                "--index-version",
+                "local-feature-hashing.v1",
+            ]
+        )
+        == 0
     )
     retrieve_output = json.loads(capsys.readouterr().out)
     assert retrieve_output["results"]

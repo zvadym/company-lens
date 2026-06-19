@@ -21,6 +21,7 @@ from company_lens.db.models import (
 )
 from company_lens.processing.text import jaccard, normalize_for_fingerprint, shingle_fingerprint
 from company_lens.retrieval.embeddings import (
+    Embedder,
     LocalFeatureHashingEmbedder,
     cosine_similarity,
     vector_to_pg,
@@ -76,7 +77,7 @@ class RetrievalService:
         self,
         *,
         session: Session,
-        embedder: LocalFeatureHashingEmbedder | None = None,
+        embedder: Embedder | None = None,
         reranker: Reranker | None = None,
     ) -> None:
         self._session = session
@@ -94,6 +95,7 @@ class RetrievalService:
             if embedding_index is None:
                 warnings.append("missing_embedding_index")
             else:
+                self._validate_embedder(embedding_index)
                 dense_candidates = self._dense_candidates(request, embedding_index)
             if not dense_candidates:
                 warnings.append("missing_dense_candidates")
@@ -141,6 +143,15 @@ class RetrievalService:
                 EmbeddingIndex.index_version == request.index_version,
             )
         )
+
+    def _validate_embedder(self, embedding_index: EmbeddingIndex) -> None:
+        if (
+            embedding_index.embedding_model != self._embedder.model_name
+            or embedding_index.dimensions != self._embedder.dimensions
+        ):
+            raise ValueError(
+                "The query embedder must match the embedding index model and dimensions."
+            )
 
     def _dense_candidates(
         self,

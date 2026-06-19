@@ -318,10 +318,10 @@ document, company, and source metadata. It supports independent dense, lexical, 
 hybrid modes.
 
 ```bash
-# Build local deterministic feature-hashing embeddings for chunks
+# Build 384-dimensional semantic embeddings with OpenAI
 company-lens index-embeddings \
   --index-name default \
-  --index-version local-feature-hashing.v1 \
+  --index-version openai-text-embedding-3-small-384.v1 \
   --batch-size 100
 
 # Run hybrid retrieval with exact metadata filters applied before ranking
@@ -331,6 +331,11 @@ company-lens retrieve \
   --filing-form 10-K \
   --section-code risk_factors \
   --top-k 10
+
+# Keep the deterministic local backend for offline development and tests
+company-lens index-embeddings \
+  --embedding-provider local \
+  --index-version local-feature-hashing.v1
 
 # Compare dense, lexical, and hybrid variants on the synthetic labelled set
 company-lens benchmark-retrieval \
