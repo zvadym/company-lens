@@ -427,27 +427,26 @@ repair_or_abstain
 finalize_response
 ```
 
-### Planned agent state
+### Typed agent foundation
 
 ```python
 class AgentState(TypedDict):
-    messages: list
+    run_id: UUID
+    session_id: str
     question: str
-    intent: str
-    resolved_entities: dict
-    retrieval_plan: dict | None
-    execution_plan: list[dict]
-    retrieved_documents: list[dict]
-    tool_results: list[dict]
-    calculations: list[dict]
-    evidence: list[dict]
-    chart_spec: dict | None
-    claims: list[dict]
-    citations: list[dict]
-    validation_errors: list[str]
-    retry_count: int
-    final_answer: str | None
+    policy: ExecutionPolicy
+    status: AgentRunStatus
+    messages: tuple[SessionMessage, ...]
+    analysis: QuestionAnalysis
+    execution_plan: ExecutionPlan
+    errors: tuple[AgentError, ...]
+    trajectory: tuple[TrajectoryEvent, ...]
 ```
+
+The provider-neutral `ResearchModelProvider` separates structured parsing/planning from answer
+generation. The OpenAI implementation uses stateless Responses API calls (`store=False`),
+`gpt-5.4-mini` for planning, and `gpt-5.5` for answer generation. Graph construction and node
+wiring remain part of the next #12 implementation step.
 
 Agent orchestration is tracked in [#12](https://github.com/zvadym/company-lens/issues/12).
 

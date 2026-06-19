@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -38,6 +39,12 @@ class Settings(BaseSettings):
     )
     openai_embedding_model: str = Field(default="text-embedding-3-small")
     openai_embedding_dimensions: int = Field(default=384, ge=1)
+    openai_planning_model: str = Field(default="gpt-5.4-mini")
+    openai_answer_model: str = Field(default="gpt-5.5")
+    openai_planning_reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] = "low"
+    openai_answer_reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] = "medium"
+    openai_planning_max_output_tokens: int = Field(default=2_000, ge=1)
+    openai_answer_max_output_tokens: int = Field(default=8_000, ge=1)
     openai_request_timeout_seconds: float = Field(default=30.0, gt=0)
     openai_retry_attempts: int = Field(default=2, ge=0)
 
