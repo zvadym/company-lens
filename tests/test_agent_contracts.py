@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 
@@ -20,6 +21,7 @@ from company_lens.agent.schemas import (
     ExecutionPolicy,
     FinancialFactsBranch,
     MacroSeriesBranch,
+    ModelExecutionPlan,
     QuestionAnalysis,
     ResearchRoute,
     SessionMessage,
@@ -83,6 +85,7 @@ def test_execution_plan_requires_unique_acyclic_branches() -> None:
                 branch_id="chart",
                 chart_type="line",
                 dataset_ref="growth",
+                title="Revenue growth",
                 depends_on=("growth",),
             ),
         ),
@@ -96,13 +99,13 @@ def test_execution_plan_requires_unique_acyclic_branches() -> None:
             branches=(
                 CalculationBranch(
                     branch_id="first",
-                    operation="margin",
+                    operation="percentage_change",
                     input_refs=("second",),
                     depends_on=("second",),
                 ),
                 CalculationBranch(
                     branch_id="second",
-                    operation="margin",
+                    operation="percentage_change",
                     input_refs=("first",),
                     depends_on=("first",),
                 ),
@@ -138,6 +141,12 @@ def test_execution_policy_enforces_bounded_limits() -> None:
         ExecutionPolicy(max_tool_calls=0)
     with pytest.raises(ValidationError):
         ExecutionPolicy(max_retries_per_node=11)
+
+
+def test_model_execution_plan_schema_avoids_openai_unsupported_one_of() -> None:
+    schema = json.dumps(ModelExecutionPlan.model_json_schema())
+
+    assert '"oneOf"' not in schema
 
 
 def test_typed_error_exposes_recoverability_without_internal_details() -> None:

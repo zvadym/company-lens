@@ -445,8 +445,18 @@ class AgentState(TypedDict):
 
 The provider-neutral `ResearchModelProvider` separates structured parsing/planning from answer
 generation. The OpenAI implementation uses stateless Responses API calls (`store=False`),
-`gpt-5.4-mini` for planning, and `gpt-5.5` for answer generation. Graph construction and node
-wiring remain part of the next #12 implementation step.
+`gpt-5.4-mini` for planning, and `gpt-5.5` for answer generation.
+
+The executable stateless LangGraph workflow now validates model-created plans, fans independent
+retrieval, financial-fact, and FRED branches out in parallel, runs deterministic calculations and
+chart shaping, merges typed evidence, generates a grounded answer, and structurally validates its
+citation IDs. Data access is isolated behind a typed `ResearchTools` port; its SQL adapter opens a
+separate SQLAlchemy session for every concurrent branch. The architecture, production/test call
+flows, and extension path are documented in
+[ADR 0004](docs/architecture/adr-0004-langgraph-research-tools.md).
+
+Checkpoint persistence, session-scoped follow-up memory, resume/expiry controls, and CLI execution
+remain the next #12 implementation steps. Full claim-level citation support remains in #13.
 
 Agent orchestration is tracked in [#12](https://github.com/zvadym/company-lens/issues/12).
 

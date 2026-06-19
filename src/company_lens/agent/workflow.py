@@ -1,0 +1,1585 @@
+from __future__ import annotations
+
+import json
+import re
+import time
+import uuid
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from typing import Literal, cast
+
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.runtime import Runtime
+from langgraph.types import Send
+from pydantic import BaseModel
+
+from company_lens.agent.model import (
+    ModelMessage,
+    ModelProviderError,
+    ModelPurpose,
+    ResearchModelProvider,
+)
+from company_lens.agent.schemas import (
+    AgentCapability,
+    AgentError,
+    AgentErrorCategory,
+    AgentErrorSeverity,
+    AgentRunStatus,
+    AgentState,
+    AnswerValidation,
+    BranchOutcome,
+    BranchStatus,
+    CalculationBranch,
+    CalculationBranchResult,
+    ChartBranch,
+    CitationReference,
+    DocumentRetrievalBranch,
+    EvidenceEnvelope,
+    EvidenceKind,
+    ExecutionBranch,
+    ExecutionPlan,
+    ExecutionPolicy,
+    FinancialBranchResult,
+    FinancialFactsBranch,
+    MacroBranchResult,
+    MacroSeriesBranch,
+    ModelExecutionBranch,
+    ModelExecutionPlan,
+    NodeAttempt,
+    QuestionAnalysis,
+    ResearchRoute,
+    RetrievalBranchResult,
+    SessionMessage,
+    TrajectoryEvent,
+    TrajectoryStatus,
+)
+from company_lens.agent.tools import ResearchToolError, ResearchTools
+from company_lens.analytics.calculations import (
+    absolute_change,
+    compound_annual_growth_rate,
+    correlation,
+    margin,
+    normalised_index,
+    percentage_change,
+    quarter_over_quarter_growth,
+    rolling_average,
+    year_over_year_growth,
+)
+from company_lens.analytics.charts import generate_chart_specification
+from company_lens.analytics.schemas import (
+    CalculationResult,
+    ChartPoint,
+    ChartSeries,
+    NumericObservation,
+    ValidatedChartDataset,
+)
+from company_lens.retrieval.adaptive_schemas import ResolvedQuery
+
+CITATION_PATTERN = re.compile(r"\[([a-z][a-z0-9_.:-]*)\]")
+SOURCE_KINDS = {"retrieve_documents", "query_financial_facts", "query_macro_series"}
+
+
+@dataclass(frozen=True)
+class ResearchAgentRuntime:
+    model_provider: ResearchModelProvider
+    tools: ResearchTools
+
+
+class ResearchAgent:
+    def __init__(
+        self,
+        *,
+        runtime: ResearchAgentRuntime,
+        graph: CompiledStateGraph[AgentState, ResearchAgentRuntime, AgentState, AgentState]
+        | None = None,
+    ) -> None:
+        self._runtime = runtime
+        self._graph = graph or build_research_graph()
+
+    def run(
+        self,
+        question: str,
+        *,
+        session_id: str,
+        policy: ExecutionPolicy | None = None,
+        run_id: uuid.UUID | None = None,
+    ) -> AgentState:
+        state = create_initial_agent_state(
+            question,
+            session_id=session_id,
+            policy=policy,
+            run_id=run_id,
+        )
+        recursion_limit = 24 + state["policy"].max_repair_attempts * 2
+        result = self._graph.invoke(
+            state,
+            config={"recursion_limit": recursion_limit},
+            context=self._runtime,
+        )
+        return cast(AgentState, result)
+
+
+def create_initial_agent_state(
+    question: str,
+    *,
+    session_id: str,
+    policy: ExecutionPolicy | None = None,
+    run_id: uuid.UUID | None = None,
+) -> AgentState:
+    cleaned = " ".join(question.split())
+    if not cleaned:
+        raise ValueError("Research question cannot be blank.")
+    if not session_id.strip():
+        raise ValueError("session_id cannot be blank.")
+    now = datetime.now(UTC)
+    return {
+        "run_id": run_id or uuid.uuid4(),
+        "session_id": session_id,
+        "question": cleaned,
+        "policy": policy or ExecutionPolicy(),
+        "status": AgentRunStatus.RUNNING,
+        "messages": (SessionMessage(role="user", content=cleaned, created_at=now),),
+        "retrieval_results": (),
+        "financial_results": (),
+        "macro_results": (),
+        "calculations": (),
+        "branch_outcomes": (),
+        "evidence": (),
+        "chart_spec": None,
+        "draft_answer": None,
+        "final_answer": None,
+        "citations": (),
+        "errors": (),
+        "trajectory": (),
+        "node_attempts": (),
+        "tool_calls_used": 0,
+        "repair_attempts": 0,
+    }
+
+
+def build_research_graph() -> CompiledStateGraph[
+    AgentState, ResearchAgentRuntime, AgentState, AgentState
+]:
+    builder = StateGraph(
+        AgentState,
+        context_schema=ResearchAgentRuntime,
+        input_schema=AgentState,
+        output_schema=AgentState,
+    )
+    builder.add_node("parse_question", _parse_question)
+    builder.add_node("resolve_entities", _resolve_entities)
+    builder.add_node("plan_request", _plan_request)
+    builder.add_node("retrieve_documents", _retrieve_documents)
+    builder.add_node("query_financial_facts", _query_financial_facts)
+    builder.add_node("query_macro_series", _query_macro_series)
+    builder.add_node("evaluate_context", _evaluate_context)
+    builder.add_node("calculate_metrics", _calculate_metrics)
+    builder.add_node("generate_chart_spec", _generate_chart_spec)
+    builder.add_node("merge_evidence", _merge_evidence)
+    builder.add_node("generate_answer", _generate_answer)
+    builder.add_node("validate_citations", _validate_citations)
+    builder.add_node("repair_or_abstain", _repair_or_abstain)
+    builder.add_node("finalize_response", _finalize_response)
+
+    builder.add_edge(START, "parse_question")
+    builder.add_edge("parse_question", "resolve_entities")
+    builder.add_edge("resolve_entities", "plan_request")
+    builder.add_conditional_edges(
+        "plan_request",
+        _dispatch_source_branches,
+        [
+            "retrieve_documents",
+            "query_financial_facts",
+            "query_macro_series",
+            "evaluate_context",
+        ],
+    )
+    builder.add_edge("retrieve_documents", "evaluate_context")
+    builder.add_edge("query_financial_facts", "evaluate_context")
+    builder.add_edge("query_macro_series", "evaluate_context")
+    builder.add_conditional_edges(
+        "evaluate_context",
+        _dispatch_calculation_branches,
+        ["calculate_metrics", "generate_chart_spec", "finalize_response"],
+    )
+    builder.add_edge("calculate_metrics", "generate_chart_spec")
+    builder.add_conditional_edges(
+        "generate_chart_spec",
+        _route_after_chart,
+        ["merge_evidence", "finalize_response"],
+    )
+    builder.add_conditional_edges(
+        "merge_evidence",
+        _route_after_merge,
+        ["generate_answer", "finalize_response"],
+    )
+    builder.add_conditional_edges(
+        "generate_answer",
+        _route_after_answer,
+        ["validate_citations", "finalize_response"],
+    )
+    builder.add_conditional_edges(
+        "validate_citations",
+        _route_after_validation,
+        ["finalize_response", "repair_or_abstain"],
+    )
+    builder.add_conditional_edges(
+        "repair_or_abstain",
+        _route_after_repair,
+        ["validate_citations", "finalize_response"],
+    )
+    builder.add_edge("finalize_response", END)
+    return builder.compile()
+
+
+def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> dict[str, object]:
+    if state["status"] is not AgentRunStatus.RUNNING:
+        return _skipped("parse_question")
+    started = time.monotonic()
+    messages = (
+        ModelMessage(
+            role="system",
+            content=(
+                "Classify a public-company research question. Use only the declared routes and "
+                "capabilities. Return short lowercase_snake_case reason codes, never reasoning. "
+                "Use unsupported when the request cannot be answered from company documents, "
+                "financial facts, cached macro series, deterministic calculations, or charts."
+            ),
+        ),
+        ModelMessage(role="user", content=state["question"]),
+    )
+    output, attempts, error = _generate_structured_with_retries(
+        runtime.context.model_provider,
+        messages,
+        QuestionAnalysis,
+        purpose=ModelPurpose.PARSE,
+        max_retries=state["policy"].max_retries_per_node,
+        node="parse_question",
+    )
+    update = _model_node_update("parse_question", attempts, started, error)
+    if error is not None:
+        update["status"] = _terminal_model_status(error)
+    elif output is not None:
+        update["analysis"] = output
+    return update
+
+
+def _resolve_entities(
+    state: AgentState, runtime: Runtime[ResearchAgentRuntime]
+) -> dict[str, object]:
+    if state["status"] is not AgentRunStatus.RUNNING:
+        return _skipped("resolve_entities")
+    started = time.monotonic()
+    try:
+        resolved = runtime.context.tools.resolve_entities(state["question"])
+    except ResearchToolError as exc:
+        error = exc.error.model_copy(update={"node": "resolve_entities"})
+        return {
+            "status": AgentRunStatus.FAILED,
+            "errors": (error,),
+            "node_attempts": (NodeAttempt(node="resolve_entities", attempts=1),),
+            "trajectory": (_failed_event("resolve_entities", started),),
+        }
+    except Exception:
+        error = _agent_error(
+            "resolve_entities",
+            "entity_resolution_failed",
+            "Entity resolution failed.",
+            severity=AgentErrorSeverity.TERMINAL,
+        )
+        return {
+            "status": AgentRunStatus.FAILED,
+            "errors": (error,),
+            "node_attempts": (NodeAttempt(node="resolve_entities", attempts=1),),
+            "trajectory": (_failed_event("resolve_entities", started),),
+        }
+    return {
+        "resolved_query": resolved,
+        "node_attempts": (NodeAttempt(node="resolve_entities", attempts=1),),
+        "trajectory": (
+            _event(
+                "resolve_entities",
+                TrajectoryStatus.COMPLETED,
+                "Entity resolution completed.",
+                started,
+                details={"entities": len(resolved.entities)},
+            ),
+        ),
+    }
+
+
+def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> dict[str, object]:
+    if state["status"] is not AgentRunStatus.RUNNING:
+        return _skipped("plan_request")
+    analysis = state.get("analysis")
+    resolved = state.get("resolved_query")
+    if analysis is None or resolved is None:
+        missing_error = _validation_error("plan_request", "missing_planning_inputs")
+        return {"status": AgentRunStatus.FAILED, "errors": (missing_error,)}
+    started = time.monotonic()
+    planning_context = json.dumps(
+        {
+            "question": state["question"],
+            "analysis": analysis.model_dump(mode="json"),
+            "resolved_query": resolved.model_dump(mode="json"),
+            "policy": state["policy"].model_dump(mode="json"),
+        },
+        sort_keys=True,
+    )
+    messages = (
+        ModelMessage(
+            role="system",
+            content=(
+                "Create a minimal typed execution plan for CompanyLens. Use only resolved company "
+                "IDs. Source branches must be independent. Calculations may depend on financial "
+                "or macro branches; a chart may depend on one source or calculation branch. Mark "
+                "a branch optional only when the question can still be answered without it. Do "
+                "not include explanations beyond short reason codes."
+            ),
+        ),
+        ModelMessage(role="user", content=planning_context),
+    )
+    output, attempts, error = _generate_structured_with_retries(
+        runtime.context.model_provider,
+        messages,
+        ModelExecutionPlan,
+        purpose=ModelPurpose.PLAN,
+        max_retries=state["policy"].max_retries_per_node,
+        node="plan_request",
+    )
+    update = _model_node_update("plan_request", attempts, started, error)
+    if error is not None:
+        update["status"] = _terminal_model_status(error)
+        return update
+    assert output is not None
+    try:
+        domain_plan = _domain_execution_plan(output)
+        plan = _normalize_and_validate_plan(domain_plan, analysis, resolved, state["policy"])
+    except ValueError:
+        validation_error = _validation_error("plan_request", "invalid_execution_plan")
+        update["errors"] = (validation_error,)
+        update["status"] = AgentRunStatus.FAILED
+        update["trajectory"] = (_failed_event("plan_request", started),)
+        return update
+    update["execution_plan"] = plan
+    return update
+
+
+def _dispatch_source_branches(state: AgentState) -> list[Send] | str:
+    if state["status"] is not AgentRunStatus.RUNNING:
+        return "evaluate_context"
+    plan = state.get("execution_plan")
+    if plan is None:
+        return "evaluate_context"
+    sends: list[Send] = []
+    for branch in plan.branches:
+        if branch.kind in SOURCE_KINDS:
+            sends.append(Send(branch.kind, {**state, "active_branch": branch}))
+    return sends or "evaluate_context"
+
+
+def _retrieve_documents(
+    state: AgentState, runtime: Runtime[ResearchAgentRuntime]
+) -> dict[str, object]:
+    branch = cast(DocumentRetrievalBranch, state["active_branch"])
+    result, common = _run_source_tool(
+        state,
+        branch,
+        runtime.context.tools.retrieve_documents,
+        "retrieve_documents",
+    )
+    if result is not None:
+        common["retrieval_results"] = (
+            RetrievalBranchResult(branch_id=branch.branch_id, result=result),
+        )
+    return common
+
+
+def _query_financial_facts(
+    state: AgentState, runtime: Runtime[ResearchAgentRuntime]
+) -> dict[str, object]:
+    branch = cast(FinancialFactsBranch, state["active_branch"])
+    result, common = _run_source_tool(
+        state,
+        branch,
+        runtime.context.tools.query_financial_facts,
+        "query_financial_facts",
+    )
+    if result is not None:
+        common["financial_results"] = (
+            FinancialBranchResult(branch_id=branch.branch_id, result=result),
+        )
+    return common
+
+
+def _query_macro_series(
+    state: AgentState, runtime: Runtime[ResearchAgentRuntime]
+) -> dict[str, object]:
+    branch = cast(MacroSeriesBranch, state["active_branch"])
+    result, common = _run_source_tool(
+        state,
+        branch,
+        runtime.context.tools.query_macro_series,
+        "query_macro_series",
+    )
+    if result is not None:
+        common["macro_results"] = (MacroBranchResult(branch_id=branch.branch_id, result=result),)
+    return common
+
+
+def _run_source_tool[RequestT, ResultT](
+    state: AgentState,
+    branch: DocumentRetrievalBranch | FinancialFactsBranch | MacroSeriesBranch,
+    operation: Callable[[RequestT], ResultT],
+    node: str,
+) -> tuple[ResultT | None, dict[str, object]]:
+    started = time.monotonic()
+    max_attempts = _source_branch_max_attempts(state, branch.branch_id)
+    result: ResultT | None = None
+    error: AgentError | None = None
+    attempts = 0
+    for attempt in range(1, max_attempts + 1):
+        attempts = attempt
+        try:
+            result = operation(cast(RequestT, branch.request))
+            error = None
+            break
+        except ResearchToolError as exc:
+            error = exc.error.model_copy(update={"node": node, "attempt": attempt})
+            if not error.recoverable:
+                break
+        except Exception:
+            error = _agent_error(
+                node,
+                "tool_execution_failed",
+                "A research data operation failed.",
+                attempt=attempt,
+                severity=AgentErrorSeverity.TERMINAL,
+            )
+            break
+    status = BranchStatus.COMPLETED if result is not None else BranchStatus.FAILED
+    outcome = BranchOutcome(
+        branch_id=branch.branch_id,
+        kind=branch.kind,
+        status=status,
+        optional=branch.optional,
+        attempts=attempts,
+        error=error,
+    )
+    update: dict[str, object] = {
+        "branch_outcomes": (outcome,),
+        "node_attempts": (NodeAttempt(node=f"{node}:{branch.branch_id}", attempts=attempts),),
+        "tool_calls_used": attempts,
+        "trajectory": (
+            _event(
+                node,
+                TrajectoryStatus.COMPLETED if result is not None else TrajectoryStatus.FAILED,
+                "Branch execution completed." if result is not None else "Branch execution failed.",
+                started,
+                details={"branch_id": branch.branch_id, "attempts": attempts},
+            ),
+        ),
+    }
+    if error is not None:
+        update["errors"] = (error,)
+    return result, update
+
+
+def _evaluate_context(state: AgentState) -> dict[str, object]:
+    started = time.monotonic()
+    if state["status"] is not AgentRunStatus.RUNNING:
+        return _skipped("evaluate_context")
+    plan = state.get("execution_plan")
+    if plan is None:
+        error = _validation_error("evaluate_context", "missing_execution_plan")
+        return {
+            "status": AgentRunStatus.FAILED,
+            "errors": (error,),
+            "trajectory": (_failed_event("evaluate_context", started),),
+        }
+    if plan.route is ResearchRoute.UNSUPPORTED:
+        error = _agent_error(
+            "evaluate_context",
+            "unsupported_question",
+            "The question is outside the supported research capabilities.",
+            category=AgentErrorCategory.VALIDATION,
+            severity=AgentErrorSeverity.TERMINAL,
+        )
+        return {
+            "status": AgentRunStatus.ABSTAINED,
+            "errors": (error,),
+            "trajectory": (
+                _event(
+                    "evaluate_context",
+                    TrajectoryStatus.COMPLETED,
+                    "Unsupported question was explicitly abstained.",
+                    started,
+                ),
+            ),
+        }
+
+    issues: list[tuple[ExecutionBranch, str]] = []
+    outcomes = {item.branch_id: item for item in state.get("branch_outcomes", ())}
+    for branch in _source_branches(plan):
+        outcome = outcomes.get(branch.branch_id)
+        if outcome is None or outcome.status is BranchStatus.FAILED:
+            issues.append((branch, "execution_failed"))
+        elif not _branch_has_evidence(state, branch):
+            issues.append((branch, "insufficient_evidence"))
+
+    required = [(branch, reason) for branch, reason in issues if not branch.optional]
+    optional = [(branch, reason) for branch, reason in issues if branch.optional]
+    errors = tuple(
+        _agent_error(
+            "evaluate_context",
+            f"{reason}_{branch.branch_id}",
+            "A research branch returned insufficient usable evidence."
+            if reason == "insufficient_evidence"
+            else "A required research branch failed.",
+            category=AgentErrorCategory.TOOL,
+            severity=AgentErrorSeverity.TERMINAL,
+        )
+        for branch, reason in issues
+        if reason == "insufficient_evidence"
+    )
+    update: dict[str, object] = {
+        "trajectory": (
+            _event(
+                "evaluate_context",
+                TrajectoryStatus.COMPLETED,
+                "Source branch context was evaluated.",
+                started,
+                details={"issues": len(issues)},
+            ),
+        ),
+    }
+    if errors:
+        update["errors"] = errors
+    if required:
+        execution_failure = any(reason == "execution_failed" for _, reason in required)
+        update["status"] = AgentRunStatus.FAILED if execution_failure else AgentRunStatus.ABSTAINED
+    elif optional:
+        if _has_any_source_evidence(state):
+            update["status"] = AgentRunStatus.PARTIAL
+        else:
+            update["status"] = AgentRunStatus.ABSTAINED
+    return update
+
+
+def _dispatch_calculation_branches(state: AgentState) -> list[Send] | str:
+    if state["status"] in {AgentRunStatus.FAILED, AgentRunStatus.ABSTAINED}:
+        return "finalize_response"
+    plan = state.get("execution_plan")
+    if plan is None:
+        return "finalize_response"
+    branches = [branch for branch in plan.branches if isinstance(branch, CalculationBranch)]
+    return [
+        Send("calculate_metrics", {**state, "active_branch": branch}) for branch in branches
+    ] or ("generate_chart_spec")
+
+
+def _calculate_metrics(state: AgentState) -> dict[str, object]:
+    branch = cast(CalculationBranch, state["active_branch"])
+    started = time.monotonic()
+    try:
+        result = _execute_calculation(branch, state)
+    except (ValueError, TypeError, ArithmeticError):
+        error = _agent_error(
+            "calculate_metrics",
+            "calculation_invalid_inputs",
+            "A deterministic calculation could not be completed from its typed inputs.",
+            category=AgentErrorCategory.VALIDATION,
+            severity=AgentErrorSeverity.TERMINAL,
+        )
+        return {
+            "branch_outcomes": (
+                BranchOutcome(
+                    branch_id=branch.branch_id,
+                    kind=branch.kind,
+                    status=BranchStatus.FAILED,
+                    optional=branch.optional,
+                    attempts=1,
+                    error=error,
+                ),
+            ),
+            "errors": (error,),
+            "node_attempts": (
+                NodeAttempt(node=f"calculate_metrics:{branch.branch_id}", attempts=1),
+            ),
+            "trajectory": (_failed_event("calculate_metrics", started),),
+        }
+    return {
+        "calculations": (CalculationBranchResult(branch_id=branch.branch_id, result=result),),
+        "branch_outcomes": (
+            BranchOutcome(
+                branch_id=branch.branch_id,
+                kind=branch.kind,
+                status=BranchStatus.COMPLETED,
+                optional=branch.optional,
+                attempts=1,
+            ),
+        ),
+        "node_attempts": (NodeAttempt(node=f"calculate_metrics:{branch.branch_id}", attempts=1),),
+        "trajectory": (
+            _event(
+                "calculate_metrics",
+                TrajectoryStatus.COMPLETED,
+                "Deterministic calculation completed.",
+                started,
+                details={"branch_id": branch.branch_id},
+            ),
+        ),
+    }
+
+
+def _generate_chart_spec(state: AgentState) -> dict[str, object]:
+    started = time.monotonic()
+    if state["status"] in {AgentRunStatus.FAILED, AgentRunStatus.ABSTAINED}:
+        return _skipped("generate_chart_spec")
+    plan = state.get("execution_plan")
+    if plan is None:
+        return {"status": AgentRunStatus.FAILED}
+
+    calculation_issues = _failed_planned_branches(state, CalculationBranch)
+    required_calculation_issues = [item for item in calculation_issues if not item.optional]
+    if required_calculation_issues:
+        return {
+            "status": AgentRunStatus.FAILED,
+            "trajectory": (_failed_event("generate_chart_spec", started),),
+        }
+    update: dict[str, object] = {}
+    if calculation_issues:
+        update["status"] = AgentRunStatus.PARTIAL
+
+    chart = next((branch for branch in plan.branches if isinstance(branch, ChartBranch)), None)
+    if chart is None:
+        update["trajectory"] = (
+            _event(
+                "generate_chart_spec",
+                TrajectoryStatus.SKIPPED,
+                "No chart was requested.",
+                started,
+            ),
+        )
+        return update
+    try:
+        dataset = _chart_dataset(chart.dataset_ref, state)
+        specification = generate_chart_specification(
+            dataset,
+            chart_type=chart.chart_type,
+            title=chart.title,
+            x_label=chart.x_label,
+        )
+    except (ValueError, TypeError):
+        error = _agent_error(
+            "generate_chart_spec",
+            "invalid_chart_dataset",
+            "The selected result cannot be represented as a validated chart dataset.",
+            category=AgentErrorCategory.VALIDATION,
+            severity=AgentErrorSeverity.TERMINAL,
+        )
+        update.update(
+            {
+                "status": AgentRunStatus.PARTIAL if chart.optional else AgentRunStatus.FAILED,
+                "errors": (error,),
+                "trajectory": (_failed_event("generate_chart_spec", started),),
+            }
+        )
+        return update
+    update.update(
+        {
+            "chart_spec": specification,
+            "trajectory": (
+                _event(
+                    "generate_chart_spec",
+                    TrajectoryStatus.COMPLETED,
+                    "Validated chart specification generated.",
+                    started,
+                ),
+            ),
+        }
+    )
+    return update
+
+
+def _route_after_chart(state: AgentState) -> Literal["merge_evidence", "finalize_response"]:
+    if state["status"] in {AgentRunStatus.FAILED, AgentRunStatus.ABSTAINED}:
+        return "finalize_response"
+    return "merge_evidence"
+
+
+def _merge_evidence(state: AgentState) -> dict[str, object]:
+    started = time.monotonic()
+    evidence = _evidence_from_state(state)
+    if not evidence:
+        error = _agent_error(
+            "merge_evidence",
+            "no_usable_evidence",
+            "No usable evidence was available for answer generation.",
+            category=AgentErrorCategory.VALIDATION,
+            severity=AgentErrorSeverity.TERMINAL,
+        )
+        return {
+            "status": AgentRunStatus.ABSTAINED,
+            "evidence": (),
+            "errors": (error,),
+            "trajectory": (_failed_event("merge_evidence", started),),
+        }
+    return {
+        "evidence": evidence,
+        "trajectory": (
+            _event(
+                "merge_evidence",
+                TrajectoryStatus.COMPLETED,
+                "Typed evidence was merged.",
+                started,
+                details={"evidence_count": len(evidence)},
+            ),
+        ),
+    }
+
+
+def _route_after_merge(state: AgentState) -> Literal["generate_answer", "finalize_response"]:
+    return (
+        "finalize_response"
+        if state["status"] in {AgentRunStatus.FAILED, AgentRunStatus.ABSTAINED}
+        else "generate_answer"
+    )
+
+
+def _generate_answer(
+    state: AgentState, runtime: Runtime[ResearchAgentRuntime]
+) -> dict[str, object]:
+    started = time.monotonic()
+    context = json.dumps(
+        [item.model_dump(mode="json") for item in state.get("evidence", ())],
+        sort_keys=True,
+    )
+    messages = (
+        ModelMessage(
+            role="system",
+            content=(
+                "Answer only from the supplied evidence. Preserve the language of the user's "
+                "question. Add an inline [evidence_id] marker to every factual statement. Never "
+                "invent citation IDs and do not reveal hidden reasoning. If evidence is partial, "
+                "state the limitation explicitly."
+            ),
+        ),
+        ModelMessage(role="user", content=f"Question: {state['question']}\nEvidence: {context}"),
+    )
+    text, attempts, error = _generate_text_with_retries(
+        runtime.context.model_provider,
+        messages,
+        purpose=ModelPurpose.ANSWER,
+        max_retries=state["policy"].max_retries_per_node,
+        node="generate_answer",
+    )
+    update = _model_node_update("generate_answer", attempts, started, error)
+    if error is not None:
+        update["status"] = _terminal_model_status(error)
+    else:
+        update["draft_answer"] = text
+    return update
+
+
+def _route_after_answer(state: AgentState) -> Literal["validate_citations", "finalize_response"]:
+    return "validate_citations" if state.get("draft_answer") else "finalize_response"
+
+
+def _validate_citations(state: AgentState) -> dict[str, object]:
+    started = time.monotonic()
+    answer = state.get("draft_answer") or ""
+    known = {item.evidence_id: item for item in state.get("evidence", ())}
+    cited = tuple(dict.fromkeys(CITATION_PATTERN.findall(answer)))
+    unknown = tuple(item for item in cited if item not in known)
+    plan = state.get("execution_plan")
+    citations_required = plan.requires_citations if plan is not None else True
+    reasons: list[str] = []
+    if citations_required and not cited:
+        reasons.append("missing_citations")
+    if unknown:
+        reasons.append("unknown_citations")
+    valid = not reasons
+    validation = AnswerValidation(
+        valid=valid,
+        cited_evidence_ids=tuple(item for item in cited if item in known),
+        unknown_evidence_ids=unknown,
+        reason_codes=tuple(reasons),
+    )
+    citations = tuple(
+        CitationReference(evidence_id=item, label=known[item].summary[:120])
+        for item in validation.cited_evidence_ids
+    )
+    return {
+        "answer_validation": validation,
+        "citations": citations,
+        "trajectory": (
+            _event(
+                "validate_citations",
+                TrajectoryStatus.COMPLETED if valid else TrajectoryStatus.FAILED,
+                "Citation structure validated." if valid else "Citation structure was invalid.",
+                started,
+                details={"citations": len(citations), "unknown": len(unknown)},
+            ),
+        ),
+    }
+
+
+def _route_after_validation(
+    state: AgentState,
+) -> Literal["finalize_response", "repair_or_abstain"]:
+    validation = state.get("answer_validation")
+    return (
+        "finalize_response"
+        if validation is not None and validation.valid
+        else ("repair_or_abstain")
+    )
+
+
+def _repair_or_abstain(
+    state: AgentState, runtime: Runtime[ResearchAgentRuntime]
+) -> dict[str, object]:
+    started = time.monotonic()
+    attempts_used = state.get("repair_attempts", 0)
+    if attempts_used >= state["policy"].max_repair_attempts:
+        exhausted_error = _agent_error(
+            "repair_or_abstain",
+            "citation_repair_exhausted",
+            "The answer could not be repaired within the configured limit.",
+            category=AgentErrorCategory.BUDGET,
+            severity=AgentErrorSeverity.TERMINAL,
+        )
+        return {
+            "status": AgentRunStatus.ABSTAINED,
+            "errors": (exhausted_error,),
+            "trajectory": (_failed_event("repair_or_abstain", started),),
+        }
+    validation = state.get("answer_validation")
+    evidence_ids = [item.evidence_id for item in state.get("evidence", ())]
+    messages = (
+        ModelMessage(
+            role="system",
+            content=(
+                "Repair only citation markers in the draft. Use only the allowed evidence IDs, "
+                "keep the original language, and return the complete repaired answer. Do not "
+                "provide reasoning."
+            ),
+        ),
+        ModelMessage(
+            role="user",
+            content=json.dumps(
+                {
+                    "draft": state.get("draft_answer"),
+                    "validation_reason_codes": validation.reason_codes if validation else (),
+                    "allowed_evidence_ids": evidence_ids,
+                },
+                sort_keys=True,
+            ),
+        ),
+    )
+    text, attempts, error = _generate_text_with_retries(
+        runtime.context.model_provider,
+        messages,
+        purpose=ModelPurpose.REPAIR,
+        max_retries=state["policy"].max_retries_per_node,
+        node="repair_or_abstain",
+    )
+    update = _model_node_update("repair_or_abstain", attempts, started, error)
+    update["repair_attempts"] = attempts_used + 1
+    if error is not None:
+        update["status"] = AgentRunStatus.ABSTAINED
+    else:
+        update["draft_answer"] = text
+    return update
+
+
+def _route_after_repair(
+    state: AgentState,
+) -> Literal["validate_citations", "finalize_response"]:
+    return (
+        "finalize_response"
+        if state["status"] in {AgentRunStatus.FAILED, AgentRunStatus.ABSTAINED}
+        else "validate_citations"
+    )
+
+
+def _finalize_response(state: AgentState) -> dict[str, object]:
+    started = time.monotonic()
+    status = state["status"]
+    validation = state.get("answer_validation")
+    answer = state.get("draft_answer")
+    if status in {AgentRunStatus.RUNNING, AgentRunStatus.PARTIAL}:
+        if answer and validation is not None and validation.valid:
+            final_status = (
+                AgentRunStatus.PARTIAL
+                if status is AgentRunStatus.PARTIAL
+                else AgentRunStatus.COMPLETED
+            )
+            return {
+                "status": final_status,
+                "final_answer": answer,
+                "messages": (
+                    *state["messages"],
+                    SessionMessage(role="assistant", content=answer, created_at=datetime.now(UTC)),
+                ),
+                "trajectory": (
+                    _event(
+                        "finalize_response",
+                        TrajectoryStatus.COMPLETED,
+                        "Research response finalized.",
+                        started,
+                    ),
+                ),
+            }
+        status = AgentRunStatus.ABSTAINED
+    return {
+        "status": status,
+        "final_answer": None,
+        "trajectory": (
+            _event(
+                "finalize_response",
+                TrajectoryStatus.COMPLETED,
+                "Research run finalized without a generated answer.",
+                started,
+            ),
+        ),
+    }
+
+
+def _normalize_and_validate_plan(
+    plan: ExecutionPlan,
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+    policy: ExecutionPolicy,
+) -> ExecutionPlan:
+    if plan.route is not analysis.route:
+        raise ValueError("Plan route must match question analysis.")
+    normalized: list[ExecutionBranch] = []
+    for branch in plan.branches:
+        if (
+            isinstance(branch, FinancialFactsBranch)
+            and not branch.request.company_ids
+            and not branch.request.tickers
+            and len(resolved.company_ids) == 1
+        ):
+            request = branch.request.model_copy(update={"company_ids": resolved.company_ids})
+            branch = branch.model_copy(update={"request": request})
+        normalized.append(branch)
+    plan = plan.model_copy(update={"branches": tuple(normalized)})
+    if len([item for item in plan.branches if isinstance(item, ChartBranch)]) > 1:
+        raise ValueError("Only one chart branch is supported.")
+    source = _source_branches(plan)
+    if len(source) > policy.max_tool_calls:
+        raise ValueError("Execution plan exceeds the tool-call budget.")
+    known_company_ids = set(resolved.company_ids)
+    for branch in plan.branches:
+        if (
+            isinstance(branch, FinancialFactsBranch)
+            and set(branch.request.company_ids) - known_company_ids
+        ):
+            raise ValueError("Financial plan contains an unresolved company ID.")
+        if branch.kind in SOURCE_KINDS and branch.depends_on:
+            raise ValueError("Source branches must be independent.")
+    by_id = {item.branch_id: item for item in plan.branches}
+    for branch in plan.branches:
+        if isinstance(branch, CalculationBranch):
+            if set(branch.depends_on) != set(branch.input_refs):
+                raise ValueError("Calculation dependencies must equal input references.")
+            for reference in branch.input_refs:
+                source_branch = by_id[reference]
+                if not isinstance(source_branch, (FinancialFactsBranch, MacroSeriesBranch)):
+                    raise ValueError("Calculations require numeric source branches.")
+                _validate_single_series_request(source_branch)
+        if isinstance(branch, ChartBranch):
+            if branch.depends_on != (branch.dataset_ref,):
+                raise ValueError("Chart dependency must equal its dataset reference.")
+            if not isinstance(
+                by_id[branch.dataset_ref],
+                (FinancialFactsBranch, MacroSeriesBranch, CalculationBranch),
+            ):
+                raise ValueError("Chart requires a numeric dataset reference.")
+    _validate_route_shape(plan)
+    represented = _represented_capabilities(plan)
+    if not set(analysis.required_capabilities).issubset(represented):
+        raise ValueError("Execution plan does not implement all required capabilities.")
+    return plan
+
+
+def _domain_execution_plan(model_plan: ModelExecutionPlan) -> ExecutionPlan:
+    branches: list[ExecutionBranch] = []
+    for item in model_plan.branches:
+        branches.append(_domain_execution_branch(item))
+    return ExecutionPlan(
+        route=model_plan.route,
+        branches=tuple(branches),
+        requires_citations=model_plan.requires_citations,
+        reason_codes=model_plan.reason_codes,
+    )
+
+
+def _domain_execution_branch(item: ModelExecutionBranch) -> ExecutionBranch:
+    if item.kind == "retrieve_documents":
+        if item.retrieval_request is None:
+            raise ValueError("Retrieval branch requires retrieval_request.")
+        return DocumentRetrievalBranch(
+            branch_id=item.branch_id,
+            depends_on=item.depends_on,
+            optional=item.optional,
+            request=item.retrieval_request,
+        )
+    if item.kind == "query_financial_facts":
+        if item.financial_request is None:
+            raise ValueError("Financial branch requires financial_request.")
+        return FinancialFactsBranch(
+            branch_id=item.branch_id,
+            depends_on=item.depends_on,
+            optional=item.optional,
+            request=item.financial_request,
+        )
+    if item.kind == "query_macro_series":
+        if item.macro_request is None:
+            raise ValueError("Macro branch requires macro_request.")
+        return MacroSeriesBranch(
+            branch_id=item.branch_id,
+            depends_on=item.depends_on,
+            optional=item.optional,
+            request=item.macro_request,
+        )
+    if item.kind == "calculate_metrics":
+        if item.operation is None:
+            raise ValueError("Calculation branch requires operation.")
+        return CalculationBranch(
+            branch_id=item.branch_id,
+            depends_on=item.depends_on,
+            optional=item.optional,
+            operation=item.operation,
+            input_refs=item.input_refs,
+            years=Decimal(str(item.years)) if item.years is not None else None,
+            window=item.window,
+            base=Decimal(str(item.base)),
+        )
+    if item.chart_type is None or item.dataset_ref is None or item.title is None:
+        raise ValueError("Chart branch requires chart fields.")
+    return ChartBranch(
+        branch_id=item.branch_id,
+        depends_on=item.depends_on,
+        optional=item.optional,
+        chart_type=item.chart_type,
+        dataset_ref=item.dataset_ref,
+        title=item.title,
+        x_label=item.x_label,
+    )
+
+
+def _validate_single_series_request(
+    branch: FinancialFactsBranch | MacroSeriesBranch,
+) -> None:
+    if isinstance(branch, MacroSeriesBranch):
+        if len(branch.request.series_ids) != 1:
+            raise ValueError("Numeric macro branches must select exactly one series.")
+        return
+    company_selectors = len(branch.request.company_ids) + len(branch.request.tickers)
+    if len(branch.request.metrics) != 1 or company_selectors != 1:
+        raise ValueError("Numeric financial branches must select one company and one metric.")
+
+
+def _validate_route_shape(plan: ExecutionPlan) -> None:
+    source_kinds = {item.kind for item in _source_branches(plan)}
+    if plan.route is ResearchRoute.UNSUPPORTED:
+        if plan.branches:
+            raise ValueError("Unsupported plans must be empty.")
+        return
+    if not source_kinds:
+        raise ValueError("Supported plans require a source branch.")
+    if plan.route is ResearchRoute.RAG_ONLY and source_kinds != {"retrieve_documents"}:
+        raise ValueError("RAG-only plans may only retrieve documents.")
+    if plan.route is ResearchRoute.STRUCTURED_ONLY and source_kinds != {"query_financial_facts"}:
+        raise ValueError("Structured-only plans require financial facts.")
+    if plan.route is ResearchRoute.API_ONLY and source_kinds != {"query_macro_series"}:
+        raise ValueError("API-only plans require macro series.")
+    if plan.route is ResearchRoute.CALCULATION and not any(
+        isinstance(item, CalculationBranch) for item in plan.branches
+    ):
+        raise ValueError("Calculation routes require a calculation branch.")
+    if plan.route is ResearchRoute.HYBRID and len(source_kinds) < 2:
+        raise ValueError("Hybrid plans require at least two source kinds.")
+
+
+def _represented_capabilities(plan: ExecutionPlan) -> set[AgentCapability]:
+    represented: set[AgentCapability] = set()
+    mapping = {
+        "retrieve_documents": AgentCapability.DOCUMENTS,
+        "query_financial_facts": AgentCapability.FINANCIAL_FACTS,
+        "query_macro_series": AgentCapability.MACRO_SERIES,
+        "calculate_metrics": AgentCapability.CALCULATIONS,
+        "generate_chart_spec": AgentCapability.CHART,
+    }
+    for branch in plan.branches:
+        represented.add(mapping[branch.kind])
+    return represented
+
+
+def _source_branch_max_attempts(state: AgentState, branch_id: str) -> int:
+    plan = state["execution_plan"]
+    branches = _source_branches(plan)
+    extra = state["policy"].max_tool_calls - len(branches)
+    for branch in branches:
+        allocated = min(state["policy"].max_retries_per_node, max(0, extra))
+        if branch.branch_id == branch_id:
+            return 1 + allocated
+        extra -= allocated
+    return 1
+
+
+def _source_branches(
+    plan: ExecutionPlan,
+) -> tuple[DocumentRetrievalBranch | FinancialFactsBranch | MacroSeriesBranch, ...]:
+    return tuple(
+        item
+        for item in plan.branches
+        if isinstance(item, (DocumentRetrievalBranch, FinancialFactsBranch, MacroSeriesBranch))
+    )
+
+
+def _branch_has_evidence(
+    state: AgentState,
+    branch: DocumentRetrievalBranch | FinancialFactsBranch | MacroSeriesBranch,
+) -> bool:
+    if isinstance(branch, DocumentRetrievalBranch):
+        retrieval_result = next(
+            (
+                value
+                for value in state.get("retrieval_results", ())
+                if value.branch_id == branch.branch_id
+            ),
+            None,
+        )
+        return bool(
+            retrieval_result
+            and retrieval_result.result.context
+            and not retrieval_result.result.trace.abstained
+        )
+    if isinstance(branch, FinancialFactsBranch):
+        financial_result = next(
+            (
+                value
+                for value in state.get("financial_results", ())
+                if value.branch_id == branch.branch_id
+            ),
+            None,
+        )
+        return bool(financial_result and financial_result.result.observations)
+    macro_result = next(
+        (value for value in state.get("macro_results", ()) if value.branch_id == branch.branch_id),
+        None,
+    )
+    return bool(macro_result and macro_result.result.observations)
+
+
+def _has_any_source_evidence(state: AgentState) -> bool:
+    return bool(
+        any(item.result.context for item in state.get("retrieval_results", ()))
+        or any(item.result.observations for item in state.get("financial_results", ()))
+        or any(item.result.observations for item in state.get("macro_results", ()))
+    )
+
+
+def _failed_planned_branches[BranchT: ExecutionBranch](
+    state: AgentState, branch_type: type[BranchT]
+) -> tuple[BranchT, ...]:
+    plan = state["execution_plan"]
+    outcomes = {item.branch_id: item for item in state.get("branch_outcomes", ())}
+    return tuple(
+        branch
+        for branch in plan.branches
+        if isinstance(branch, branch_type)
+        and (
+            branch.branch_id not in outcomes
+            or outcomes[branch.branch_id].status is BranchStatus.FAILED
+        )
+    )
+
+
+def _execute_calculation(branch: CalculationBranch, state: AgentState) -> CalculationResult:
+    series = [_numeric_series(reference, state) for reference in branch.input_refs]
+    operation = branch.operation
+    if operation == "quarter_over_quarter_growth":
+        previous, current = _two_observations(series[0])
+        return quarter_over_quarter_growth(current, previous)
+    if operation == "year_over_year_growth":
+        previous, current = _two_observations(series[0])
+        return year_over_year_growth(current, previous)
+    if operation == "cagr":
+        start, end = _endpoints(series[0])
+        assert branch.years is not None
+        return compound_annual_growth_rate(end, start, years=branch.years)
+    if operation == "margin":
+        return margin(_latest(series[0]), _latest(series[1]))
+    if operation == "absolute_change":
+        previous, current = _two_observations(series[0])
+        return absolute_change(current, previous)
+    if operation == "percentage_change":
+        previous, current = _two_observations(series[0])
+        return percentage_change(current, previous)
+    if operation == "rolling_average":
+        assert branch.window is not None
+        return rolling_average(series[0], window=branch.window)
+    if operation == "normalised_index":
+        return normalised_index(series[0], base=branch.base)
+    return correlation(series[0], series[1])
+
+
+def _numeric_series(branch_id: str, state: AgentState) -> tuple[NumericObservation, ...]:
+    financial = next(
+        (item for item in state.get("financial_results", ()) if item.branch_id == branch_id),
+        None,
+    )
+    if financial is not None:
+        observations = tuple(
+            NumericObservation(
+                label=f"{item.company_name} {item.metric} {item.period_end.isoformat()}",
+                value=item.value,
+                unit=item.unit,
+                source_url=item.source_url,
+                observed_at=item.period_end,
+            )
+            for item in financial.result.observations
+        )
+        return tuple(sorted(observations, key=lambda item: item.observed_at or datetime.min.date()))
+    macro = next(
+        (item for item in state.get("macro_results", ()) if item.branch_id == branch_id),
+        None,
+    )
+    if macro is None:
+        raise ValueError("Numeric branch result is missing.")
+    observations = tuple(
+        NumericObservation(
+            label=f"{item.series_id} {item.observed_at.isoformat()}",
+            value=item.value,
+            unit=item.unit,
+            source_url=item.source_url,
+            observed_at=item.observed_at,
+        )
+        for item in macro.result.observations
+        if not item.is_missing
+    )
+    return tuple(sorted(observations, key=lambda item: item.observed_at or datetime.min.date()))
+
+
+def _two_observations(
+    observations: Sequence[NumericObservation],
+) -> tuple[NumericObservation, NumericObservation]:
+    if len(observations) != 2:
+        raise ValueError("Calculation requires exactly two ordered observations.")
+    return observations[0], observations[1]
+
+
+def _endpoints(
+    observations: Sequence[NumericObservation],
+) -> tuple[NumericObservation, NumericObservation]:
+    if len(observations) < 2:
+        raise ValueError("Calculation requires at least two observations.")
+    return observations[0], observations[-1]
+
+
+def _latest(observations: Sequence[NumericObservation]) -> NumericObservation:
+    if len(observations) != 1:
+        raise ValueError("Scalar calculation input must contain exactly one observation.")
+    return observations[0]
+
+
+def _chart_dataset(reference: str, state: AgentState) -> ValidatedChartDataset:
+    observations = _numeric_series_for_chart(reference, state)
+    if observations is not None:
+        if not observations:
+            raise ValueError("Chart source has no observations.")
+        units = {item.unit for item in observations}
+        if len(units) != 1:
+            raise ValueError("Chart source contains incompatible units.")
+        key = reference
+        return ValidatedChartDataset(
+            series=(ChartSeries(key=key, label=observations[0].label, unit=units.pop()),),
+            points=tuple(
+                ChartPoint(
+                    x=item.observed_at,
+                    values={key: item.value},
+                    source_urls=(item.source_url,),
+                )
+                for item in observations
+                if item.observed_at is not None and item.value is not None
+            ),
+        )
+    calculation = next(
+        (item for item in state.get("calculations", ()) if item.branch_id == reference),
+        None,
+    )
+    if calculation is None:
+        raise ValueError("Chart dataset reference is missing.")
+    if any(point.observed_at is None for point in calculation.result.values):
+        raise ValueError("Scalar calculations without dates cannot be charted.")
+    return ValidatedChartDataset(
+        series=(
+            ChartSeries(
+                key=reference,
+                label=calculation.result.operation,
+                unit=calculation.result.unit,
+            ),
+        ),
+        points=tuple(
+            ChartPoint(
+                x=cast(date, point.observed_at),
+                values={reference: point.value},
+                source_urls=calculation.result.sources,
+            )
+            for point in calculation.result.values
+        ),
+    )
+
+
+def _numeric_series_for_chart(
+    reference: str, state: AgentState
+) -> tuple[NumericObservation, ...] | None:
+    if any(item.branch_id == reference for item in state.get("financial_results", ())):
+        return _numeric_series(reference, state)
+    if any(item.branch_id == reference for item in state.get("macro_results", ())):
+        return _numeric_series(reference, state)
+    return None
+
+
+def _evidence_from_state(state: AgentState) -> tuple[EvidenceEnvelope, ...]:
+    evidence: list[EvidenceEnvelope] = []
+    for retrieval_branch in state.get("retrieval_results", ()):
+        for context_item in retrieval_branch.result.context:
+            evidence.append(
+                EvidenceEnvelope(
+                    evidence_id=context_item.citation_label,
+                    kind=EvidenceKind.DOCUMENT,
+                    summary=context_item.content,
+                    source_urls=(context_item.source_url,),
+                    lineage_refs=(retrieval_branch.branch_id, context_item.source_id),
+                    payload=context_item.model_dump(mode="json"),
+                )
+            )
+    for financial_branch in state.get("financial_results", ()):
+        for fact in financial_branch.result.observations:
+            evidence.append(
+                EvidenceEnvelope(
+                    evidence_id=f"financial_fact:{fact.id}",
+                    kind=EvidenceKind.FINANCIAL_FACT,
+                    summary=(
+                        f"{fact.company_name} {fact.metric}: {fact.value} {fact.unit} "
+                        f"at {fact.period_end.isoformat()}"
+                    ),
+                    source_urls=(fact.source_url,),
+                    lineage_refs=(financial_branch.branch_id,),
+                    payload=fact.model_dump(mode="json"),
+                )
+            )
+    for macro_branch in state.get("macro_results", ()):
+        for observation in macro_branch.result.observations:
+            if observation.is_missing or observation.value is None:
+                continue
+            evidence.append(
+                EvidenceEnvelope(
+                    evidence_id=(
+                        f"macro:{observation.series_id.lower()}:"
+                        f"{observation.observed_at.isoformat()}"
+                    ),
+                    kind=EvidenceKind.MACRO_OBSERVATION,
+                    summary=(
+                        f"{observation.series_id}: {observation.value} {observation.unit} "
+                        f"at {observation.observed_at.isoformat()}"
+                    ),
+                    source_urls=(observation.source_url,),
+                    lineage_refs=(macro_branch.branch_id,),
+                    payload=observation.model_dump(mode="json"),
+                )
+            )
+    plan = state.get("execution_plan")
+    calculations_by_id = {item.branch_id: item for item in state.get("calculations", ())}
+    for branch_id, calculation in calculations_by_id.items():
+        plan_branch = (
+            next(
+                (
+                    branch
+                    for branch in plan.branches
+                    if isinstance(branch, CalculationBranch) and branch.branch_id == branch_id
+                ),
+                None,
+            )
+            if plan
+            else None
+        )
+        evidence.append(
+            EvidenceEnvelope(
+                evidence_id=f"calculation:{branch_id}",
+                kind=EvidenceKind.CALCULATION,
+                summary=(
+                    f"{calculation.result.operation}: "
+                    f"{calculation.result.model_dump(mode='json')['values']}"
+                ),
+                source_urls=calculation.result.sources,
+                lineage_refs=plan_branch.input_refs if plan_branch else (),
+                payload=calculation.result.model_dump(mode="json"),
+            )
+        )
+    deduplicated = {item.evidence_id: item for item in evidence}
+    return tuple(deduplicated[key] for key in sorted(deduplicated))
+
+
+def _generate_structured_with_retries[OutputT: BaseModel](
+    provider: ResearchModelProvider,
+    messages: Sequence[ModelMessage],
+    output_type: type[OutputT],
+    *,
+    purpose: ModelPurpose,
+    max_retries: int,
+    node: str,
+) -> tuple[OutputT | None, int, AgentError | None]:
+    attempts = 0
+    for attempt in range(1, max_retries + 2):
+        attempts = attempt
+        try:
+            result = provider.generate_structured(messages, output_type, purpose=purpose)
+        except ModelProviderError as exc:
+            error = exc.error.model_copy(update={"node": node, "attempt": attempt})
+            if error.recoverable and attempt <= max_retries:
+                continue
+            return None, attempts, error
+        if result.refusal is not None:
+            return None, attempts, _provider_refusal(node, attempt)
+        return result.output, attempts, None
+    raise AssertionError("Unreachable model retry state.")
+
+
+def _generate_text_with_retries(
+    provider: ResearchModelProvider,
+    messages: Sequence[ModelMessage],
+    *,
+    purpose: ModelPurpose,
+    max_retries: int,
+    node: str,
+) -> tuple[str | None, int, AgentError | None]:
+    attempts = 0
+    for attempt in range(1, max_retries + 2):
+        attempts = attempt
+        try:
+            result = provider.generate_text(messages, purpose=purpose)
+        except ModelProviderError as exc:
+            error = exc.error.model_copy(update={"node": node, "attempt": attempt})
+            if error.recoverable and attempt <= max_retries:
+                continue
+            return None, attempts, error
+        if result.refusal is not None:
+            return None, attempts, _provider_refusal(node, attempt)
+        return result.text, attempts, None
+    raise AssertionError("Unreachable model retry state.")
+
+
+def _model_node_update(
+    node: str,
+    attempts: int,
+    started: float,
+    error: AgentError | None,
+) -> dict[str, object]:
+    update: dict[str, object] = {
+        "node_attempts": (NodeAttempt(node=node, attempts=attempts),),
+        "trajectory": (
+            _event(
+                node,
+                TrajectoryStatus.FAILED if error else TrajectoryStatus.COMPLETED,
+                "Model operation failed." if error else "Model operation completed.",
+                started,
+                details={"attempts": attempts},
+            ),
+        ),
+    }
+    if error is not None:
+        update["errors"] = (error,)
+    return update
+
+
+def _terminal_model_status(error: AgentError) -> AgentRunStatus:
+    return (
+        AgentRunStatus.ABSTAINED
+        if error.category is AgentErrorCategory.PROVIDER_REFUSAL
+        else AgentRunStatus.FAILED
+    )
+
+
+def _provider_refusal(node: str, attempt: int) -> AgentError:
+    return AgentError(
+        category=AgentErrorCategory.PROVIDER_REFUSAL,
+        severity=AgentErrorSeverity.TERMINAL,
+        code="model_refusal",
+        message="The model declined the requested operation.",
+        node=node,
+        attempt=attempt,
+    )
+
+
+def _validation_error(node: str, code: str) -> AgentError:
+    return AgentError(
+        category=AgentErrorCategory.VALIDATION,
+        severity=AgentErrorSeverity.TERMINAL,
+        code=code,
+        message="The research workflow received an invalid typed state or plan.",
+        node=node,
+    )
+
+
+def _agent_error(
+    node: str,
+    code: str,
+    message: str,
+    *,
+    category: AgentErrorCategory = AgentErrorCategory.TOOL,
+    severity: AgentErrorSeverity = AgentErrorSeverity.RECOVERABLE,
+    attempt: int = 1,
+) -> AgentError:
+    return AgentError(
+        category=category,
+        severity=severity,
+        code=code,
+        message=message,
+        node=node,
+        attempt=attempt,
+    )
+
+
+def _event(
+    node: str,
+    status: TrajectoryStatus,
+    summary: str,
+    started: float,
+    *,
+    details: dict[str, str | int | float | bool | None] | None = None,
+) -> TrajectoryEvent:
+    return TrajectoryEvent(
+        node=node,
+        status=status,
+        occurred_at=datetime.now(UTC),
+        summary=summary,
+        duration_ms=max(0, int((time.monotonic() - started) * 1000)),
+        details=details or {},
+    )
+
+
+def _failed_event(node: str, started: float) -> TrajectoryEvent:
+    return _event(node, TrajectoryStatus.FAILED, "Workflow node failed.", started)
+
+
+def _skipped(node: str) -> dict[str, object]:
+    return {
+        "trajectory": (
+            TrajectoryEvent(
+                node=node,
+                status=TrajectoryStatus.SKIPPED,
+                occurred_at=datetime.now(UTC),
+                summary="Workflow node was skipped.",
+            ),
+        )
+    }

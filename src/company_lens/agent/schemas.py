@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import enum
+import operator
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Literal, NotRequired, Required, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -64,6 +66,12 @@ class AgentErrorCategory(enum.StrEnum):
 
 class TrajectoryStatus(enum.StrEnum):
     STARTED = "started"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class BranchStatus(enum.StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
@@ -155,12 +163,37 @@ class CalculationBranch(BranchBase):
     kind: Literal["calculate_metrics"] = "calculate_metrics"
     operation: CalculationOperation
     input_refs: tuple[str, ...] = Field(min_length=1)
+    years: Decimal | None = Field(default=None, gt=0)
+    window: int | None = Field(default=None, ge=1)
+    base: Decimal = Field(default=Decimal("100"))
+
+    @model_validator(mode="after")
+    def validate_operation_inputs(self) -> CalculationBranch:
+        single_input = {
+            "quarter_over_quarter_growth",
+            "year_over_year_growth",
+            "cagr",
+            "absolute_change",
+            "percentage_change",
+            "rolling_average",
+            "normalised_index",
+        }
+        expected = 1 if self.operation in single_input else 2
+        if len(self.input_refs) != expected:
+            raise ValueError(f"{self.operation} requires exactly {expected} input reference(s).")
+        if self.operation == "cagr" and self.years is None:
+            raise ValueError("cagr requires years.")
+        if self.operation == "rolling_average" and self.window is None:
+            raise ValueError("rolling_average requires window.")
+        return self
 
 
 class ChartBranch(BranchBase):
     kind: Literal["generate_chart_spec"] = "generate_chart_spec"
     chart_type: Literal["line", "bar", "area", "scatter"]
     dataset_ref: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    x_label: str = Field(default="Date", min_length=1)
 
 
 ExecutionBranch = Annotated[
@@ -171,6 +204,42 @@ ExecutionBranch = Annotated[
     | ChartBranch,
     Field(discriminator="kind"),
 ]
+
+
+class ModelExecutionBranch(FrozenModel):
+    """OpenAI-compatible planning DTO without a JSON Schema ``oneOf`` union."""
+
+    kind: Literal[
+        "retrieve_documents",
+        "query_financial_facts",
+        "query_macro_series",
+        "calculate_metrics",
+        "generate_chart_spec",
+    ]
+    branch_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    depends_on: tuple[str, ...] = ()
+    optional: bool = False
+    retrieval_request: AdaptiveRetrievalRequest | None = None
+    financial_request: FinancialFactQuery | None = None
+    macro_request: FredSeriesQuery | None = None
+    operation: CalculationOperation | None = None
+    input_refs: tuple[str, ...] = ()
+    years: float | None = Field(default=None, gt=0)
+    window: int | None = Field(default=None, ge=1)
+    base: float = 100.0
+    chart_type: Literal["line", "bar", "area", "scatter"] | None = None
+    dataset_ref: str | None = None
+    title: str | None = None
+    x_label: str = "Date"
+
+
+class ModelExecutionPlan(FrozenModel):
+    """Structured-output DTO converted into the stricter domain ``ExecutionPlan``."""
+
+    route: ResearchRoute
+    branches: tuple[ModelExecutionBranch, ...] = ()
+    requires_citations: bool = True
+    reason_codes: tuple[str, ...] = ()
 
 
 class ExecutionPlan(FrozenModel):
@@ -255,6 +324,48 @@ class NodeAttempt(FrozenModel):
     attempts: int = Field(ge=1)
 
 
+class BranchOutcome(FrozenModel):
+    branch_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    kind: str = Field(min_length=1)
+    status: BranchStatus
+    optional: bool = False
+    attempts: int = Field(ge=0)
+    error: AgentError | None = None
+
+    @model_validator(mode="after")
+    def validate_error(self) -> BranchOutcome:
+        if (self.status is BranchStatus.FAILED) != (self.error is not None):
+            raise ValueError("Failed branch outcomes require exactly one error.")
+        return self
+
+
+class RetrievalBranchResult(FrozenModel):
+    branch_id: str
+    result: AdaptiveRetrievalResponse
+
+
+class FinancialBranchResult(FrozenModel):
+    branch_id: str
+    result: FinancialFactQueryResult
+
+
+class MacroBranchResult(FrozenModel):
+    branch_id: str
+    result: FredSeriesResult
+
+
+class CalculationBranchResult(FrozenModel):
+    branch_id: str
+    result: CalculationResult
+
+
+class AnswerValidation(FrozenModel):
+    valid: bool
+    cited_evidence_ids: tuple[str, ...] = ()
+    unknown_evidence_ids: tuple[str, ...] = ()
+    reason_codes: tuple[str, ...] = ()
+
+
 class AgentState(TypedDict, total=False):
     run_id: Required[uuid.UUID]
     session_id: Required[str]
@@ -265,19 +376,23 @@ class AgentState(TypedDict, total=False):
     analysis: NotRequired[QuestionAnalysis]
     resolved_query: NotRequired[ResolvedQuery]
     execution_plan: NotRequired[ExecutionPlan]
-    retrieval_results: NotRequired[tuple[AdaptiveRetrievalResponse, ...]]
-    financial_results: NotRequired[tuple[FinancialFactQueryResult, ...]]
-    macro_results: NotRequired[tuple[FredSeriesResult, ...]]
-    calculations: NotRequired[tuple[CalculationResult, ...]]
+    active_branch: NotRequired[ExecutionBranch]
+    retrieval_results: Annotated[tuple[RetrievalBranchResult, ...], operator.add]
+    financial_results: Annotated[tuple[FinancialBranchResult, ...], operator.add]
+    macro_results: Annotated[tuple[MacroBranchResult, ...], operator.add]
+    calculations: Annotated[tuple[CalculationBranchResult, ...], operator.add]
+    branch_outcomes: Annotated[tuple[BranchOutcome, ...], operator.add]
     evidence: NotRequired[tuple[EvidenceEnvelope, ...]]
     chart_spec: NotRequired[ChartSpecification | None]
     draft_answer: NotRequired[str | None]
     final_answer: NotRequired[str | None]
+    answer_validation: NotRequired[AnswerValidation]
+    repair_attempts: NotRequired[int]
     citations: NotRequired[tuple[CitationReference, ...]]
-    errors: NotRequired[tuple[AgentError, ...]]
-    trajectory: NotRequired[tuple[TrajectoryEvent, ...]]
-    node_attempts: NotRequired[tuple[NodeAttempt, ...]]
-    tool_calls_used: NotRequired[int]
+    errors: Annotated[tuple[AgentError, ...], operator.add]
+    trajectory: Annotated[tuple[TrajectoryEvent, ...], operator.add]
+    node_attempts: Annotated[tuple[NodeAttempt, ...], operator.add]
+    tool_calls_used: Annotated[int, operator.add]
 
 
 def _is_reason_code(value: str) -> bool:

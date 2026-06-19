@@ -13,6 +13,8 @@ dependencies = [
   "alembic>=1.13.2",
   "fastapi>=0.115.0",
   "httpx>=0.27.2",
+  "langchain-core>=1.2,<2",
+  "langgraph>=1.2,<2",
   "openai>=2.11.0",
   "pdfplumber>=0.11.5",
   "pydantic>=2.8.2",
@@ -34,10 +36,6 @@ dev = [
   "ruff>=0.6.3",
   "types-PyYAML>=6.0.12.20250822",
 ]
-agent = [
-  "langchain-core>=0.3.0",
-]
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/company_lens"]
 
