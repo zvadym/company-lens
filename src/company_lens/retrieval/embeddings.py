@@ -8,11 +8,14 @@ from typing import Any, Literal, Protocol
 
 from openai import OpenAI
 
+from company_lens.processing.text import TOKEN_ENCODING
+
 DEFAULT_LOCAL_EMBEDDING_MODEL = "local-feature-hashing-v1"
 DEFAULT_LOCAL_EMBEDDING_DIMENSIONS = 384
 DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_OPENAI_EMBEDDING_DIMENSIONS = 384
 DEFAULT_OPENAI_INDEX_VERSION = "openai-text-embedding-3-small-384.v1"
+OPENAI_EMBEDDING_MAX_INPUT_TOKENS = 8192
 
 EmbeddingProvider = Literal["local", "openai"]
 
@@ -98,6 +101,14 @@ class OpenAIEmbedder:
             return []
         if any(not text for text in inputs):
             raise ValueError("OpenAI embedding inputs must not be empty.")
+        for index, text in enumerate(inputs):
+            token_count = len(TOKEN_ENCODING.encode(text))
+            if token_count > OPENAI_EMBEDDING_MAX_INPUT_TOKENS:
+                raise EmbeddingInputTooLongError(
+                    input_index=index,
+                    token_count=token_count,
+                    max_tokens=OPENAI_EMBEDDING_MAX_INPUT_TOKENS,
+                )
 
         response = self._client.embeddings.create(
             model=self.model_name,
@@ -112,6 +123,16 @@ class OpenAIEmbedder:
         if any(len(vector) != self.dimensions for vector in vectors):
             raise RuntimeError("OpenAI returned an embedding with unexpected dimensions.")
         return vectors
+
+
+class EmbeddingInputTooLongError(ValueError):
+    def __init__(self, *, input_index: int, token_count: int, max_tokens: int) -> None:
+        self.input_index = input_index
+        self.token_count = token_count
+        self.max_tokens = max_tokens
+        super().__init__(
+            f"Embedding input {input_index} has {token_count} tokens; maximum is {max_tokens}."
+        )
 
 
 def build_embedder(

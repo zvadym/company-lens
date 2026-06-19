@@ -24,6 +24,26 @@ from company_lens.db.models import (
 )
 from company_lens.processing.service import DocumentProcessingOptions, DocumentProcessingService
 from company_lens.processing.stats import corpus_stats, demo_chunks
+from company_lens.processing.text import estimate_token_count, fixed_token_chunks, semantic_chunks
+
+
+def test_fixed_chunks_respect_model_token_budget_for_compact_pdf_text() -> None:
+    text = ("RevenueGrowth" * 200) + " final"
+
+    chunks = fixed_token_chunks(text, max_tokens=32, overlap_tokens=4)
+
+    assert len(chunks) > 1
+    assert all(estimate_token_count(chunk.text) <= 32 for chunk in chunks)
+    assert all(text[chunk.char_start : chunk.char_end] == chunk.text for chunk in chunks)
+
+
+def test_semantic_chunks_enforce_model_token_budget_after_overlap() -> None:
+    text = (("RevenueGrowth" * 40) + ".\n\n") * 8
+
+    chunks = semantic_chunks(text, max_tokens=64, overlap_tokens=8)
+
+    assert len(chunks) > 1
+    assert all(estimate_token_count(chunk.text) <= 64 for chunk in chunks)
 
 
 def test_processes_sec_sections_into_summaries_and_chunks(
@@ -90,7 +110,7 @@ def test_processes_sec_sections_into_summaries_and_chunks(
     assert len(summaries) == 1
     assert len(section_summaries) == 2
     assert chunks
-    assert chunks[0].metadata_json["chunking_version"] == "chunking.v1"
+    assert chunks[0].metadata_json["chunking_version"] == "chunking.cl100k.v2"
     assert chunks[0].char_start is not None
     assert chunks[0].section_id in {summary.section_id for summary in section_summaries}
 

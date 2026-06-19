@@ -24,7 +24,11 @@ from company_lens.db.models import (
 )
 from company_lens.processing.text import content_hash
 from company_lens.retrieval.benchmark import run_benchmark
-from company_lens.retrieval.embeddings import LocalFeatureHashingEmbedder, OpenAIEmbedder
+from company_lens.retrieval.embeddings import (
+    EmbeddingInputTooLongError,
+    LocalFeatureHashingEmbedder,
+    OpenAIEmbedder,
+)
 from company_lens.retrieval.indexing import EmbeddingIndexingService
 from company_lens.retrieval.schemas import (
     EmbeddingIndexingRequest,
@@ -72,6 +76,49 @@ def test_openai_embedder_batches_inputs_and_preserves_response_order() -> None:
         [1.0, 0.0, 0.0],
         [0.0, 1.0, 0.0],
     ]
+
+
+def test_openai_embedder_rejects_oversized_input_before_api_call() -> None:
+    class UnexpectedEmbeddings:
+        def create(self, **_kwargs: object) -> None:
+            raise AssertionError("OpenAI API must not be called for oversized input")
+
+    embedder = OpenAIEmbedder(
+        client=SimpleNamespace(embeddings=UnexpectedEmbeddings()),
+        dimensions=3,
+    )
+
+    with pytest.raises(EmbeddingInputTooLongError, match="maximum is 8192"):
+        embedder.embed_texts(["token " * 9000])
+
+
+def test_indexing_isolates_one_invalid_chunk_from_the_batch(session: Session) -> None:
+    chunks = _seed_corpus(session)
+    chunks[0].text = "reject-me"
+    chunks[0].content_hash = content_hash(chunks[0].text)
+    session.commit()
+
+    class SelectiveEmbedder:
+        model_name = "selective-test-v1"
+        dimensions = 384
+        provider = "test"
+
+        def embed_texts(self, texts: list[str]) -> list[list[float]]:
+            if "reject-me" in texts:
+                raise ValueError("invalid embedding input")
+            return [[1.0] + [0.0] * 383 for _text in texts]
+
+        def embed_query(self, text: str) -> list[float]:
+            return self.embed_texts([text])[0]
+
+    result = EmbeddingIndexingService(session=session, embedder=SelectiveEmbedder()).index_chunks(
+        EmbeddingIndexingRequest(index_version="selective-test.v1", batch_size=100)
+    )
+
+    assert result.indexed == len(chunks) - 1
+    assert result.failed == 1
+    assert result.failures[0].chunk_id == chunks[0].id
+    assert result.failures[0].message == "invalid embedding input"
 
 
 def test_indexing_skips_fresh_embeddings_and_rebuilds_stale(session: Session) -> None:

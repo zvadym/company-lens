@@ -5,7 +5,11 @@ from sqlalchemy.orm import Session
 
 from company_lens.db.models import ChunkEmbedding, DocumentChunk, EmbeddingIndex
 from company_lens.retrieval.embeddings import Embedder, LocalFeatureHashingEmbedder
-from company_lens.retrieval.schemas import EmbeddingIndexingRequest, EmbeddingIndexingResult
+from company_lens.retrieval.schemas import (
+    EmbeddingFailure,
+    EmbeddingIndexingRequest,
+    EmbeddingIndexingResult,
+)
 
 
 class EmbeddingIndexingService:
@@ -25,7 +29,7 @@ class EmbeddingIndexingService:
         indexed = 0
         skipped = 0
         stale_rebuilt = 0
-        failed = 0
+        failures: list[EmbeddingFailure] = []
 
         for batch_start in range(0, len(chunks), request.batch_size):
             batch = chunks[batch_start : batch_start + request.batch_size]
@@ -46,11 +50,12 @@ class EmbeddingIndexingService:
                     continue
                 pending.append((chunk, existing))
 
+            embedded, batch_failures = self._embed_with_isolation(pending)
+            failures.extend(batch_failures)
             try:
-                vectors = self._embedder.embed_texts([chunk.text for chunk, _ in pending])
                 batch_indexed = 0
                 batch_stale_rebuilt = 0
-                for (chunk, existing), vector in zip(pending, vectors, strict=True):
+                for chunk, existing, vector in embedded:
                     if existing is not None:
                         self._session.delete(existing)
                         self._session.flush()
@@ -68,9 +73,16 @@ class EmbeddingIndexingService:
                 self._session.commit()
                 indexed += batch_indexed
                 stale_rebuilt += batch_stale_rebuilt
-            except Exception:
+            except Exception as exc:
                 self._session.rollback()
-                failed += len(pending)
+                failures.extend(
+                    EmbeddingFailure(
+                        chunk_id=chunk.id,
+                        error_type=type(exc).__name__,
+                        message=str(exc),
+                    )
+                    for chunk, _existing, _vector in embedded
+                )
 
         return EmbeddingIndexingResult(
             index_id=embedding_index.id,
@@ -81,8 +93,39 @@ class EmbeddingIndexingService:
             indexed=indexed,
             skipped=skipped,
             stale_rebuilt=stale_rebuilt,
-            failed=failed,
+            failed=len(failures),
+            failures=tuple(failures),
         )
+
+    def _embed_with_isolation(
+        self,
+        pending: list[tuple[DocumentChunk, ChunkEmbedding | None]],
+    ) -> tuple[
+        list[tuple[DocumentChunk, ChunkEmbedding | None, list[float]]],
+        list[EmbeddingFailure],
+    ]:
+        if not pending:
+            return [], []
+        try:
+            vectors = self._embedder.embed_texts([chunk.text for chunk, _ in pending])
+            return [
+                (chunk, existing, vector)
+                for (chunk, existing), vector in zip(pending, vectors, strict=True)
+            ], []
+        except Exception as exc:
+            if len(pending) == 1:
+                chunk, _existing = pending[0]
+                return [], [
+                    EmbeddingFailure(
+                        chunk_id=chunk.id,
+                        error_type=type(exc).__name__,
+                        message=str(exc),
+                    )
+                ]
+            midpoint = len(pending) // 2
+            left_embedded, left_failures = self._embed_with_isolation(pending[:midpoint])
+            right_embedded, right_failures = self._embed_with_isolation(pending[midpoint:])
+            return left_embedded + right_embedded, left_failures + right_failures
 
     def _get_or_create_index(self, request: EmbeddingIndexingRequest) -> EmbeddingIndex:
         embedding_index = self._session.scalar(

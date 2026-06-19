@@ -6,6 +6,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from html.parser import HTMLParser
 
+import tiktoken
+
+TOKEN_ENCODING_NAME = "cl100k_base"
+TOKEN_ENCODING = tiktoken.get_encoding(TOKEN_ENCODING_NAME)
+
 
 @dataclass(frozen=True)
 class TextSpan:
@@ -60,11 +65,7 @@ def normalize_for_fingerprint(text: str) -> str:
 
 
 def estimate_token_count(text: str) -> int:
-    words = re.findall(r"\S+", text)
-    if not words:
-        return 0
-    punctuation = len(re.findall(r"[^\w\s]", text))
-    return max(1, int(len(words) + punctuation * 0.25))
+    return len(TOKEN_ENCODING.encode(text))
 
 
 def split_sentences(text: str) -> list[str]:
@@ -97,28 +98,42 @@ def fixed_token_chunks(
     if overlap_tokens >= max_tokens:
         raise ValueError("overlap_tokens must be smaller than max_tokens.")
 
-    tokens = list(re.finditer(r"\S+", text))
-    if not tokens:
+    token_ids = TOKEN_ENCODING.encode(text)
+    if not token_ids:
         return []
+    decoded, offsets = TOKEN_ENCODING.decode_with_offsets(token_ids)
+    if decoded != text:
+        raise ValueError("Token encoding did not round-trip the source text.")
 
     chunks: list[TextSpan] = []
     start_index = 0
-    while start_index < len(tokens):
-        end_index = min(len(tokens), start_index + max_tokens)
-        char_start = tokens[start_index].start()
-        char_end = tokens[end_index - 1].end()
-        chunk_text = text[char_start:char_end].strip()
+    while start_index < len(token_ids):
+        end_index = min(len(token_ids), start_index + max_tokens)
+        while end_index > start_index:
+            char_start = offsets[start_index]
+            char_end = offsets[end_index] if end_index < len(offsets) else len(text)
+            raw_chunk = text[char_start:char_end]
+            leading_whitespace = len(raw_chunk) - len(raw_chunk.lstrip())
+            trailing_whitespace = len(raw_chunk) - len(raw_chunk.rstrip())
+            trimmed_start = char_start + leading_whitespace
+            trimmed_end = char_end - trailing_whitespace
+            chunk_text = text[trimmed_start:trimmed_end]
+            if chunk_text and estimate_token_count(chunk_text) <= max_tokens:
+                break
+            end_index -= 1
+        if end_index == start_index:
+            raise ValueError("max_tokens is too small to encode the next character.")
         if chunk_text:
             chunks.append(
                 TextSpan(
                     text=chunk_text,
-                    char_start=base_char_start + char_start,
-                    char_end=base_char_start + char_end,
+                    char_start=base_char_start + trimmed_start,
+                    char_end=base_char_start + trimmed_end,
                     page_start=page_start,
                     page_end=page_end,
                 )
             )
-        if end_index == len(tokens):
+        if end_index == len(token_ids):
             break
         start_index = max(end_index - overlap_tokens, start_index + 1)
     return chunks
@@ -174,7 +189,22 @@ def semantic_chunks(
             page_end=page_end,
         )
     )
-    return chunks
+    bounded: list[TextSpan] = []
+    for chunk in chunks:
+        if estimate_token_count(chunk.text) <= max_tokens:
+            bounded.append(chunk)
+            continue
+        bounded.extend(
+            fixed_token_chunks(
+                chunk.text,
+                max_tokens=max_tokens,
+                overlap_tokens=overlap_tokens,
+                base_char_start=chunk.char_start,
+                page_start=chunk.page_start,
+                page_end=chunk.page_end,
+            )
+        )
+    return bounded
 
 
 def summarize_text(text: str, *, max_sentences: int = 3, max_chars: int = 900) -> str:
