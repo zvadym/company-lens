@@ -297,10 +297,15 @@ def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -
         ModelMessage(
             role="system",
             content=(
-                "Classify a public-company research question. Use only the declared routes and "
-                "capabilities. Return short lowercase_snake_case reason codes, never reasoning. "
-                "Use unsupported when the request cannot be answered from company documents, "
-                "financial facts, cached macro series, deterministic calculations, or charts."
+                "Classify a public-company research question using these exact route semantics: "
+                "rag_only means company documents only; structured_only means company financial "
+                "facts only; api_only means cached macro series without derived arithmetic; "
+                "calculation means any requested change, growth, margin, index, average, or "
+                "correlation over financial or macro observations; hybrid means two or more "
+                "source kinds; unsupported means none of the available sources can answer. "
+                "A request asking how a macro rate changed requires macro_series and calculations, "
+                "not financial_facts. Add chart only when explicitly requested. Return short "
+                "lowercase_snake_case reason codes, never reasoning."
             ),
         ),
         *tuple(
@@ -405,10 +410,13 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
             role="system",
             content=(
                 "Create a minimal typed execution plan for CompanyLens. Use only resolved company "
-                "IDs. Source branches must be independent. Calculations may depend on financial "
-                "or macro branches; a chart may depend on one source or calculation branch. Mark "
-                "a branch optional only when the question can still be answered without it. Do "
-                "not include explanations beyond short reason codes."
+                "IDs. Company metrics use query_financial_facts; economic rates and indicators "
+                "use query_macro_series. A requested change or growth requires a calculation route "
+                "with a source branch and calculate_metrics branch. Source branches must be "
+                "independent. Calculations may depend on financial or macro branches; a chart may "
+                "depend on one source or calculation branch. The plan route must describe its "
+                "concrete branches. Mark a branch optional only when the question can still be "
+                "answered without it. Do not include explanations beyond short reason codes."
             ),
         ),
         ModelMessage(role="user", content=planning_context),
@@ -427,10 +435,11 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         return update
     assert output is not None
     try:
-        domain_plan = _domain_execution_plan(output)
+        domain_plan = _canonicalize_plan_route(_domain_execution_plan(output))
+        reconciled_analysis = _reconcile_analysis_with_plan(analysis, domain_plan)
         plan = _normalize_and_validate_plan(
             domain_plan,
-            analysis,
+            reconciled_analysis,
             resolved,
             state["policy"],
             retrieval_index_name=runtime.context.retrieval_index_name,
@@ -443,6 +452,8 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         update["trajectory"] = (_failed_event("plan_request", started),)
         return update
     update["execution_plan"] = plan
+    if reconciled_analysis != analysis:
+        update["analysis"] = reconciled_analysis
     return update
 
 
@@ -1220,6 +1231,63 @@ def _normalize_and_validate_plan(
     if not set(analysis.required_capabilities).issubset(represented):
         raise ValueError("Execution plan does not implement all required capabilities.")
     return plan
+
+
+def _reconcile_analysis_with_plan(
+    analysis: QuestionAnalysis,
+    plan: ExecutionPlan,
+) -> QuestionAnalysis:
+    """Make a concrete supported plan authoritative over an inconsistent model classification."""
+
+    if (
+        analysis.route in {ResearchRoute.UNSUPPORTED, ResearchRoute.HYBRID}
+        or plan.route is ResearchRoute.UNSUPPORTED
+        or analysis.chart_requested
+        or AgentCapability.CHART in analysis.required_capabilities
+    ):
+        return analysis
+    represented = _represented_capabilities(plan)
+    ordered_capabilities = tuple(
+        capability for capability in AgentCapability if capability in represented
+    )
+    chart_requested = AgentCapability.CHART in represented
+    if (
+        analysis.route is plan.route
+        and analysis.required_capabilities == ordered_capabilities
+        and analysis.chart_requested is chart_requested
+    ):
+        return analysis
+    return analysis.model_copy(
+        update={
+            "route": plan.route,
+            "required_capabilities": ordered_capabilities,
+            "chart_requested": chart_requested,
+            "reason_codes": tuple(
+                dict.fromkeys((*analysis.reason_codes, "reconciled_to_valid_plan"))
+            ),
+        }
+    )
+
+
+def _canonicalize_plan_route(plan: ExecutionPlan) -> ExecutionPlan:
+    """Derive route semantics from concrete source and calculation branches."""
+
+    source_kinds = {item.kind for item in _source_branches(plan)}
+    has_calculation = any(isinstance(item, CalculationBranch) for item in plan.branches)
+    route: ResearchRoute | None = None
+    if len(source_kinds) >= 2:
+        route = ResearchRoute.HYBRID
+    elif has_calculation:
+        route = ResearchRoute.CALCULATION
+    elif source_kinds == {"retrieve_documents"}:
+        route = ResearchRoute.RAG_ONLY
+    elif source_kinds == {"query_financial_facts"}:
+        route = ResearchRoute.STRUCTURED_ONLY
+    elif source_kinds == {"query_macro_series"}:
+        route = ResearchRoute.API_ONLY
+    if route is None or route is plan.route:
+        return plan
+    return plan.model_copy(update={"route": route})
 
 
 def _domain_execution_plan(model_plan: ModelExecutionPlan) -> ExecutionPlan:

@@ -423,6 +423,63 @@ def test_period_change_uses_first_and_last_observations_from_macro_series(
     ]
 
 
+def test_valid_plan_reconciles_inconsistent_question_classification() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="How did the federal funds rate change during 2024?",
+        route=ResearchRoute.STRUCTURED_ONLY,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS,),
+        reason_codes=("financial_data_requested",),
+    )
+    macro = _macro_branch()
+    change = CalculationBranch(
+        branch_id="change",
+        operation="absolute_change",
+        input_refs=(macro.branch_id,),
+        depends_on=(macro.branch_id,),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.STRUCTURED_ONLY, branches=(macro, change)),
+        texts=("The rate changed by 11 percentage points [calculation:change].",),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, MonthlyMacroTools())).run(
+        "How did the federal funds rate change during 2024?",
+        session_id="session-reconciled-plan",
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["analysis"].route is ResearchRoute.CALCULATION
+    assert result["analysis"].required_capabilities == (
+        AgentCapability.MACRO_SERIES,
+        AgentCapability.CALCULATIONS,
+    )
+    assert "reconciled_to_valid_plan" in result["analysis"].reason_codes
+
+
+def test_plan_reconciliation_does_not_drop_explicit_chart_requirement() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Chart the federal funds rate",
+        route=ResearchRoute.API_ONLY,
+        required_capabilities=(AgentCapability.MACRO_SERIES, AgentCapability.CHART),
+        chart_requested=True,
+    )
+    tools = FakeResearchTools()
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.API_ONLY, branches=(_macro_branch(),)),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, tools)).run(
+        "Chart the federal funds rate",
+        session_id="session-missing-chart",
+    )
+
+    assert result["status"] is AgentRunStatus.FAILED
+    assert tools.calls["macro"] == 0
+    assert any(error.code == "invalid_execution_plan" for error in result["errors"])
+
+
 def test_invalid_citation_is_repaired_once() -> None:
     analysis = QuestionAnalysis(
         normalized_question="What was revenue?",
