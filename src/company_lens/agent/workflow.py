@@ -1470,10 +1470,10 @@ def _execute_calculation(branch: CalculationBranch, state: AgentState) -> Calcul
     if operation == "margin":
         return margin(_latest(series[0]), _latest(series[1]))
     if operation == "absolute_change":
-        previous, current = _two_observations(series[0])
+        previous, current = _endpoints(series[0])
         return absolute_change(current, previous)
     if operation == "percentage_change":
-        previous, current = _two_observations(series[0])
+        previous, current = _endpoints(series[0])
         return percentage_change(current, previous)
     if operation == "rolling_average":
         assert branch.window is not None

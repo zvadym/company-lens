@@ -8,6 +8,7 @@ from datetime import date
 from decimal import Decimal
 from typing import cast
 
+import pytest
 from pydantic import BaseModel
 
 from company_lens.agent import (
@@ -379,6 +380,49 @@ def test_calculation_route_generates_deterministic_evidence() -> None:
     assert any(item.evidence_id == "calculation:growth" for item in result["evidence"])
 
 
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    (("absolute_change", Decimal("11")), ("percentage_change", Decimal("1100.00"))),
+)
+def test_period_change_uses_first_and_last_observations_from_macro_series(
+    operation: str,
+    expected: Decimal,
+) -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="How did the federal funds rate change during 2024?",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.MACRO_SERIES,
+            AgentCapability.CALCULATIONS,
+        ),
+    )
+    macro = _macro_branch()
+    change = CalculationBranch(
+        branch_id="change",
+        operation=operation,
+        input_refs=(macro.branch_id,),
+        depends_on=(macro.branch_id,),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.CALCULATION, branches=(macro, change)),
+        texts=(f"The rate changed by {expected} [calculation:change].",),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, MonthlyMacroTools())).run(
+        "How did the federal funds rate change during 2024?",
+        session_id="session-period-change",
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    calculation = result["calculations"][0].result
+    assert calculation.values[0].value == expected
+    assert [item.observed_at for item in calculation.inputs] == [
+        date(2024, 1, 1),
+        date(2024, 12, 1),
+    ]
+
+
 def test_invalid_citation_is_repaired_once() -> None:
     analysis = QuestionAnalysis(
         normalized_question="What was revenue?",
@@ -571,6 +615,30 @@ def _macro_branch() -> MacroSeriesBranch:
         branch_id="macro",
         request=FredSeriesQuery(series_ids=("FEDFUNDS",)),
     )
+
+
+class MonthlyMacroTools(FakeResearchTools):
+    def query_macro_series(self, request: FredSeriesQuery) -> FredSeriesResult:
+        self.calls["macro"] += 1
+        return FredSeriesResult(
+            query=request,
+            series=(),
+            observations=tuple(
+                FredObservation(
+                    series_id="FEDFUNDS",
+                    observed_at=date(2024, month, 1),
+                    realtime_start=date(2024, month, 1),
+                    realtime_end=date(2024, month, 1),
+                    value=Decimal(month),
+                    raw_value=str(month),
+                    is_missing=False,
+                    unit="percent",
+                    frequency="Monthly",
+                    source_url="https://fred.example/FEDFUNDS",
+                )
+                for month in range(1, 13)
+            ),
+        )
 
 
 def _model_execution_plan(plan: ExecutionPlan) -> ModelExecutionPlan:
