@@ -17,6 +17,7 @@ from company_lens.agent.model import (
 )
 from company_lens.agent.persistence import (
     PersistentResearchAgent,
+    ResearchSessionManager,
     ResearchSessionRepository,
     postgres_checkpointer,
 )
@@ -115,5 +116,12 @@ def test_postgres_checkpointer_survives_agent_reconstruction_and_clear() -> None
         snapshot = reconstructed.inspect_session(session_id)
         assert snapshot is not None
         assert snapshot.state["run_id"] == result["run_id"]
-        assert reconstructed.clear_session(session_id) is True
-        assert reconstructed.inspect_session(session_id) is None
+        manager = ResearchSessionManager(
+            checkpointer=checkpointer,
+            session_repository=repository,
+        )
+        managed_snapshot = manager.inspect_session(session_id)
+        assert managed_snapshot is not None
+        assert managed_snapshot.state["run_id"] == result["run_id"]
+        assert manager.clear_session(session_id) is True
+        assert manager.inspect_session(session_id) is None

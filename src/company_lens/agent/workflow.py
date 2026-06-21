@@ -81,6 +81,7 @@ from company_lens.analytics.schemas import (
     ValidatedChartDataset,
 )
 from company_lens.retrieval.adaptive_schemas import ResolvedQuery
+from company_lens.retrieval.embeddings import DEFAULT_OPENAI_INDEX_VERSION
 
 CITATION_PATTERN = re.compile(r"\[([a-z][a-z0-9_.:-]*)\]")
 SOURCE_KINDS = {"retrieve_documents", "query_financial_facts", "query_macro_series"}
@@ -92,6 +93,8 @@ class ResearchAgentRuntime:
     tools: ResearchTools
     max_session_messages: int = 20
     max_cached_source_results: int = 20
+    retrieval_index_name: str = "default"
+    retrieval_index_version: str = DEFAULT_OPENAI_INDEX_VERSION
 
 
 class ResearchAgent:
@@ -425,7 +428,14 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
     assert output is not None
     try:
         domain_plan = _domain_execution_plan(output)
-        plan = _normalize_and_validate_plan(domain_plan, analysis, resolved, state["policy"])
+        plan = _normalize_and_validate_plan(
+            domain_plan,
+            analysis,
+            resolved,
+            state["policy"],
+            retrieval_index_name=runtime.context.retrieval_index_name,
+            retrieval_index_version=runtime.context.retrieval_index_version,
+        )
     except ValueError:
         validation_error = _validation_error("plan_request", "invalid_execution_plan")
         update["errors"] = (validation_error,)
@@ -1145,19 +1155,32 @@ def _normalize_and_validate_plan(
     analysis: QuestionAnalysis,
     resolved: ResolvedQuery,
     policy: ExecutionPolicy,
+    *,
+    retrieval_index_name: str,
+    retrieval_index_version: str,
 ) -> ExecutionPlan:
     if plan.route is not analysis.route:
         raise ValueError("Plan route must match question analysis.")
     normalized: list[ExecutionBranch] = []
     for branch in plan.branches:
+        if isinstance(branch, DocumentRetrievalBranch):
+            retrieval_request = branch.request.model_copy(
+                update={
+                    "index_name": retrieval_index_name,
+                    "index_version": retrieval_index_version,
+                }
+            )
+            branch = branch.model_copy(update={"request": retrieval_request})
         if (
             isinstance(branch, FinancialFactsBranch)
             and not branch.request.company_ids
             and not branch.request.tickers
             and len(resolved.company_ids) == 1
         ):
-            request = branch.request.model_copy(update={"company_ids": resolved.company_ids})
-            branch = branch.model_copy(update={"request": request})
+            financial_request = branch.request.model_copy(
+                update={"company_ids": resolved.company_ids}
+            )
+            branch = branch.model_copy(update={"request": financial_request})
         normalized.append(branch)
     plan = plan.model_copy(update={"branches": tuple(normalized)})
     if len([item for item in plan.branches if isinstance(item, ChartBranch)]) > 1:

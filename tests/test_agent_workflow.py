@@ -111,6 +111,7 @@ class FakeResearchTools:
     def __init__(self, *, synchronize_sources: bool = False) -> None:
         self.calls: defaultdict[str, int] = defaultdict(int)
         self.thread_ids: set[int] = set()
+        self.retrieval_requests: list[AdaptiveRetrievalRequest] = []
         self.barrier = threading.Barrier(2) if synchronize_sources else None
 
     def resolve_entities(self, query: str) -> ResolvedQuery:
@@ -119,6 +120,7 @@ class FakeResearchTools:
 
     def retrieve_documents(self, request: AdaptiveRetrievalRequest) -> AdaptiveRetrievalResponse:
         self.calls["retrieval"] += 1
+        self.retrieval_requests.append(request)
         plan = RetrievalPlan(query=request.query, strategy="summary_only")
         return AdaptiveRetrievalResponse(
             query=request.query,
@@ -274,6 +276,45 @@ def test_rag_only_route_uses_document_retrieval() -> None:
 
     assert result["status"] is AgentRunStatus.COMPLETED
     assert tools.calls["retrieval"] == 1
+
+
+def test_runtime_overrides_model_selected_retrieval_index() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="What risks did Cloudflare report?",
+        route=ResearchRoute.RAG_ONLY,
+        required_capabilities=(AgentCapability.DOCUMENTS,),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.RAG_ONLY,
+            branches=(
+                DocumentRetrievalBranch(
+                    branch_id="documents",
+                    request=AdaptiveRetrievalRequest(
+                        query="Cloudflare business risks",
+                        index_name="model-selected",
+                        index_version="model-selected.v1",
+                    ),
+                ),
+            ),
+        ),
+        texts=("Competition was a reported risk [document:cloudflare-risk].",),
+    )
+    tools = FakeResearchTools()
+
+    result = ResearchAgent(
+        runtime=ResearchAgentRuntime(
+            model,
+            tools,
+            retrieval_index_name="production",
+            retrieval_index_version="openai-index.v2",
+        )
+    ).run("What risks did Cloudflare report?", session_id="session-index")
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert tools.retrieval_requests[0].index_name == "production"
+    assert tools.retrieval_requests[0].index_version == "openai-index.v2"
 
 
 def test_api_only_route_generates_chart_from_macro_series() -> None:

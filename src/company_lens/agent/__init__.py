@@ -1,5 +1,11 @@
 """Typed research-agent contracts and model-provider interfaces."""
 
+from company_lens.agent.application import (
+    ResearchApplicationConfigurationError,
+    open_persistent_research_agent,
+    open_research_session_manager,
+    setup_research_persistence,
+)
 from company_lens.agent.model import (
     ModelMessage,
     ModelProviderError,
@@ -13,9 +19,20 @@ from company_lens.agent.openai_provider import (
     OpenAIResearchModelProvider,
     build_openai_model_provider,
 )
+from company_lens.agent.output import (
+    ResearchCitationOutput,
+    ResearchErrorOutput,
+    ResearchExecutionOutput,
+    ResearchOperationOutput,
+    ResearchRunOutput,
+    ResearchSessionOutput,
+    research_run_output,
+    research_session_output,
+)
 from company_lens.agent.persistence import (
     PersistentResearchAgent,
     ResearchSessionError,
+    ResearchSessionManager,
     ResearchSessionMetadata,
     ResearchSessionRepository,
     ResearchSessionSnapshot,
@@ -93,11 +110,19 @@ __all__ = [
     "ResearchModelProvider",
     "ResearchAgent",
     "ResearchAgentRuntime",
+    "ResearchApplicationConfigurationError",
+    "ResearchCitationOutput",
+    "ResearchErrorOutput",
+    "ResearchExecutionOutput",
+    "ResearchOperationOutput",
     "ResearchRoute",
+    "ResearchRunOutput",
     "ResearchSessionError",
     "ResearchSessionMetadata",
+    "ResearchSessionManager",
     "ResearchSessionRepository",
     "ResearchSessionSnapshot",
+    "ResearchSessionOutput",
     "ResearchToolError",
     "ResearchTools",
     "SessionMessage",
@@ -111,5 +136,10 @@ __all__ = [
     "build_persistent_research_agent",
     "build_research_graph",
     "create_initial_agent_state",
+    "open_persistent_research_agent",
+    "open_research_session_manager",
     "postgres_checkpointer",
+    "research_run_output",
+    "research_session_output",
+    "setup_research_persistence",
 ]

@@ -192,6 +192,60 @@ class ResearchSessionRepository:
             )
 
 
+class ResearchSessionManager:
+    """Manage persisted research sessions without requiring model or tool providers."""
+
+    def __init__(
+        self,
+        *,
+        checkpointer: BaseCheckpointSaver[str],
+        session_repository: ResearchSessionRepository,
+        graph: CompiledStateGraph[AgentState, ResearchAgentRuntime, AgentState, AgentState]
+        | None = None,
+    ) -> None:
+        self._checkpointer = checkpointer
+        self._repository = session_repository
+        self._graph = graph or build_research_graph(checkpointer)
+
+    def inspect_session(self, session_id: str) -> ResearchSessionSnapshot | None:
+        _validate_session_id(session_id)
+        metadata = self._repository.get(session_id)
+        if metadata is None:
+            return None
+        snapshot = self._graph.get_state(_thread_config(session_id))
+        configurable = snapshot.config.get("configurable", {})
+        checkpoint_id = configurable.get("checkpoint_id")
+        return ResearchSessionSnapshot(
+            metadata=metadata,
+            state=cast(AgentState, snapshot.values),
+            checkpoint_id=str(checkpoint_id) if checkpoint_id else None,
+            pending_nodes=tuple(snapshot.next),
+            resumable=bool(snapshot.next) and not _lease_active(metadata, datetime.now(UTC)),
+        )
+
+    def clear_session(self, session_id: str) -> bool:
+        _validate_session_id(session_id)
+        metadata = self._repository.get(session_id)
+        if metadata is None:
+            return False
+        if _lease_active(metadata, datetime.now(UTC)):
+            raise ResearchSessionError(
+                SessionErrorCode.BUSY, "Active research session cannot be cleared."
+            )
+        return self._delete_session(session_id)
+
+    def expire_sessions(self, *, now: datetime | None = None, limit: int = 100) -> int:
+        if limit < 1:
+            raise ValueError("Expiry cleanup limit must be positive.")
+        current = now or datetime.now(UTC)
+        expired = self._repository.expired_ids(now=current, limit=limit)
+        return sum(self._delete_session(session_id) for session_id in expired)
+
+    def _delete_session(self, session_id: str) -> bool:
+        self._checkpointer.delete_thread(session_id)
+        return self._repository.delete(session_id)
+
+
 class PersistentResearchAgent:
     def __init__(
         self,
@@ -212,6 +266,11 @@ class PersistentResearchAgent:
         self._lease_duration = lease_duration
         self._environment = environment
         self._graph = graph or build_research_graph(checkpointer)
+        self._session_manager = ResearchSessionManager(
+            checkpointer=checkpointer,
+            session_repository=session_repository,
+            graph=self._graph,
+        )
 
     def run(
         self,
@@ -267,38 +326,13 @@ class PersistentResearchAgent:
         return self._execute(None, session_id=session_id, run_id=run_id)
 
     def inspect_session(self, session_id: str) -> ResearchSessionSnapshot | None:
-        _validate_session_id(session_id)
-        metadata = self._repository.get(session_id)
-        if metadata is None:
-            return None
-        snapshot = self._graph.get_state(_thread_config(session_id))
-        configurable = snapshot.config.get("configurable", {})
-        checkpoint_id = configurable.get("checkpoint_id")
-        return ResearchSessionSnapshot(
-            metadata=metadata,
-            state=cast(AgentState, snapshot.values),
-            checkpoint_id=str(checkpoint_id) if checkpoint_id else None,
-            pending_nodes=tuple(snapshot.next),
-            resumable=bool(snapshot.next) and not _lease_active(metadata, datetime.now(UTC)),
-        )
+        return self._session_manager.inspect_session(session_id)
 
     def clear_session(self, session_id: str) -> bool:
-        _validate_session_id(session_id)
-        metadata = self._repository.get(session_id)
-        if metadata is None:
-            return False
-        if _lease_active(metadata, datetime.now(UTC)):
-            raise ResearchSessionError(
-                SessionErrorCode.BUSY, "Active research session cannot be cleared."
-            )
-        return self._delete_session(session_id)
+        return self._session_manager.clear_session(session_id)
 
     def expire_sessions(self, *, now: datetime | None = None, limit: int = 100) -> int:
-        if limit < 1:
-            raise ValueError("Expiry cleanup limit must be positive.")
-        current = now or datetime.now(UTC)
-        expired = self._repository.expired_ids(now=current, limit=limit)
-        return sum(self._delete_session(session_id) for session_id in expired)
+        return self._session_manager.expire_sessions(now=now, limit=limit)
 
     def _execute(
         self,
@@ -358,8 +392,7 @@ class PersistentResearchAgent:
         return metadata
 
     def _delete_session(self, session_id: str) -> bool:
-        self._checkpointer.delete_thread(session_id)
-        return self._repository.delete(session_id)
+        return self._session_manager._delete_session(session_id)
 
 
 def build_persistent_research_agent(
