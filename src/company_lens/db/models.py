@@ -239,6 +239,26 @@ class IngestionFailure(Base):
     source_document: Mapped[SourceDocument | None] = relationship()
 
 
+class ResearchSession(Base):
+    __tablename__ = "research_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    active_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    last_accessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class SourceDocument(Base, TimestampMixin):
     __tablename__ = "source_documents"
     __table_args__ = (

@@ -427,27 +427,85 @@ repair_or_abstain
 finalize_response
 ```
 
-### Planned agent state
+### Typed agent foundation
 
 ```python
 class AgentState(TypedDict):
-    messages: list
+    run_id: UUID
+    session_id: str
     question: str
-    intent: str
-    resolved_entities: dict
-    retrieval_plan: dict | None
-    execution_plan: list[dict]
-    retrieved_documents: list[dict]
-    tool_results: list[dict]
-    calculations: list[dict]
-    evidence: list[dict]
-    chart_spec: dict | None
-    claims: list[dict]
-    citations: list[dict]
-    validation_errors: list[str]
-    retry_count: int
-    final_answer: str | None
+    policy: ExecutionPolicy
+    status: AgentRunStatus
+    messages: tuple[SessionMessage, ...]
+    analysis: QuestionAnalysis
+    execution_plan: ExecutionPlan
+    errors: tuple[AgentError, ...]
+    trajectory: tuple[TrajectoryEvent, ...]
 ```
+
+The provider-neutral `ResearchModelProvider` separates structured parsing/planning from answer
+generation. The OpenAI implementation uses stateless Responses API calls (`store=False`),
+`gpt-5.4-mini` for planning, and `gpt-5.5` for answer generation.
+
+The executable stateless LangGraph workflow now validates model-created plans, fans independent
+retrieval, financial-fact, and FRED branches out in parallel, runs deterministic calculations and
+chart shaping, merges typed evidence, generates a grounded answer, and structurally validates its
+citation IDs. Data access is isolated behind a typed `ResearchTools` port; its SQL adapter opens a
+separate SQLAlchemy session for every concurrent branch. The architecture, production/test call
+flows, and extension path are documented in
+[ADR 0004](docs/architecture/adr-0004-langgraph-research-tools.md).
+
+Checkpoint persistence, session-scoped follow-up memory, and resume/expiry controls are provided by
+the persistent research-session layer. It stores LangGraph checkpoints in
+PostgreSQL, uses exact typed-request matching for safe source-result reuse, and supports inspect,
+resume, hard clear, and sliding expiry. Stateless execution remains available for tests and one-shot
+use cases. See [ADR 0005](docs/architecture/adr-0005-persistent-research-sessions.md).
+
+### Persistent research CLI
+
+Apply the application migration, then explicitly initialize the LangGraph-owned checkpoint tables:
+
+```bash
+alembic upgrade head
+company-lens research setup --pretty
+```
+
+The production CLI uses OpenAI for planning, answer generation, and query embeddings. It uses the
+configured OpenAI embedding index and stores conversation checkpoints in PostgreSQL.
+
+```bash
+# Structured facts plus a deterministic calculation
+company-lens research run \
+  "Calculate Cloudflare revenue growth from 2024 to 2025" \
+  --session-id net-demo \
+  --pretty
+
+# Follow-up reuses session context and exact source requests when possible
+company-lens research run \
+  "Now explain what drove that change from the filings" \
+  --session-id net-demo \
+  --include-trajectory \
+  --pretty
+
+# Hybrid structured/document question with a chart request
+company-lens research run \
+  "Compare Cloudflare revenue with management commentary and chart the trend" \
+  --pretty
+
+# Inspect, resume, or remove persisted state
+company-lens research inspect net-demo --pretty
+company-lens research resume net-demo --pretty
+company-lens research clear net-demo --yes --pretty
+company-lens research expire --limit 100 --pretty
+```
+
+Every command returns JSON. Run/resume output contains the answer, enriched citations, optional
+chart specification, safe errors, branch summary, and optionally the safe node trajectory. An
+omitted session ID is generated and returned in the response. `completed`, `partial`, and
+`abstained` are successful CLI outcomes; `failed` returns exit code 1.
+
+Full claim-level citation validation remains in #13. API/SSE delivery and observability remain in
+#14 and #16 respectively.
 
 Agent orchestration is tracked in [#12](https://github.com/zvadym/company-lens/issues/12).
 
@@ -903,6 +961,9 @@ python -m pip install -e ".[dev]"
 # Apply database migrations
 alembic upgrade head
 
+# Initialize persistent LangGraph checkpoints
+company-lens research setup --pretty
+
 # Run the API without Docker
 make run-api
 
@@ -915,16 +976,14 @@ Environment variables:
 COMPANY_LENS_ENVIRONMENT=local
 COMPANY_LENS_LOG_LEVEL=INFO
 COMPANY_LENS_DATABASE_URL=postgresql+psycopg://company_lens:company_lens@localhost:5432/company_lens
-LLM_PROVIDER=openai
-LLM_MODEL=
-EMBEDDING_MODEL=
 OPENAI_API_KEY=
 FRED_API_KEY=
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
-LANGFUSE_HOST=
-LANGCHAIN_API_KEY=
-LANGCHAIN_PROJECT=company-lens
+COMPANY_LENS_OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+COMPANY_LENS_OPENAI_EMBEDDING_DIMENSIONS=384
+COMPANY_LENS_OPENAI_PLANNING_MODEL=gpt-5.4-mini
+COMPANY_LENS_OPENAI_ANSWER_MODEL=gpt-5.5
+COMPANY_LENS_AGENT_RETRIEVAL_INDEX_NAME=default
+COMPANY_LENS_AGENT_RETRIEVAL_INDEX_VERSION=openai-text-embedding-3-small-384.v1
 ```
 
 FRED ingestion, cached CLI queries, deterministic calculations, and chart validation are

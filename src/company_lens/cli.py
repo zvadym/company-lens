@@ -2,15 +2,32 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import uuid
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 from typing import cast
 
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from company_lens.agent.application import (
+    ResearchApplicationConfigurationError,
+    open_persistent_research_agent,
+    open_research_session_manager,
+    setup_research_persistence,
+)
+from company_lens.agent.output import (
+    ResearchErrorDetail,
+    ResearchErrorOutput,
+    ResearchOperationOutput,
+    research_run_output,
+    research_session_output,
+)
+from company_lens.agent.persistence import ResearchSessionError, SessionErrorCode
+from company_lens.agent.schemas import AgentRunStatus, ExecutionPolicy
 from company_lens.config import Settings, get_settings
 from company_lens.db.models import CompanyTicker, DocumentKind, IngestionFailure
 from company_lens.db.session import build_session_factory
@@ -310,6 +327,69 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     benchmark_parser.add_argument("--output-json", type=Path, default=None)
 
+    research_parser = subparsers.add_parser(
+        "research",
+        help="Run and manage persistent LangGraph research sessions.",
+    )
+    research_subparsers = research_parser.add_subparsers(
+        dest="research_command",
+        required=True,
+    )
+    research_setup_parser = research_subparsers.add_parser(
+        "setup",
+        help="Initialize LangGraph checkpoint tables.",
+    )
+    _add_json_options(research_setup_parser)
+
+    research_run_parser = research_subparsers.add_parser(
+        "run",
+        help="Run a new research turn.",
+    )
+    research_run_parser.add_argument("question", help="Natural-language research question.")
+    research_run_parser.add_argument(
+        "--session-id",
+        default=None,
+        help="Session identifier. A UUID is generated when omitted.",
+    )
+    research_run_parser.add_argument("--max-tool-calls", type=int, default=10)
+    research_run_parser.add_argument("--max-retries-per-node", type=int, default=2)
+    research_run_parser.add_argument("--max-repair-attempts", type=int, default=1)
+    _add_research_output_options(research_run_parser)
+
+    research_resume_parser = research_subparsers.add_parser(
+        "resume",
+        help="Resume an unfinished research run.",
+    )
+    research_resume_parser.add_argument("session_id")
+    _add_research_output_options(research_resume_parser)
+
+    research_inspect_parser = research_subparsers.add_parser(
+        "inspect",
+        help="Inspect the latest safe session state.",
+    )
+    research_inspect_parser.add_argument("session_id")
+    _add_research_output_options(research_inspect_parser)
+
+    research_clear_parser = research_subparsers.add_parser(
+        "clear",
+        help="Hard-delete a research session and its checkpoints.",
+    )
+    research_clear_parser.add_argument("session_id")
+    research_clear_parser.add_argument(
+        "--yes",
+        action="store_true",
+        required=True,
+        help="Confirm destructive deletion.",
+    )
+    _add_json_options(research_clear_parser)
+
+    research_expire_parser = research_subparsers.add_parser(
+        "expire",
+        help="Delete expired inactive research sessions.",
+    )
+    research_expire_parser.add_argument("--limit", type=int, default=100)
+    _add_json_options(research_expire_parser)
+
     args = parser.parse_args(argv)
     if args.command == "ingest-sec":
         return _run_ingest_sec(args)
@@ -335,8 +415,130 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_adaptive_retrieve(args)
     if args.command == "benchmark-retrieval":
         return _run_benchmark_retrieval(args)
+    if args.command == "research":
+        return _run_research(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
+
+
+def _add_json_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--pretty", action="store_true", help="Indent JSON output.")
+
+
+def _add_research_output_options(parser: argparse.ArgumentParser) -> None:
+    _add_json_options(parser)
+    parser.add_argument(
+        "--include-trajectory",
+        action="store_true",
+        help="Include the safe node execution timeline.",
+    )
+
+
+def _run_research(args: argparse.Namespace) -> int:
+    try:
+        settings = get_settings()
+        if args.research_command == "setup":
+            setup_research_persistence(settings)
+            _print_model(ResearchOperationOutput(operation="setup"), pretty=args.pretty)
+            return 0
+        if args.research_command == "run":
+            policy = ExecutionPolicy(
+                max_tool_calls=args.max_tool_calls,
+                max_retries_per_node=args.max_retries_per_node,
+                max_repair_attempts=args.max_repair_attempts,
+            )
+            session_id = args.session_id or str(uuid.uuid4())
+            with open_persistent_research_agent(settings) as agent:
+                state = agent.run(args.question, session_id=session_id, policy=policy)
+            _print_model(
+                research_run_output(state, include_trajectory=args.include_trajectory),
+                pretty=args.pretty,
+            )
+            return 1 if state["status"] is AgentRunStatus.FAILED else 0
+        if args.research_command == "resume":
+            with open_persistent_research_agent(settings) as agent:
+                state = agent.resume(args.session_id)
+            _print_model(
+                research_run_output(state, include_trajectory=args.include_trajectory),
+                pretty=args.pretty,
+            )
+            return 1 if state["status"] is AgentRunStatus.FAILED else 0
+        if args.research_command == "inspect":
+            with open_research_session_manager(settings) as manager:
+                snapshot = manager.inspect_session(args.session_id)
+            if snapshot is None:
+                raise ResearchSessionError(
+                    SessionErrorCode.NOT_FOUND,
+                    "Research session does not exist.",
+                )
+            _print_model(
+                research_session_output(snapshot, include_trajectory=args.include_trajectory),
+                pretty=args.pretty,
+            )
+            return 0
+        if args.research_command == "clear":
+            with open_research_session_manager(settings) as manager:
+                deleted = manager.clear_session(args.session_id)
+            _print_model(
+                ResearchOperationOutput(
+                    operation="clear",
+                    session_id=args.session_id,
+                    deleted=deleted,
+                ),
+                pretty=args.pretty,
+            )
+            return 0
+        if args.research_command == "expire":
+            with open_research_session_manager(settings) as manager:
+                expired = manager.expire_sessions(limit=args.limit)
+            _print_model(
+                ResearchOperationOutput(operation="expire", expired=expired),
+                pretty=args.pretty,
+            )
+            return 0
+        raise ValueError("Unknown research command.")
+    except KeyboardInterrupt:
+        _print_research_error(
+            "interrupted",
+            "Research command was interrupted.",
+            pretty=args.pretty,
+        )
+        return 130
+    except ResearchSessionError as exc:
+        _print_research_error(exc.code.value, str(exc), pretty=args.pretty)
+        return 1
+    except ResearchApplicationConfigurationError as exc:
+        _print_research_error("research_configuration_failed", str(exc), pretty=args.pretty)
+        return 1
+    except ValueError:
+        _print_research_error(
+            "invalid_research_request",
+            "Research command configuration or input is invalid.",
+            pretty=args.pretty,
+        )
+        return 1
+    except Exception:
+        _print_research_error(
+            "research_operation_failed",
+            "Research command failed.",
+            pretty=args.pretty,
+        )
+        return 1
+
+
+def _print_model(model: BaseModel, *, pretty: bool, stderr: bool = False) -> None:
+    print(
+        model.model_dump_json(indent=2 if pretty else None),
+        file=sys.stderr if stderr else sys.stdout,
+    )
+
+
+def _print_research_error(code: str, message: str, *, pretty: bool) -> None:
+    _print_model(
+        ResearchErrorOutput(error=ResearchErrorDetail(code=code, message=message)),
+        pretty=pretty,
+        stderr=True,
+    )
 
 
 def _run_ingest_sec(args: argparse.Namespace) -> int:
