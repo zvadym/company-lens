@@ -94,34 +94,38 @@ def test_postgres_checkpointer_survives_agent_reconstruction_and_clear() -> None
     database_url = os.environ["COMPANY_LENS_TEST_DATABASE_URL"]
     engine = create_engine(database_url)
     table = cast(Table, ResearchSession.__table__)
-    ResearchSession.metadata.create_all(engine, tables=[table])
-    repository = ResearchSessionRepository(build_session_factory(database_url))
-    session_id = f"postgres-{uuid.uuid4()}"
-    runtime = ResearchAgentRuntime(UnsupportedModel(), NoDataTools())
+    try:
+        ResearchSession.metadata.create_all(engine, tables=[table])
+        repository = ResearchSessionRepository(build_session_factory(database_url))
+        session_id = f"postgres-{uuid.uuid4()}"
+        runtime = ResearchAgentRuntime(UnsupportedModel(), NoDataTools())
 
-    with postgres_checkpointer(database_url, setup=True) as checkpointer:
-        first_agent = PersistentResearchAgent(
-            runtime=runtime,
-            checkpointer=checkpointer,
-            session_repository=repository,
-        )
-        result = first_agent.run("Write a poem", session_id=session_id)
-        assert result["status"] is AgentRunStatus.ABSTAINED
+        with postgres_checkpointer(database_url, setup=True) as checkpointer:
+            first_agent = PersistentResearchAgent(
+                runtime=runtime,
+                checkpointer=checkpointer,
+                session_repository=repository,
+            )
+            result = first_agent.run("Write a poem", session_id=session_id)
+            assert result["status"] is AgentRunStatus.ABSTAINED
 
-        reconstructed = PersistentResearchAgent(
-            runtime=runtime,
-            checkpointer=checkpointer,
-            session_repository=repository,
-        )
-        snapshot = reconstructed.inspect_session(session_id)
-        assert snapshot is not None
-        assert snapshot.state["run_id"] == result["run_id"]
-        manager = ResearchSessionManager(
-            checkpointer=checkpointer,
-            session_repository=repository,
-        )
-        managed_snapshot = manager.inspect_session(session_id)
-        assert managed_snapshot is not None
-        assert managed_snapshot.state["run_id"] == result["run_id"]
-        assert manager.clear_session(session_id) is True
-        assert manager.inspect_session(session_id) is None
+            reconstructed = PersistentResearchAgent(
+                runtime=runtime,
+                checkpointer=checkpointer,
+                session_repository=repository,
+            )
+            snapshot = reconstructed.inspect_session(session_id)
+            assert snapshot is not None
+            assert snapshot.state["run_id"] == result["run_id"]
+            manager = ResearchSessionManager(
+                checkpointer=checkpointer,
+                session_repository=repository,
+            )
+            managed_snapshot = manager.inspect_session(session_id)
+            assert managed_snapshot is not None
+            assert managed_snapshot.state["run_id"] == result["run_id"]
+            assert manager.clear_session(session_id) is True
+            assert manager.inspect_session(session_id) is None
+    finally:
+        ResearchSession.metadata.drop_all(engine, tables=[table])
+        engine.dispose()
