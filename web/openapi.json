@@ -1,0 +1,1568 @@
+{
+  "components": {
+    "schemas": {
+      "AgentError": {
+        "properties": {
+          "attempt": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "category": {
+            "$ref": "#/components/schemas/AgentErrorCategory"
+          },
+          "code": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "node": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/AgentErrorSeverity"
+          }
+        },
+        "required": [
+          "category",
+          "severity",
+          "code",
+          "message"
+        ],
+        "title": "AgentError",
+        "type": "object"
+      },
+      "AgentErrorCategory": {
+        "enum": [
+          "validation",
+          "provider_timeout",
+          "provider_rate_limit",
+          "provider_connection",
+          "provider_auth",
+          "provider_service",
+          "provider_refusal",
+          "provider_response",
+          "tool",
+          "budget",
+          "internal"
+        ],
+        "title": "AgentErrorCategory",
+        "type": "string"
+      },
+      "AgentErrorSeverity": {
+        "enum": [
+          "recoverable",
+          "terminal"
+        ],
+        "title": "AgentErrorSeverity",
+        "type": "string"
+      },
+      "AgentRunStatus": {
+        "enum": [
+          "pending",
+          "running",
+          "completed",
+          "partial",
+          "abstained",
+          "failed"
+        ],
+        "title": "AgentRunStatus",
+        "type": "string"
+      },
+      "BranchOutcome": {
+        "properties": {
+          "attempts": {
+            "minimum": 0.0,
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "branch_id": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "minLength": 1,
+            "title": "Kind",
+            "type": "string"
+          },
+          "optional": {
+            "default": false,
+            "title": "Optional",
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BranchStatus"
+          }
+        },
+        "required": [
+          "branch_id",
+          "kind",
+          "status",
+          "attempts"
+        ],
+        "title": "BranchOutcome",
+        "type": "object"
+      },
+      "BranchStatus": {
+        "enum": [
+          "completed",
+          "failed",
+          "skipped"
+        ],
+        "title": "BranchStatus",
+        "type": "string"
+      },
+      "ChartPoint": {
+        "properties": {
+          "source_urls": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Urls",
+            "type": "array"
+          },
+          "values": {
+            "additionalProperties": {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "object"
+          },
+          "x": {
+            "format": "date",
+            "title": "X",
+            "type": "string"
+          }
+        },
+        "required": [
+          "x",
+          "values",
+          "source_urls"
+        ],
+        "title": "ChartPoint",
+        "type": "object"
+      },
+      "ChartSeries": {
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "unit"
+        ],
+        "title": "ChartSeries",
+        "type": "object"
+      },
+      "ChartSpecification": {
+        "properties": {
+          "chart_type": {
+            "title": "Chart Type",
+            "type": "string"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ChartPoint"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "schema_version": {
+            "default": "company-lens.chart.v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/ChartSeries"
+            },
+            "title": "Series",
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "x_label": {
+            "title": "X Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chart_type",
+          "title",
+          "x_label",
+          "series",
+          "data",
+          "sources"
+        ],
+        "title": "ChartSpecification",
+        "type": "object"
+      },
+      "CompaniesResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyOutput"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "CompaniesResponse",
+        "type": "object"
+      },
+      "CompanyOutput": {
+        "properties": {
+          "cik": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cik"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "exchange": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "legal_name": {
+            "title": "Legal Name",
+            "type": "string"
+          },
+          "primary_ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Ticker"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "legal_name"
+        ],
+        "title": "CompanyOutput",
+        "type": "object"
+      },
+      "ComponentHealth": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ComponentHealth",
+        "type": "object"
+      },
+      "EvidenceKind": {
+        "enum": [
+          "document",
+          "financial_fact",
+          "macro_observation",
+          "calculation"
+        ],
+        "title": "EvidenceKind",
+        "type": "string"
+      },
+      "ExecutionPolicy": {
+        "properties": {
+          "max_repair_attempts": {
+            "default": 1,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Max Repair Attempts",
+            "type": "integer"
+          },
+          "max_retries_per_node": {
+            "default": 2,
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Max Retries Per Node",
+            "type": "integer"
+          },
+          "max_tool_calls": {
+            "default": 10,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max Tool Calls",
+            "type": "integer"
+          }
+        },
+        "title": "ExecutionPolicy",
+        "type": "object"
+      },
+      "FeedbackRequest": {
+        "properties": {
+          "actor_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Id"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "rating": {
+            "enum": [
+              "positive",
+              "negative"
+            ],
+            "title": "Rating",
+            "type": "string"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "rating"
+        ],
+        "title": "FeedbackRequest",
+        "type": "object"
+      },
+      "FeedbackResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "feedback_id": {
+            "format": "uuid",
+            "title": "Feedback Id",
+            "type": "string"
+          },
+          "rating": {
+            "enum": [
+              "positive",
+              "negative"
+            ],
+            "title": "Rating",
+            "type": "string"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "feedback_id",
+          "run_id",
+          "rating",
+          "created_at"
+        ],
+        "title": "FeedbackResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "correlation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correlation Id"
+          },
+          "database": {
+            "$ref": "#/components/schemas/ComponentHealth"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "service",
+          "version",
+          "environment",
+          "correlation_id",
+          "database"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      },
+      "PublicErrorDetail": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "correlation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correlation Id"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "PublicErrorDetail",
+        "type": "object"
+      },
+      "PublicErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/PublicErrorDetail"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "PublicErrorResponse",
+        "type": "object"
+      },
+      "ResearchAccepted": {
+        "properties": {
+          "events_url": {
+            "title": "Events Url",
+            "type": "string"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "run_url": {
+            "title": "Run Url",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "sources_url": {
+            "title": "Sources Url",
+            "type": "string"
+          },
+          "status": {
+            "const": "queued",
+            "default": "queued",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "session_id",
+          "run_url",
+          "events_url",
+          "sources_url"
+        ],
+        "title": "ResearchAccepted",
+        "type": "object"
+      },
+      "ResearchCitationOutput": {
+        "properties": {
+          "claim_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Claim Ids",
+            "type": "array"
+          },
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EvidenceKind"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "lineage_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lineage Refs",
+            "type": "array"
+          },
+          "source_urls": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Urls",
+            "type": "array"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidence_id",
+          "label",
+          "kind",
+          "summary",
+          "source_urls",
+          "lineage_refs"
+        ],
+        "title": "ResearchCitationOutput",
+        "type": "object"
+      },
+      "ResearchExecutionOutput": {
+        "properties": {
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/BranchOutcome"
+            },
+            "title": "Branches",
+            "type": "array"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/AgentError"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "repair_attempts": {
+            "title": "Repair Attempts",
+            "type": "integer"
+          },
+          "tool_calls_used": {
+            "title": "Tool Calls Used",
+            "type": "integer"
+          },
+          "trajectory": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/TrajectoryEvent"
+            },
+            "title": "Trajectory",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tool_calls_used",
+          "repair_attempts",
+          "branches",
+          "errors"
+        ],
+        "title": "ResearchExecutionOutput",
+        "type": "object"
+      },
+      "ResearchResult": {
+        "properties": {
+          "agent_status": {
+            "$ref": "#/components/schemas/AgentRunStatus"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "chart": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartSpecification"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "citations": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ResearchCitationOutput"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/ResearchExecutionOutput"
+          },
+          "sources": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SourcePreview"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AgentError"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "agent_status",
+          "execution"
+        ],
+        "title": "ResearchResult",
+        "type": "object"
+      },
+      "ResearchRunListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchRunResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "ResearchRunListResponse",
+        "type": "object"
+      },
+      "ResearchRunResponse": {
+        "properties": {
+          "cancellation_requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancellation Requested At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
+            "type": "string"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "queued_at": {
+            "format": "date-time",
+            "title": "Queued At",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ResearchRunStatus"
+          }
+        },
+        "required": [
+          "run_id",
+          "session_id",
+          "status",
+          "question",
+          "queued_at",
+          "deadline_at"
+        ],
+        "title": "ResearchRunResponse",
+        "type": "object"
+      },
+      "ResearchRunStatus": {
+        "enum": [
+          "queued",
+          "running",
+          "cancellation_requested",
+          "completed",
+          "partial",
+          "abstained",
+          "failed",
+          "cancelled",
+          "timed_out"
+        ],
+        "title": "ResearchRunStatus",
+        "type": "string"
+      },
+      "ResearchSourcesResponse": {
+        "properties": {
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "sources": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SourcePreview"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "ResearchSourcesResponse",
+        "type": "object"
+      },
+      "SourcePreview": {
+        "properties": {
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "exact_url": {
+            "title": "Exact Url",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EvidenceKind"
+          },
+          "page_end": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page End"
+          },
+          "page_start": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Start"
+          },
+          "section_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section Id"
+          },
+          "source_url": {
+            "title": "Source Url",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SourceStatus"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidence_id",
+          "title",
+          "kind",
+          "source_url",
+          "exact_url",
+          "status"
+        ],
+        "title": "SourcePreview",
+        "type": "object"
+      },
+      "SourceStatus": {
+        "enum": [
+          "available",
+          "inaccessible",
+          "invalid",
+          "unchecked"
+        ],
+        "title": "SourceStatus",
+        "type": "string"
+      },
+      "StartResearchRequest": {
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/ExecutionPolicy"
+          },
+          "question": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "StartResearchRequest",
+        "type": "object"
+      },
+      "TrajectoryEvent": {
+        "properties": {
+          "details": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Details",
+            "type": "object"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "node": {
+            "minLength": 1,
+            "title": "Node",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TrajectoryStatus"
+          },
+          "summary": {
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node",
+          "status",
+          "occurred_at",
+          "summary"
+        ],
+        "title": "TrajectoryEvent",
+        "type": "object"
+      },
+      "TrajectoryStatus": {
+        "enum": [
+          "started",
+          "completed",
+          "failed",
+          "skipped"
+        ],
+        "title": "TrajectoryStatus",
+        "type": "string"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "CompanyLens API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/companies": {
+      "get": {
+        "operationId": "companies_api_v1_companies_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompaniesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Companies",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/api/v1/feedback": {
+      "post": {
+        "operationId": "feedback_api_v1_feedback_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Feedback",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "operationId": "health_api_v1_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/v1/research": {
+      "get": {
+        "operationId": "list_research_runs_api_v1_research_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRunListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Research Runs",
+        "tags": [
+          "research"
+        ]
+      },
+      "post": {
+        "operationId": "start_research_api_v1_research_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartResearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Start Research",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/v1/research/{run_id}": {
+      "delete": {
+        "operationId": "cancel_research_api_v1_research__run_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Research",
+        "tags": [
+          "research"
+        ]
+      },
+      "get": {
+        "operationId": "get_research_api_v1_research__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Research",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/v1/research/{run_id}/events": {
+      "get": {
+        "operationId": "stream_events_api_v1_research__run_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_id",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "Versioned research execution event stream."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Events",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/v1/research/{run_id}/sources": {
+      "get": {
+        "operationId": "get_sources_api_v1_research__run_id__sources_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchSourcesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Sources",
+        "tags": [
+          "research"
+        ]
+      }
+    }
+  }
+}

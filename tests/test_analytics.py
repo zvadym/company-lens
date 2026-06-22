@@ -17,6 +17,7 @@ from company_lens.analytics.calculations import (
     quarter_over_quarter_growth,
     rolling_average,
     year_over_year_growth,
+    year_over_year_growth_series,
 )
 from company_lens.analytics.charts import generate_chart_specification
 from company_lens.analytics.schemas import (
@@ -82,6 +83,35 @@ def test_rolling_average_and_normalised_index_retain_inputs_and_sources() -> Non
     assert average.inputs == inputs
     assert average.sources == (SOURCE,)
     assert average.formula == "sum(window[2]) / 2"
+
+
+def test_year_over_year_growth_series_returns_every_dated_pair() -> None:
+    inputs = tuple(
+        observation(
+            str(year),
+            value,
+            observed_at=date(year, 12, 31),
+        )
+        for year, value in zip(
+            range(2022, 2026),
+            ("975241000", "1296745000", "1669626000", "2167937000"),
+            strict=True,
+        )
+    )
+
+    result = year_over_year_growth_series(inputs)
+
+    assert [point.observed_at for point in result.values] == [
+        date(2023, 12, 31),
+        date(2024, 12, 31),
+        date(2025, 12, 31),
+    ]
+    assert [point.value.quantize(Decimal("0.1")) for point in result.values] == [
+        Decimal("33.0"),
+        Decimal("28.8"),
+        Decimal("29.8"),
+    ]
+    assert result.inputs == inputs
 
 
 def test_correlation_is_decimal_aligned_and_warns_against_causation() -> None:

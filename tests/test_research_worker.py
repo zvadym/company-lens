@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -40,13 +42,37 @@ class FakeAgent:
         del question, policy, allow_run_takeover
         observer(
             AgentExecutionEvent(
+                event_key="node:finalize:test",
                 event_type="node.status",
-                data={"node": "finalize_response", "status": "completed"},
+                data={
+                    "step_id": "finalize-test",
+                    "node": "finalize_response",
+                    "branch_id": None,
+                    "status": "completed",
+                    "attempt": 1,
+                    "summary": "Research response finalized.",
+                    "duration_ms": 1,
+                },
             )
         )
         assert control() is None
         if self.fail:
             raise RuntimeError("private stack detail")
+        return _completed_state(session_id, run_id)
+
+
+class BlockingAgent(FakeAgent):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def run(self, *args: object, **kwargs: object) -> AgentState:
+        self.started.set()
+        assert self.release.wait(timeout=2)
+        session_id = str(kwargs["session_id"])
+        run_id = kwargs["run_id"]
+        assert isinstance(run_id, uuid.UUID)
         return _completed_state(session_id, run_id)
 
 
@@ -76,6 +102,7 @@ def test_worker_persists_validated_answer_events_and_result() -> None:
         "answer.token",
         "run.terminal",
     ]
+    assert all(event.schema_version == "2" for event in events)
     assert "UNVALIDATED" not in "".join(str(event.data) for event in events)
 
 
@@ -133,6 +160,33 @@ def test_claim_uses_worker_lease_for_recovery() -> None:
     )
     assert recovered is not None
     assert recovered.id == first.id
+
+
+def test_worker_renews_lease_while_agent_call_is_blocked() -> None:
+    repository = _repository()
+    run = repository.enqueue(
+        StartResearchRequest(question="Slow model call"),
+        session_id="heartbeat-session",
+        timeout=timedelta(minutes=10),
+    )
+    agent = BlockingAgent()
+    worker = ResearchWorker(
+        repository=repository,
+        agent=agent,  # type: ignore[arg-type]
+        worker_id="worker-heartbeat",
+        lease=timedelta(seconds=0.15),
+    )
+    thread = threading.Thread(target=worker.run_once)
+    thread.start()
+    assert agent.started.wait(timeout=1)
+
+    time.sleep(0.3)
+    assert repository.claim("worker-competitor", lease=timedelta(seconds=1)) is None
+
+    agent.release.set()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert repository.response(run.id).status is ResearchRunStatus.COMPLETED
 
 
 def _repository() -> ResearchRunRepository:

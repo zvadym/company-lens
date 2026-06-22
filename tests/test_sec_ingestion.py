@@ -132,6 +132,9 @@ def test_sec_ingestion_is_idempotent_and_persists_sections(
     assert len(companies) == 1
     assert companies[0].display_name == "Cloudflare, Inc."
     assert len(filings) == 1
+    assert filings[0].period_end == date(2025, 12, 31)
+    assert filings[0].fiscal_year == 2025
+    assert filings[0].fiscal_period == "FY"
     assert len(artifacts) == 2
     assert {section.section_code for section in sections} >= {
         "business",

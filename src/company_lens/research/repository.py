@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Literal, cast
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -20,6 +20,7 @@ from company_lens.db.models import (
     ResearchRun,
 )
 from company_lens.research.schemas import (
+    EVENT_DATA_V2_MODELS,
     CompaniesResponse,
     CompanyOutput,
     FeedbackRequest,
@@ -27,6 +28,7 @@ from company_lens.research.schemas import (
     ResearchEventEnvelope,
     ResearchEventType,
     ResearchResult,
+    ResearchRunListResponse,
     ResearchRunResponse,
     ResearchRunStatus,
     ResearchSourcesResponse,
@@ -110,6 +112,25 @@ class ResearchRunRepository:
 
     def response(self, run_id: uuid.UUID) -> ResearchRunResponse:
         return _run_response(self.require(run_id))
+
+    def list_session_runs(self, session_id: str, *, limit: int) -> ResearchRunListResponse:
+        with self._session_factory() as session:
+            total = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ResearchRun)
+                    .where(ResearchRun.session_id == session_id)
+                )
+                or 0
+            )
+            rows = session.scalars(
+                select(ResearchRun)
+                .where(ResearchRun.session_id == session_id)
+                .order_by(ResearchRun.queued_at.desc(), ResearchRun.id.desc())
+                .limit(limit)
+            ).all()
+        items = tuple(_run_response(row) for row in reversed(rows))
+        return ResearchRunListResponse(items=items, total=total)
 
     def sources(self, run_id: uuid.UUID) -> ResearchSourcesResponse:
         run = self.require(run_id)
@@ -227,7 +248,7 @@ class ResearchRunRepository:
         self,
         run_id: uuid.UUID,
         event_type: ResearchEventType,
-        payload: dict[str, Any],
+        payload: dict[str, object],
         *,
         event_key: str | None = None,
     ) -> None:
@@ -423,8 +444,9 @@ class ResearchRunRepository:
         run_id: uuid.UUID,
         event_key: str,
         event_type: ResearchEventType,
-        payload: dict[str, Any],
+        payload: dict[str, object],
         occurred_at: datetime,
+        schema_version: Literal["1", "2"] = "2",
     ) -> None:
         exists = session.scalar(
             select(ResearchEvent.id).where(
@@ -432,12 +454,17 @@ class ResearchRunRepository:
             )
         )
         if exists is None:
+            if schema_version == "2":
+                model = EVENT_DATA_V2_MODELS.get(event_type)
+                if model is None:
+                    raise ValueError(f"Unsupported version 2 event type: {event_type}")
+                payload = model.model_validate(payload).model_dump(mode="json")
             session.add(
                 ResearchEvent(
                     run_id=run_id,
                     event_key=event_key,
                     event_type=event_type,
-                    schema_version="1",
+                    schema_version=schema_version,
                     payload_json=payload,
                     created_at=occurred_at,
                 )
@@ -480,7 +507,7 @@ def _run_response(run: ResearchRun) -> ResearchRunResponse:
 def _event_envelope(row: ResearchEvent) -> ResearchEventEnvelope:
     return ResearchEventEnvelope(
         id=row.id,
-        schema_version="1",
+        schema_version=cast(Literal["1", "2"], row.schema_version),
         run_id=row.run_id,
         type=row.event_type,  # type: ignore[arg-type]
         occurred_at=_aware(row.created_at),

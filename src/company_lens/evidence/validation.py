@@ -42,6 +42,10 @@ CORRELATION_QUALIFIER_PATTERN = re.compile(
     r"\b(?:correlat(?:ion|ed)|associat(?:ion|ed)|not causation|does not imply causation)\b",
     re.IGNORECASE,
 )
+FILING_FORM_PATTERN = re.compile(
+    r"\b(?:10-K|10-Q|8-K|20-F|40-F|6-K|S-1)(?:/A)?\b",
+    re.IGNORECASE,
+)
 
 
 class AnswerValidator:
@@ -269,6 +273,12 @@ def _unsupported_numbers(
     for item in evidence:
         if item.metadata.value is not None:
             supported.add(item.metadata.value)
+        if item.metadata.formula is not None:
+            supported.update(
+                parsed
+                for value in NUMBER_PATTERN.findall(item.metadata.formula)
+                if (parsed := _decimal(value)) is not None
+            )
         supported.update(
             parsed
             for value in NUMBER_PATTERN.findall(item.summary)
@@ -296,7 +306,8 @@ def _claim_numbers(
     claim_years: set[Decimal],
 ) -> tuple[tuple[Decimal, Decimal], ...]:
     result: list[tuple[Decimal, Decimal]] = []
-    for match in SCALED_NUMBER_PATTERN.finditer(claim_text):
+    numeric_text = FILING_FORM_PATTERN.sub(" ", claim_text)
+    for match in SCALED_NUMBER_PATTERN.finditer(numeric_text):
         raw = match.group("number")
         parsed = _decimal(raw)
         if parsed is None:

@@ -343,6 +343,9 @@ class SecIngestionService:
                 filing_form=filing_form,
                 filing_date=filing_date,
                 report_date=report_date,
+                period_end=report_date,
+                fiscal_year=report_date.year if report_date is not None else None,
+                fiscal_period=_fiscal_period(filing_form),
                 metadata_json=metadata,
             )
             self._session.add(document)
@@ -355,6 +358,9 @@ class SecIngestionService:
             document.filing_form = filing_form
             document.filing_date = filing_date
             document.report_date = report_date
+            document.period_end = report_date
+            document.fiscal_year = report_date.year if report_date is not None else None
+            document.fiscal_period = _fiscal_period(filing_form)
             document.metadata_json = metadata
         self._session.commit()
         return document
@@ -645,3 +651,10 @@ def _artifact_kind_for_mime_type(mime_type: str | None) -> ArtifactKind:
     if mime_type and "text" in mime_type.lower():
         return ArtifactKind.RAW_TEXT
     return ArtifactKind.OTHER
+
+
+def _fiscal_period(filing_form: str | None) -> str | None:
+    if filing_form is None:
+        return None
+    normalized = filing_form.upper().removesuffix("/A")
+    return "FY" if normalized in {"10-K", "20-F", "40-F"} else None

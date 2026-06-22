@@ -26,6 +26,11 @@ ACCESSION_RE = re.compile(r"\b\d{10}-\d{2}-\d{6}\b")
 CIK_RE = re.compile(r"(?<!\d)(?:CIK\s*[:#-]?\s*)?(\d{10})(?!\d)", re.IGNORECASE)
 DATE_RE = re.compile(r"\b(20\d{2})-(0[1-9]|1[0-2])-([0-2]\d|3[01])\b")
 YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2}|2100)\b")
+YEAR_RANGE_RE = re.compile(
+    r"\b(19\d{2}|20\d{2}|2100)\s*(?:to|through|[-–—])\s*"
+    r"(19\d{2}|20\d{2}|2100)\b",
+    re.IGNORECASE,
+)
 FORM_RE = re.compile(r"\b(10-K|10-Q|8-K|20-F|40-F|6-K|S-1)\b", re.IGNORECASE)
 PERIOD_RE = re.compile(r"\b(FY|Q[1-4]|H[12])\b", re.IGNORECASE)
 
@@ -79,7 +84,7 @@ class EntityResolver:
 
         forms = tuple(dict.fromkeys(match.upper() for match in FORM_RE.findall(cleaned)))
         periods = tuple(dict.fromkeys(match.upper() for match in PERIOD_RE.findall(cleaned)))
-        years = tuple(dict.fromkeys(int(value) for value in YEAR_RE.findall(cleaned)))
+        years = _fiscal_years(cleaned)
         dates = self._dates(cleaned)
         metrics = self._metrics(cleaned)
 
@@ -254,6 +259,16 @@ class EntityResolver:
 
 def metric_aliases(metric: str) -> tuple[str, ...]:
     return METRIC_ALIASES.get(metric, (metric,))
+
+
+def _fiscal_years(query: str) -> tuple[int, ...]:
+    years = {int(value) for value in YEAR_RE.findall(query)}
+    for start_text, end_text in YEAR_RANGE_RE.findall(query):
+        start = int(start_text)
+        end = int(end_text)
+        if start <= end and end - start <= 20:
+            years.update(range(start, end + 1))
+    return tuple(sorted(years))
 
 
 def _normalize(value: str) -> str:

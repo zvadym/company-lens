@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -98,6 +99,12 @@ def test_start_get_cancel_and_reconnect_event_stream(api) -> None:
     assert f"id: {event_ids[0]}\n" not in resumed.text
     assert f"id: {event_ids[-1]}\n" in resumed.text
 
+    query_resumed = client.get(
+        f"/api/v1/research/{run_id}/events?after_id={event_ids[-1]}",
+        headers={"Last-Event-ID": str(event_ids[0])},
+    )
+    assert not any(line.startswith("id: ") for line in query_resumed.text.splitlines())
+
 
 def test_session_conflict_and_public_errors_are_typed(api) -> None:
     client, _, _ = api
@@ -165,6 +172,72 @@ def test_feedback_companies_sources_and_openapi(api) -> None:
     assert "/api/v1/research" in paths
     assert "/api/v1/research/{run_id}/events" in paths
     assert "/api/v1/feedback" in paths
+
+
+def test_session_run_history_returns_latest_runs_in_chronological_order(api) -> None:
+    client, _, _ = api
+    run_ids: list[str] = []
+    for question in ("First", "Second", "Third"):
+        started = client.post(
+            "/api/v1/research",
+            json={"question": question, "session_id": "history-session"},
+        ).json()
+        run_ids.append(started["run_id"])
+        client.delete(f"/api/v1/research/{started['run_id']}")
+
+    history = client.get(
+        "/api/v1/research",
+        params={"session_id": "history-session", "limit": 2},
+    )
+    assert history.status_code == 200
+    assert history.json()["total"] == 3
+    assert [item["run_id"] for item in history.json()["items"]] == run_ids[-2:]
+    assert client.get("/api/v1/research", params={"session_id": "unknown-session"}).json() == {
+        "items": [],
+        "total": 0,
+    }
+
+
+def test_event_stream_replays_legacy_v1_rows(api) -> None:
+    client, _, factory = api
+    started = client.post("/api/v1/research", json={"question": "Legacy"}).json()
+    run_id = uuid.UUID(started["run_id"])
+    client.delete(f"/api/v1/research/{run_id}")
+    with factory.begin() as session:
+        session.add(
+            ResearchEvent(
+                run_id=run_id,
+                event_key="legacy:test",
+                event_type="retrieval.summary",
+                schema_version="1",
+                payload_json={"branch_id": "documents", "passages": 2},
+                created_at=datetime.now(UTC),
+            )
+        )
+
+    stream = client.get(f"/api/v1/research/{run_id}/events")
+    assert '"schema_version":"1"' in stream.text
+    assert '"type":"retrieval.summary"' in stream.text
+
+
+def test_version_two_event_keys_are_idempotent(api) -> None:
+    client, repository, _ = api
+    started = client.post("/api/v1/research", json={"question": "Idempotency"}).json()
+    run_id = uuid.UUID(started["run_id"])
+    payload = {
+        "step_id": "step-1",
+        "node": "parse_question",
+        "branch_id": None,
+        "status": "completed",
+        "attempt": 1,
+        "summary": "Question classified.",
+        "duration_ms": 3,
+    }
+    repository.append_event(run_id, "node.status", payload, event_key="node:stable")
+    repository.append_event(run_id, "node.status", payload, event_key="node:stable")
+
+    events = repository.events_after(run_id, 0)
+    assert sum(event.type == "node.status" for event in events) == 1
 
 
 def test_rate_limit_and_input_size_limit(api) -> None:

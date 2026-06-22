@@ -38,15 +38,19 @@ class OpenAIResearchModelProvider:
         api_key: str,
         planning_model: str = "gpt-5.4-mini",
         answer_model: str = "gpt-5.5",
+        repair_model: str = "gpt-5.4-mini",
         validation_model: str = "gpt-5.4-mini",
         planning_reasoning_effort: ReasoningEffort = "low",
         answer_reasoning_effort: ReasoningEffort = "medium",
+        repair_reasoning_effort: ReasoningEffort = "low",
         validation_reasoning_effort: ReasoningEffort = "low",
         planning_max_output_tokens: int = 2_000,
         answer_max_output_tokens: int = 8_000,
+        repair_max_output_tokens: int = 3_000,
         validation_max_output_tokens: int = 512,
         timeout_seconds: float = 30.0,
-        max_retries: int = 2,
+        repair_timeout_seconds: float = 30.0,
+        max_retries: int = 0,
         client: Any | None = None,
     ) -> None:
         if not api_key:
@@ -54,18 +58,24 @@ class OpenAIResearchModelProvider:
         if (
             planning_max_output_tokens <= 0
             or answer_max_output_tokens <= 0
+            or repair_max_output_tokens <= 0
             or validation_max_output_tokens <= 0
         ):
             raise ValueError("Model output token limits must be positive.")
         self._planning_model = planning_model
         self._answer_model = answer_model
+        self._repair_model = repair_model
         self._validation_model = validation_model
         self._planning_reasoning_effort = planning_reasoning_effort
         self._answer_reasoning_effort = answer_reasoning_effort
+        self._repair_reasoning_effort = repair_reasoning_effort
         self._validation_reasoning_effort = validation_reasoning_effort
         self._planning_max_output_tokens = planning_max_output_tokens
         self._answer_max_output_tokens = answer_max_output_tokens
+        self._repair_max_output_tokens = repair_max_output_tokens
         self._validation_max_output_tokens = validation_max_output_tokens
+        self._timeout_seconds = timeout_seconds
+        self._repair_timeout_seconds = repair_timeout_seconds
         self._client = client or OpenAI(
             api_key=api_key,
             timeout=timeout_seconds,
@@ -120,12 +130,18 @@ class OpenAIResearchModelProvider:
         model, reasoning_effort, max_output_tokens = self._configuration(purpose)
         input_items = _message_input(messages)
         try:
+            request_timeout = (
+                self._repair_timeout_seconds
+                if purpose is ModelPurpose.REPAIR
+                else self._timeout_seconds
+            )
             response = self._client.responses.create(
                 model=model,
                 input=input_items,
                 reasoning=Reasoning(effort=reasoning_effort),
                 max_output_tokens=max_output_tokens,
                 store=False,
+                timeout=request_timeout,
             )
         except Exception as exc:
             raise _map_provider_error(exc) from None
@@ -161,6 +177,12 @@ class OpenAIResearchModelProvider:
                 self._validation_reasoning_effort,
                 self._validation_max_output_tokens,
             )
+        if purpose is ModelPurpose.REPAIR:
+            return (
+                self._repair_model,
+                self._repair_reasoning_effort,
+                self._repair_max_output_tokens,
+            )
         return (
             self._answer_model,
             self._answer_reasoning_effort,
@@ -175,15 +197,21 @@ def build_openai_model_provider(settings: Settings) -> OpenAIResearchModelProvid
         api_key=settings.openai_api_key.get_secret_value(),
         planning_model=settings.openai_planning_model,
         answer_model=settings.openai_answer_model,
+        repair_model=settings.openai_repair_model,
         validation_model=settings.semantic_judge_model,
         planning_reasoning_effort=settings.openai_planning_reasoning_effort,
         answer_reasoning_effort=settings.openai_answer_reasoning_effort,
+        repair_reasoning_effort=settings.openai_repair_reasoning_effort,
         validation_reasoning_effort=settings.semantic_judge_reasoning_effort,
         planning_max_output_tokens=settings.openai_planning_max_output_tokens,
         answer_max_output_tokens=settings.openai_answer_max_output_tokens,
+        repair_max_output_tokens=settings.openai_repair_max_output_tokens,
         validation_max_output_tokens=settings.semantic_judge_max_output_tokens,
         timeout_seconds=settings.openai_request_timeout_seconds,
-        max_retries=settings.openai_retry_attempts,
+        repair_timeout_seconds=settings.openai_repair_timeout_seconds,
+        # Workflow retries are observable and budgeted. Retrying inside the SDK as well would
+        # multiply worst-case latency and hide attempts from the execution trace.
+        max_retries=0,
     )
 
 

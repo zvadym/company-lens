@@ -31,6 +31,38 @@ def year_over_year_growth(
     )
 
 
+def year_over_year_growth_series(
+    observations: Sequence[NumericObservation],
+) -> CalculationResult:
+    if len(observations) < 2:
+        raise ValueError("Year-over-year growth requires at least two observations.")
+    _require_compatible(observations)
+    points: list[CalculationPoint] = []
+    for previous, current in zip(observations, observations[1:], strict=False):
+        if (
+            previous.observed_at is not None
+            and current.observed_at is not None
+            and current.observed_at.year - previous.observed_at.year != 1
+        ):
+            raise ValueError("Year-over-year growth requires consecutive annual observations.")
+        current_value, previous_value = _values((current, previous))
+        _require_nonzero(previous_value, "Previous value")
+        points.append(
+            CalculationPoint(
+                label=current.label,
+                observed_at=current.observed_at,
+                value=_decimal((current_value / previous_value - 1) * PERCENT),
+            )
+        )
+    return _result(
+        "year_over_year_growth",
+        tuple(points),
+        observations,
+        "(current / prior_year - 1) * 100",
+        "percent",
+    )
+
+
 def compound_annual_growth_rate(
     end: NumericObservation,
     start: NumericObservation,

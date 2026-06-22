@@ -14,6 +14,7 @@ from sqlalchemy import Table, create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from company_lens.agent.events import AgentExecutionEvent
 from company_lens.agent.model import (
     ModelMessage,
     ModelPurpose,
@@ -216,9 +217,19 @@ def test_two_turns_preserve_messages_reset_run_state_and_reuse_exact_result(
     tools = CountingTools()
     checkpointer = InMemorySaver(serde=checkpoint_serializer())
     agent = _agent(model, tools, repository, checkpointer)
+    first_events: list[AgentExecutionEvent] = []
+    second_events: list[AgentExecutionEvent] = []
 
-    first = agent.run("What was Cloudflare revenue?", session_id="conversation-1")
-    second = agent.run("And what about that result?", session_id="conversation-1")
+    first = agent.run(
+        "What was Cloudflare revenue?",
+        session_id="conversation-1",
+        observer=first_events.append,
+    )
+    second = agent.run(
+        "And what about that result?",
+        session_id="conversation-1",
+        observer=second_events.append,
+    )
 
     assert first["status"] is AgentRunStatus.COMPLETED
     assert second["status"] is AgentRunStatus.COMPLETED
@@ -238,6 +249,27 @@ def test_two_turns_preserve_messages_reset_run_state_and_reuse_exact_result(
     assert inspected is not None
     assert inspected.metadata.turn_count == 2
     assert inspected.pending_nodes == ()
+    event_types = [event.event_type for event in first_events]
+    assert "analysis.summary" in event_types
+    assert "entities.summary" in event_types
+    assert "plan.summary" in event_types
+    assert "validation.summary" in event_types
+    assert any(
+        event.event_type == "node.status" and event.data["status"] == "started"
+        for event in first_events
+    )
+    assert any(
+        event.event_type == "node.status" and event.data["status"] == "completed"
+        for event in first_events
+    )
+    assert any(
+        event.event_type == "tool.status" and event.data["status"] == "completed"
+        for event in first_events
+    )
+    entity_events = [event for event in second_events if event.event_type == "entities.summary"]
+    assert entity_events
+    assert all(event.data["fiscal_years"] == (2024,) for event in entity_events)
+    assert not any(event.data["fiscal_years"] == (2025,) for event in entity_events)
 
 
 def test_changed_typed_request_does_not_reuse_cached_result(

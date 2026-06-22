@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from company_lens.retrieval.adaptive_schemas import (
+    EvidenceScope,
     ResolvedQuery,
     RetrievalBudget,
     RetrievalPlan,
@@ -31,7 +32,13 @@ NO_EVIDENCE_PATTERNS = (
 
 
 class RetrievalPlanner:
-    def plan(self, resolved: ResolvedQuery, *, max_attempts: int = 3) -> RetrievalPlan:
+    def plan(
+        self,
+        resolved: ResolvedQuery,
+        *,
+        max_attempts: int = 3,
+        evidence_scope: EvidenceScope = "auto",
+    ) -> RetrievalPlan:
         query_folded = resolved.query.casefold()
         rationale: list[str] = []
         comparative = (
@@ -54,6 +61,9 @@ class RetrievalPlanner:
         elif any(pattern.match(resolved.query) for pattern in NO_EVIDENCE_PATTERNS):
             strategy = "none"
             rationale.append("question_does_not_require_evidence")
+        elif evidence_scope == "documents":
+            strategy = "detailed"
+            rationale.append("document_evidence_required")
         elif resolved.metrics and any(marker in query_folded for marker in EXPLANATORY_MARKERS):
             strategy = "hybrid"
             rationale.append("metric_requires_structured_and_narrative_evidence")
@@ -94,6 +104,7 @@ class RetrievalPlanner:
             comparative=comparative,
             max_attempts=max_attempts,
             rationale=tuple(rationale),
+            evidence_scope=evidence_scope,
         )
 
 

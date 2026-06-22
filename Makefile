@@ -1,4 +1,4 @@
-.PHONY: install format lint type test check migrate docker-up docker-down run-api run-worker
+.PHONY: install format lint type test check migrate docker-up docker-down run-api run-worker web-install web-dev web-api-types web-check web-e2e
 
 install:
 	python -m pip install -e ".[dev]"
@@ -33,3 +33,21 @@ run-api:
 
 run-worker:
 	company-lens research-worker
+
+web-install:
+	pnpm --dir web install
+
+web-dev:
+	pnpm --dir web dev
+
+web-api-types:
+	pnpm --dir web api:generate
+
+web-check:
+	pnpm --dir web lint
+	pnpm --dir web typecheck
+	pnpm --dir web test
+	pnpm --dir web build
+
+web-e2e:
+	pnpm --dir web test:e2e

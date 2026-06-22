@@ -53,7 +53,15 @@ def test_postgres_claim_reconnect_and_rate_limit_are_durable() -> None:
         repository.append_event(
             run.id,
             "node.status",
-            {"node": "parse_question", "status": "completed"},
+            {
+                "step_id": "postgres-parse-question",
+                "node": "parse_question",
+                "branch_id": None,
+                "status": "completed",
+                "attempt": 1,
+                "summary": "Question classified.",
+                "duration_ms": 1,
+            },
             event_key="postgres-node",
         )
         reconstructed = ResearchRunRepository(build_session_factory(database_url))

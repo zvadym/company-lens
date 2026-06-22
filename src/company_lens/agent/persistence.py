@@ -3,6 +3,7 @@ from __future__ import annotations
 import enum
 import inspect
 import re
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -23,6 +24,12 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from company_lens.agent.events import (
+    AgentExecutionEvent,
+    project_agent_transition,
+    task_finished_event,
+    task_started_event,
+)
 from company_lens.agent.schemas import (
     AgentError,
     AgentErrorCategory,
@@ -44,12 +51,6 @@ SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 GRAPH_VERSION = "company-lens-research.v1"
 
 InterruptionReason = Literal["cancelled", "timed_out"]
-
-
-@dataclass(frozen=True)
-class AgentExecutionEvent:
-    event_type: Literal["node.status", "tool.call", "retrieval.summary", "chart.ready"]
-    data: dict[str, str | int | float | bool | None]
 
 
 class ResearchRunInterrupted(RuntimeError):
@@ -405,19 +406,70 @@ class PersistentResearchAgent:
             environment=self._environment,
         )
         latest: AgentState | None = None
-        previous: AgentState | None = None
+        checkpoint = self._graph.get_state(config)
+        previous = cast(AgentState, checkpoint.values) if checkpoint.values else None
         interruption: InterruptionReason | None = None
         stream = self._graph.stream(
             graph_input,
             config=config,
             context=self._runtime,
-            stream_mode="values",
+            stream_mode=["tasks", "values"],
+            version="v2",
         )
+        task_started_at: dict[str, float] = {}
+        task_inputs: dict[str, object] = {}
+        task_attempt_keys: dict[str, str] = {}
+        task_attempts: dict[str, int] = {}
         try:
-            for value in stream:
-                latest = cast(AgentState, value)
-                _emit_execution_events(previous, latest, observer)
-                previous = latest
+            for chunk in stream:
+                chunk_type = chunk["type"]
+                data = cast(dict[str, Any], chunk["data"])
+                if chunk_type == "values":
+                    latest = cast(AgentState, data)
+                    _emit_execution_events(previous, latest, observer)
+                    previous = latest
+                elif chunk_type == "tasks" and isinstance(data, dict):
+                    task_id = str(data["id"])
+                    node = str(data["name"])
+                    task_input = data.get("input")
+                    branch = (
+                        task_input.get("active_branch") if isinstance(task_input, dict) else None
+                    )
+                    attempt_key = f"{node}:{getattr(branch, 'branch_id', '')}"
+                    if "input" in data:
+                        attempt = task_attempts.get(attempt_key, 0) + 1
+                        task_attempts[attempt_key] = attempt
+                        task_started_at[task_id] = time.monotonic()
+                        task_inputs[task_id] = task_input
+                        task_attempt_keys[task_id] = attempt_key
+                        _notify(
+                            observer,
+                            task_started_event(
+                                task_id=task_id,
+                                node=node,
+                                task_input=task_input,
+                                attempt=attempt,
+                            ),
+                        )
+                    else:
+                        started = task_started_at.pop(task_id, time.monotonic())
+                        task_input = task_inputs.pop(task_id, None)
+                        attempt_key = task_attempt_keys.pop(task_id, attempt_key)
+                        duration_ms = max(0, round((time.monotonic() - started) * 1000))
+                        _notify(
+                            observer,
+                            (
+                                task_finished_event(
+                                    task_id=task_id,
+                                    node=node,
+                                    task_input=task_input,
+                                    task_result=data.get("result"),
+                                    task_error=data.get("error"),
+                                    attempt=task_attempts.get(attempt_key, 1),
+                                    duration_ms=duration_ms,
+                                ),
+                            ),
+                        )
                 now = datetime.now(UTC)
                 self._repository.renew(
                     session_id,
@@ -619,53 +671,16 @@ def _emit_execution_events(
 ) -> None:
     if observer is None:
         return
-    old_trajectory = previous.get("trajectory", ()) if previous is not None else ()
-    for event in current.get("trajectory", ())[len(old_trajectory) :]:
-        observer(
-            AgentExecutionEvent(
-                event_type="node.status",
-                data={
-                    "node": event.node,
-                    "status": event.status.value,
-                    "summary": event.summary,
-                    "duration_ms": event.duration_ms,
-                },
-            )
-        )
-    old_outcomes = previous.get("branch_outcomes", ()) if previous is not None else ()
-    for outcome in current.get("branch_outcomes", ())[len(old_outcomes) :]:
-        observer(
-            AgentExecutionEvent(
-                event_type="tool.call",
-                data={
-                    "branch_id": outcome.branch_id,
-                    "kind": outcome.kind,
-                    "status": outcome.status.value,
-                    "attempts": outcome.attempts,
-                    "error_code": outcome.error.code if outcome.error is not None else None,
-                },
-            )
-        )
-    old_retrieval = previous.get("retrieval_results", ()) if previous is not None else ()
-    for retrieval in current.get("retrieval_results", ())[len(old_retrieval) :]:
-        observer(
-            AgentExecutionEvent(
-                event_type="retrieval.summary",
-                data={
-                    "branch_id": retrieval.branch_id,
-                    "passages": len(retrieval.result.context),
-                },
-            )
-        )
-    previous_chart = previous.get("chart_spec") if previous is not None else None
-    chart = current.get("chart_spec")
-    if previous_chart is None and chart is not None:
-        observer(
-            AgentExecutionEvent(
-                event_type="chart.ready",
-                data={"chart_type": chart.chart_type, "title": chart.title},
-            )
-        )
+    _notify(observer, project_agent_transition(previous, current))
+
+
+def _notify(
+    observer: Callable[[AgentExecutionEvent], None] | None,
+    events: tuple[AgentExecutionEvent, ...],
+) -> None:
+    if observer is not None:
+        for event in events:
+            observer(event)
 
 
 def _metadata(row: ResearchSession) -> ResearchSessionMetadata:

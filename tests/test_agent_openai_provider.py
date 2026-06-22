@@ -97,11 +97,18 @@ def test_text_generation_uses_answer_model_without_reasoning_output(
     assert result.text == "Grounded answer"
     assert result.model == "response-model"
     assert result.model_dump().keys() == {"model", "response_id", "text", "refusal", "usage"}
-    assert responses.create_calls[0]["model"] == "answer-model"
-    assert responses.create_calls[0]["reasoning"] == {"effort": "medium"}
-    assert responses.create_calls[0]["max_output_tokens"] == 222
     assert responses.create_calls[0]["store"] is False
     assert "previous_response_id" not in responses.create_calls[0]
+    if purpose is ModelPurpose.REPAIR:
+        assert responses.create_calls[0]["model"] == "repair-model"
+        assert responses.create_calls[0]["reasoning"] == {"effort": "low"}
+        assert responses.create_calls[0]["max_output_tokens"] == 444
+        assert responses.create_calls[0]["timeout"] == 30.0
+    else:
+        assert responses.create_calls[0]["model"] == "answer-model"
+        assert responses.create_calls[0]["reasoning"] == {"effort": "medium"}
+        assert responses.create_calls[0]["max_output_tokens"] == 222
+        assert responses.create_calls[0]["timeout"] == 30.0
 
 
 def test_refusal_is_a_typed_result() -> None:
@@ -226,9 +233,11 @@ def _provider(responses: FakeResponses) -> OpenAIResearchModelProvider:
         api_key="test-key",
         planning_model="planning-model",
         answer_model="answer-model",
+        repair_model="repair-model",
         validation_model="validation-model",
         planning_max_output_tokens=111,
         answer_max_output_tokens=222,
+        repair_max_output_tokens=444,
         validation_max_output_tokens=333,
         client=SimpleNamespace(responses=responses),
     )

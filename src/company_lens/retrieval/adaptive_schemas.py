@@ -16,6 +16,7 @@ RetrievalStrategy = Literal[
     "structured_only",
     "hybrid",
 ]
+EvidenceScope = Literal["auto", "documents"]
 ResolutionStatus = Literal["resolved", "ambiguous", "unresolved"]
 EvidenceKind = Literal["document_summary", "section_summary", "chunk", "financial_fact"]
 
@@ -78,6 +79,7 @@ class RetrievalPlan(BaseModel):
     requires_citations: bool = True
     max_attempts: int = Field(default=3, ge=1, le=5)
     rationale: tuple[str, ...] = ()
+    evidence_scope: EvidenceScope = "auto"
 
 
 class AdaptiveRetrievalRequest(BaseModel):
@@ -85,6 +87,7 @@ class AdaptiveRetrievalRequest(BaseModel):
     max_attempts: int = Field(default=3, ge=1, le=5)
     index_name: str = "default"
     index_version: str = "local-feature-hashing.v1"
+    evidence_scope: EvidenceScope = "auto"
 
     @field_validator("query")
     @classmethod
