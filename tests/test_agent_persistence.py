@@ -39,6 +39,16 @@ from company_lens.agent.schemas import (
 )
 from company_lens.agent.workflow import ResearchAgentRuntime, build_research_graph
 from company_lens.db.models import ResearchSession
+from company_lens.evidence.schemas import (
+    AnswerValidation,
+    ClaimRecord,
+    EvidenceEnvelope,
+    EvidenceKind,
+    SemanticSupportResult,
+    SemanticSupportStatus,
+    SourcePreview,
+    SourceStatus,
+)
 from company_lens.financials.schemas import (
     FinancialFactObservation,
     FinancialFactQuery,
@@ -141,6 +151,57 @@ def repository() -> ResearchSessionRepository:
     table = cast(Table, ResearchSession.__table__)
     ResearchSession.metadata.create_all(engine, tables=[table])
     return ResearchSessionRepository(sessionmaker(bind=engine, expire_on_commit=False))
+
+
+def test_checkpoint_serializer_allows_evidence_domain_types() -> None:
+    evidence = EvidenceEnvelope(
+        evidence_id="document:risk",
+        kind=EvidenceKind.DOCUMENT,
+        summary="Competition is a material business risk.",
+        source_urls=("https://example.test/risk",),
+        lineage_refs=("risk",),
+    )
+    claim = ClaimRecord(
+        claim_id="claim:1111111111111111",
+        text="Competition is a material business risk.",
+        evidence_ids=(evidence.evidence_id,),
+        sentence_index=0,
+    )
+    preview = SourcePreview(
+        evidence_id=evidence.evidence_id,
+        title="Risk factors",
+        kind=evidence.kind,
+        source_url=evidence.source_urls[0],
+        exact_url=evidence.source_urls[0],
+        status=SourceStatus.AVAILABLE,
+    )
+    validation = AnswerValidation(valid=True)
+    semantic_support = SemanticSupportResult(
+        status=SemanticSupportStatus.SUPPORTED,
+        reason_code="direct_support",
+        prompt_version="test.v1",
+        model="judge",
+    )
+    value = (
+        evidence.kind,
+        evidence,
+        claim,
+        preview.status,
+        preview,
+        validation,
+        semantic_support.status,
+        semantic_support,
+    )
+
+    serializer = checkpoint_serializer()
+    restored = serializer.loads_typed(serializer.dumps_typed(value))
+
+    assert tuple(restored) == value
+    assert isinstance(restored[1], EvidenceEnvelope)
+    assert isinstance(restored[2], ClaimRecord)
+    assert isinstance(restored[4], SourcePreview)
+    assert isinstance(restored[5], AnswerValidation)
+    assert isinstance(restored[7], SemanticSupportResult)
 
 
 def test_two_turns_preserve_messages_reset_run_state_and_reuse_exact_result(

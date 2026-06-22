@@ -9,6 +9,24 @@ from typing import Annotated, Literal, NotRequired, Required, TypedDict
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from company_lens.analytics.schemas import CalculationResult, ChartSpecification
+from company_lens.evidence.schemas import (
+    AnswerValidation as AnswerValidation,
+)
+from company_lens.evidence.schemas import (
+    CitationReference as CitationReference,
+)
+from company_lens.evidence.schemas import (
+    ClaimRecord as ClaimRecord,
+)
+from company_lens.evidence.schemas import (
+    EvidenceEnvelope as EvidenceEnvelope,
+)
+from company_lens.evidence.schemas import (
+    EvidenceKind as EvidenceKind,
+)
+from company_lens.evidence.schemas import (
+    SourcePreview,
+)
 from company_lens.financials.schemas import FinancialFactQuery, FinancialFactQueryResult
 from company_lens.macro.schemas import FredSeriesQuery, FredSeriesResult
 from company_lens.retrieval.adaptive_schemas import (
@@ -74,13 +92,6 @@ class BranchStatus(enum.StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
-
-
-class EvidenceKind(enum.StrEnum):
-    DOCUMENT = "document"
-    FINANCIAL_FACT = "financial_fact"
-    MACRO_OBSERVATION = "macro_observation"
-    CALCULATION = "calculation"
 
 
 class FrozenModel(BaseModel):
@@ -295,20 +306,6 @@ class AgentError(FrozenModel):
         return self.severity is AgentErrorSeverity.RECOVERABLE
 
 
-class EvidenceEnvelope(FrozenModel):
-    evidence_id: str = Field(pattern=r"^[a-z][a-z0-9_.:-]*$")
-    kind: EvidenceKind
-    summary: str = Field(min_length=1)
-    source_urls: tuple[str, ...] = ()
-    lineage_refs: tuple[str, ...] = ()
-    payload: dict[str, object] = Field(default_factory=dict)
-
-
-class CitationReference(FrozenModel):
-    evidence_id: str = Field(min_length=1)
-    label: str = Field(min_length=1)
-
-
 class TrajectoryEvent(FrozenModel):
     node: str = Field(min_length=1)
     status: TrajectoryStatus
@@ -356,13 +353,6 @@ class MacroBranchResult(FrozenModel):
 class CalculationBranchResult(FrozenModel):
     branch_id: str
     result: CalculationResult
-
-
-class AnswerValidation(FrozenModel):
-    valid: bool
-    cited_evidence_ids: tuple[str, ...] = ()
-    unknown_evidence_ids: tuple[str, ...] = ()
-    reason_codes: tuple[str, ...] = ()
 
 
 class CachedSourceResult(FrozenModel):
@@ -432,8 +422,10 @@ class AgentState(TypedDict, total=False):
     draft_answer: NotRequired[str | None]
     final_answer: NotRequired[str | None]
     answer_validation: NotRequired[AnswerValidation]
+    claims: NotRequired[tuple[ClaimRecord, ...]]
     repair_attempts: NotRequired[int]
     citations: NotRequired[tuple[CitationReference, ...]]
+    source_previews: NotRequired[tuple[SourcePreview, ...]]
     errors: Annotated[tuple[AgentError, ...], append_tuple]
     trajectory: Annotated[tuple[TrajectoryEvent, ...], append_tuple]
     node_attempts: Annotated[tuple[NodeAttempt, ...], append_tuple]

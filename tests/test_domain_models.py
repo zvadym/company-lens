@@ -31,10 +31,24 @@ def test_core_domain_tables_are_registered() -> None:
         "ingestion_failures",
         "evidence_records",
         "citation_records",
+        "claim_records",
     }
 
     assert expected_tables.issubset(Base.metadata.tables)
     assert models.Company.__tablename__ == "companies"
+
+
+def test_evidence_and_claim_records_support_stable_claim_level_citations() -> None:
+    evidence = Base.metadata.tables["evidence_records"]
+    claims = Base.metadata.tables["claim_records"]
+    citations = Base.metadata.tables["citation_records"]
+
+    assert "stable_id" in evidence.columns
+    assert "metadata_json" in evidence.columns
+    assert "lineage_json" in evidence.columns
+    assert "run_id" in claims.columns
+    assert "supported" in claims.columns
+    assert citations.columns["claim_id"].foreign_keys
 
 
 def test_chunk_embedding_vector_has_fixed_dimensions_for_hnsw() -> None:

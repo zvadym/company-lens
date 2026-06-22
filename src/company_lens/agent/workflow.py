@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -31,7 +30,6 @@ from company_lens.agent.schemas import (
     AgentErrorSeverity,
     AgentRunStatus,
     AgentState,
-    AnswerValidation,
     BranchOutcome,
     BranchStatus,
     CachedSourceResult,
@@ -80,10 +78,13 @@ from company_lens.analytics.schemas import (
     NumericObservation,
     ValidatedChartDataset,
 )
+from company_lens.evidence.claims import extract_claims
+from company_lens.evidence.registry import EvidenceRegistry, SourceChecker
+from company_lens.evidence.schemas import EvidenceMetadata, SemanticSupportStatus
+from company_lens.evidence.validation import AnswerValidator, SemanticSupportJudge
 from company_lens.retrieval.adaptive_schemas import ResolvedQuery
 from company_lens.retrieval.embeddings import DEFAULT_OPENAI_INDEX_VERSION
 
-CITATION_PATTERN = re.compile(r"\[([a-z][a-z0-9_.:-]*)\]")
 SOURCE_KINDS = {"retrieve_documents", "query_financial_facts", "query_macro_series"}
 
 
@@ -95,6 +96,8 @@ class ResearchAgentRuntime:
     max_cached_source_results: int = 20
     retrieval_index_name: str = "default"
     retrieval_index_version: str = DEFAULT_OPENAI_INDEX_VERSION
+    semantic_support_judge: SemanticSupportJudge | None = None
+    source_checker: SourceChecker | None = None
 
 
 class ResearchAgent:
@@ -161,7 +164,9 @@ def create_initial_agent_state(
         "chart_spec": None,
         "draft_answer": None,
         "final_answer": None,
+        "claims": (),
         "citations": (),
+        "source_previews": (),
         "errors": (),
         "trajectory": (),
         "node_attempts": (),
@@ -906,7 +911,10 @@ def _generate_answer(
 ) -> dict[str, object]:
     started = time.monotonic()
     context = json.dumps(
-        [item.model_dump(mode="json") for item in state.get("evidence", ())],
+        [
+            EvidenceEnvelope.model_validate(item).model_dump(mode="json")
+            for item in state.get("evidence", ())
+        ],
         sort_keys=True,
     )
     conversation = json.dumps(
@@ -949,40 +957,66 @@ def _route_after_answer(state: AgentState) -> Literal["validate_citations", "fin
     return "validate_citations" if state.get("draft_answer") else "finalize_response"
 
 
-def _validate_citations(state: AgentState) -> dict[str, object]:
+def _validate_citations(
+    state: AgentState, runtime: Runtime[ResearchAgentRuntime]
+) -> dict[str, object]:
     started = time.monotonic()
     answer = state.get("draft_answer") or ""
-    known = {item.evidence_id: item for item in state.get("evidence", ())}
-    cited = tuple(dict.fromkeys(CITATION_PATTERN.findall(answer)))
-    unknown = tuple(item for item in cited if item not in known)
+    registry = EvidenceRegistry(state.get("evidence", ()))
+    known = {item.evidence_id: item for item in registry.records()}
     plan = state.get("execution_plan")
     citations_required = plan.requires_citations if plan is not None else True
-    reasons: list[str] = []
-    if citations_required and not cited:
-        reasons.append("missing_citations")
-    if unknown:
-        reasons.append("unknown_citations")
-    valid = not reasons
-    validation = AnswerValidation(
-        valid=valid,
-        cited_evidence_ids=tuple(item for item in cited if item in known),
-        unknown_evidence_ids=unknown,
-        reason_codes=tuple(reasons),
+    claims = extract_claims(answer)
+    validation = AnswerValidator(
+        registry,
+        semantic_judge=runtime.context.semantic_support_judge,
+    ).validate(
+        answer,
+        citations_required=citations_required,
     )
     citations = tuple(
-        CitationReference(evidence_id=item, label=known[item].summary[:120])
+        CitationReference(
+            evidence_id=item,
+            label=known[item].summary[:120],
+            claim_ids=tuple(claim.claim_id for claim in claims if item in claim.evidence_ids),
+        )
         for item in validation.cited_evidence_ids
+    )
+    previews = registry.hydrate_sources(runtime.context.source_checker)
+    semantic_results = tuple(
+        claim.semantic_support for claim in validation.claims if claim.semantic_support is not None
     )
     return {
         "answer_validation": validation,
+        "claims": claims,
         "citations": citations,
+        "source_previews": previews,
         "trajectory": (
             _event(
                 "validate_citations",
-                TrajectoryStatus.COMPLETED if valid else TrajectoryStatus.FAILED,
-                "Citation structure validated." if valid else "Citation structure was invalid.",
+                TrajectoryStatus.COMPLETED if validation.valid else TrajectoryStatus.FAILED,
+                (
+                    "Claim evidence validated."
+                    if validation.valid
+                    else "Claim evidence was invalid."
+                ),
                 started,
-                details={"citations": len(citations), "unknown": len(unknown)},
+                details={
+                    "claims": len(claims),
+                    "citations": len(citations),
+                    "issues": len(validation.issues),
+                    "semantic_supported": sum(
+                        item.status is SemanticSupportStatus.SUPPORTED for item in semantic_results
+                    ),
+                    "semantic_unsupported": sum(
+                        item.status is SemanticSupportStatus.UNSUPPORTED
+                        for item in semantic_results
+                    ),
+                    "semantic_unavailable": sum(
+                        item.status is SemanticSupportStatus.UNAVAILABLE
+                        for item in semantic_results
+                    ),
+                },
             ),
         ),
     }
@@ -1023,9 +1057,10 @@ def _repair_or_abstain(
         ModelMessage(
             role="system",
             content=(
-                "Repair only citation markers in the draft. Use only the allowed evidence IDs, "
-                "keep the original language, and return the complete repaired answer. Do not "
-                "provide reasoning."
+                "Repair the draft so every material factual claim is directly supported by its "
+                "inline evidence IDs. Correct or remove unsupported claims, company/period/unit "
+                "mismatches, and unsupported numbers. Use only the supplied evidence, preserve "
+                "the user's language, and return the complete repaired answer without reasoning."
             ),
         ),
         ModelMessage(
@@ -1034,6 +1069,15 @@ def _repair_or_abstain(
                 {
                     "draft": state.get("draft_answer"),
                     "validation_reason_codes": validation.reason_codes if validation else (),
+                    "validation_issues": (
+                        [issue.model_dump(mode="json") for issue in validation.issues]
+                        if validation
+                        else []
+                    ),
+                    "evidence": [
+                        EvidenceEnvelope.model_validate(item).model_dump(mode="json")
+                        for item in state.get("evidence", ())
+                    ],
                     "allowed_evidence_ids": evidence_ids,
                 },
                 sort_keys=True,
@@ -1679,6 +1723,18 @@ def _evidence_from_state(state: AgentState) -> tuple[EvidenceEnvelope, ...]:
                     summary=context_item.content,
                     source_urls=(context_item.source_url,),
                     lineage_refs=(retrieval_branch.branch_id, context_item.source_id),
+                    metadata=EvidenceMetadata(
+                        company_id=context_item.company_id,
+                        company_name=context_item.company_name,
+                        document_version_id=context_item.document_version_id,
+                        section_id=context_item.section_id,
+                        chunk_id=context_item.chunk_id,
+                        financial_fact_id=context_item.financial_fact_id,
+                        fiscal_year=context_item.fiscal_year,
+                        fiscal_period=context_item.fiscal_period,
+                        page_start=context_item.page_start,
+                        page_end=context_item.page_end,
+                    ),
                     payload=context_item.model_dump(mode="json"),
                 )
             )
@@ -1694,6 +1750,18 @@ def _evidence_from_state(state: AgentState) -> tuple[EvidenceEnvelope, ...]:
                     ),
                     source_urls=(fact.source_url,),
                     lineage_refs=(financial_branch.branch_id,),
+                    metadata=EvidenceMetadata(
+                        company_id=fact.company_id,
+                        company_name=fact.company_name,
+                        financial_fact_id=fact.id,
+                        metric=fact.metric,
+                        period_start=fact.period_start,
+                        period_end=fact.period_end,
+                        fiscal_year=fact.fiscal_year,
+                        fiscal_period=fact.fiscal_period,
+                        unit=fact.unit,
+                        value=fact.value,
+                    ),
                     payload=fact.model_dump(mode="json"),
                 )
             )
@@ -1714,6 +1782,13 @@ def _evidence_from_state(state: AgentState) -> tuple[EvidenceEnvelope, ...]:
                     ),
                     source_urls=(observation.source_url,),
                     lineage_refs=(macro_branch.branch_id,),
+                    metadata=EvidenceMetadata(
+                        macro_observation_id=observation.id,
+                        period_start=observation.observed_at,
+                        period_end=observation.observed_at,
+                        unit=observation.unit,
+                        value=observation.value,
+                    ),
                     payload=observation.model_dump(mode="json"),
                 )
             )
@@ -1732,6 +1807,12 @@ def _evidence_from_state(state: AgentState) -> tuple[EvidenceEnvelope, ...]:
             if plan
             else None
         )
+        input_evidence_ids = _input_evidence_ids(
+            plan_branch.input_refs if plan_branch else (), state
+        )
+        result_value = (
+            calculation.result.values[0].value if len(calculation.result.values) == 1 else None
+        )
         evidence.append(
             EvidenceEnvelope(
                 evidence_id=f"calculation:{branch_id}",
@@ -1741,12 +1822,48 @@ def _evidence_from_state(state: AgentState) -> tuple[EvidenceEnvelope, ...]:
                     f"{calculation.result.model_dump(mode='json')['values']}"
                 ),
                 source_urls=calculation.result.sources,
-                lineage_refs=plan_branch.input_refs if plan_branch else (),
+                lineage_refs=input_evidence_ids,
+                metadata=EvidenceMetadata(
+                    unit=calculation.result.unit,
+                    value=result_value,
+                    formula=calculation.result.formula,
+                    operation=calculation.result.operation,
+                ),
                 payload=calculation.result.model_dump(mode="json"),
             )
         )
     deduplicated = {item.evidence_id: item for item in evidence}
     return tuple(deduplicated[key] for key in sorted(deduplicated))
+
+
+def _input_evidence_ids(references: tuple[str, ...], state: AgentState) -> tuple[str, ...]:
+    evidence_ids: list[str] = []
+    retrieval_by_branch = {
+        item.branch_id: item.result for item in state.get("retrieval_results", ())
+    }
+    financial_by_branch = {
+        item.branch_id: item.result for item in state.get("financial_results", ())
+    }
+    macro_by_branch = {item.branch_id: item.result for item in state.get("macro_results", ())}
+    calculation_branches = {item.branch_id for item in state.get("calculations", ())}
+    for reference in references:
+        if reference in retrieval_by_branch:
+            evidence_ids.extend(
+                item.citation_label for item in retrieval_by_branch[reference].context
+            )
+        elif reference in financial_by_branch:
+            evidence_ids.extend(
+                f"financial_fact:{item.id}" for item in financial_by_branch[reference].observations
+            )
+        elif reference in macro_by_branch:
+            evidence_ids.extend(
+                f"macro:{item.series_id.lower()}:{item.observed_at.isoformat()}"
+                for item in macro_by_branch[reference].observations
+                if not item.is_missing and item.value is not None
+            )
+        elif reference in calculation_branches:
+            evidence_ids.append(f"calculation:{reference}")
+    return tuple(dict.fromkeys(evidence_ids))
 
 
 def _generate_structured_with_retries[OutputT: BaseModel](

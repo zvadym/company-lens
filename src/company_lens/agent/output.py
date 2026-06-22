@@ -16,6 +16,7 @@ from company_lens.agent.schemas import (
     TrajectoryEvent,
 )
 from company_lens.analytics.schemas import ChartSpecification
+from company_lens.evidence.schemas import AnswerValidation, ClaimRecord, SourcePreview
 
 
 class OutputModel(BaseModel):
@@ -29,6 +30,7 @@ class ResearchCitationOutput(OutputModel):
     summary: str
     source_urls: tuple[str, ...]
     lineage_refs: tuple[str, ...]
+    claim_ids: tuple[str, ...] = ()
 
 
 class ResearchExecutionOutput(OutputModel):
@@ -45,7 +47,10 @@ class ResearchRunOutput(OutputModel):
     status: AgentRunStatus
     route: ResearchRoute | None
     answer: str | None
+    claims: tuple[ClaimRecord, ...]
     citations: tuple[ResearchCitationOutput, ...]
+    validation: AnswerValidation | None
+    sources: tuple[SourcePreview, ...]
     chart: ChartSpecification | None
     execution: ResearchExecutionOutput
 
@@ -89,6 +94,7 @@ def research_run_output(
             summary=evidence[citation.evidence_id].summary,
             source_urls=evidence[citation.evidence_id].source_urls,
             lineage_refs=evidence[citation.evidence_id].lineage_refs,
+            claim_ids=citation.claim_ids,
         )
         for citation in state.get("citations", ())
         if citation.evidence_id in evidence
@@ -100,7 +106,10 @@ def research_run_output(
         status=state["status"],
         route=analysis.route if analysis is not None else None,
         answer=state.get("final_answer"),
+        claims=state.get("claims", ()),
         citations=citations,
+        validation=state.get("answer_validation"),
+        sources=state.get("source_previews", ()),
         chart=state.get("chart_spec"),
         execution=ResearchExecutionOutput(
             tool_calls_used=state.get("tool_calls_used", 0),

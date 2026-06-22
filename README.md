@@ -504,8 +504,8 @@ chart specification, safe errors, branch summary, and optionally the safe node t
 omitted session ID is generated and returned in the response. `completed`, `partial`, and
 `abstained` are successful CLI outcomes; `failed` returns exit code 1.
 
-Full claim-level citation validation remains in #13. API/SSE delivery and observability remain in
-#14 and #16 respectively.
+Claim-level citation validation is implemented in #13. API/SSE delivery and observability remain
+in #14 and #16 respectively.
 
 Agent orchestration is tracked in [#12](https://github.com/zvadym/company-lens/issues/12).
 
@@ -515,7 +515,7 @@ Agent orchestration is tracked in [#12](https://github.com/zvadym/company-lens/i
 
 A citation is a first-class domain object, not a URL appended after generation.
 
-Planned evidence types:
+Evidence types:
 
 - SEC filing passage;
 - PDF page or text block;
@@ -533,6 +533,18 @@ Validation checks include:
 - correlation is not presented as proven causation.
 
 The evidence registry and claim-level validation are tracked in [#13](https://github.com/zvadym/company-lens/issues/13).
+
+Deterministic validation runs for every answer. An optional semantic judge can additionally check
+whether document evidence entails qualitative claims. It uses a dedicated model configuration,
+records `supported`, `unsupported`, `unavailable`, or `not_run` per claim, and is disabled by
+default until calibrated by the evaluation framework in #1:
+
+```dotenv
+COMPANY_LENS_SEMANTIC_JUDGE_ENABLED=true
+COMPANY_LENS_SEMANTIC_JUDGE_MODEL=gpt-5.4-mini
+COMPANY_LENS_SEMANTIC_JUDGE_REASONING_EFFORT=low
+COMPANY_LENS_SEMANTIC_JUDGE_MAX_OUTPUT_TOKENS=512
+```
 
 ---
 
@@ -982,6 +994,8 @@ COMPANY_LENS_OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 COMPANY_LENS_OPENAI_EMBEDDING_DIMENSIONS=384
 COMPANY_LENS_OPENAI_PLANNING_MODEL=gpt-5.4-mini
 COMPANY_LENS_OPENAI_ANSWER_MODEL=gpt-5.5
+COMPANY_LENS_SEMANTIC_JUDGE_ENABLED=false
+COMPANY_LENS_SEMANTIC_JUDGE_MODEL=gpt-5.4-mini
 COMPANY_LENS_AGENT_RETRIEVAL_INDEX_NAME=default
 COMPANY_LENS_AGENT_RETRIEVAL_INDEX_VERSION=openai-text-embedding-3-small-384.v1
 ```

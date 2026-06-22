@@ -82,6 +82,7 @@ class EvidenceKind(enum.StrEnum):
     PAGE = "page"
     FACT = "fact"
     MACRO_OBSERVATION = "macro_observation"
+    CALCULATION = "calculation"
 
 
 class TimestampMixin:
@@ -635,8 +636,10 @@ class MacroObservation(Base, TimestampMixin):
 
 class EvidenceRecord(Base, TimestampMixin):
     __tablename__ = "evidence_records"
+    __table_args__ = (UniqueConstraint("stable_id", name="uq_evidence_record_stable_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    stable_id: Mapped[str] = mapped_column(String(255), nullable=False)
     kind: Mapped[EvidenceKind] = mapped_column(Enum(EvidenceKind, name="evidence_kind"))
     document_version_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("document_versions.id")
@@ -656,6 +659,9 @@ class EvidenceRecord(Base, TimestampMixin):
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     source_id: Mapped[str] = mapped_column(String(255), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    lineage_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
 
     document_version: Mapped[DocumentVersion | None] = relationship()
     section: Mapped[FilingSection | None] = relationship()
@@ -669,6 +675,21 @@ class EvidenceRecord(Base, TimestampMixin):
     )
 
 
+class ClaimRecord(Base, TimestampMixin):
+    __tablename__ = "claim_records"
+    __table_args__ = (UniqueConstraint("run_id", "claim_key", name="uq_claim_run_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    claim_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    material: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    supported: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    validation_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+
+    citations: Mapped[list[CitationRecord]] = relationship(back_populates="claim")
+
+
 class CitationRecord(Base, TimestampMixin):
     __tablename__ = "citation_records"
 
@@ -676,9 +697,11 @@ class CitationRecord(Base, TimestampMixin):
     evidence_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("evidence_records.id"), nullable=False
     )
+    claim_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("claim_records.id"))
     claim_key: Mapped[str | None] = mapped_column(String(255))
     citation_label: Mapped[str] = mapped_column(String(64), nullable=False)
     display_text: Mapped[str] = mapped_column(String(512), nullable=False)
     metadata_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
 
     evidence: Mapped[EvidenceRecord] = relationship(back_populates="citations")
+    claim: Mapped[ClaimRecord | None] = relationship(back_populates="citations")
