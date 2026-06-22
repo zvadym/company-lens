@@ -44,6 +44,8 @@ from company_lens.evidence.schemas import (
     ClaimRecord,
     EvidenceEnvelope,
     EvidenceKind,
+    SemanticSupportResult,
+    SemanticSupportStatus,
     SourcePreview,
     SourceStatus,
 )
@@ -174,7 +176,22 @@ def test_checkpoint_serializer_allows_evidence_domain_types() -> None:
         status=SourceStatus.AVAILABLE,
     )
     validation = AnswerValidation(valid=True)
-    value = (evidence.kind, evidence, claim, preview.status, preview, validation)
+    semantic_support = SemanticSupportResult(
+        status=SemanticSupportStatus.SUPPORTED,
+        reason_code="direct_support",
+        prompt_version="test.v1",
+        model="judge",
+    )
+    value = (
+        evidence.kind,
+        evidence,
+        claim,
+        preview.status,
+        preview,
+        validation,
+        semantic_support.status,
+        semantic_support,
+    )
 
     serializer = checkpoint_serializer()
     restored = serializer.loads_typed(serializer.dumps_typed(value))
@@ -184,6 +201,7 @@ def test_checkpoint_serializer_allows_evidence_domain_types() -> None:
     assert isinstance(restored[2], ClaimRecord)
     assert isinstance(restored[4], SourcePreview)
     assert isinstance(restored[5], AnswerValidation)
+    assert isinstance(restored[7], SemanticSupportResult)
 
 
 def test_two_turns_preserve_messages_reset_run_state_and_reuse_exact_result(

@@ -70,6 +70,21 @@ def test_structured_generation_uses_planning_model_and_stateless_parse() -> None
     ]
 
 
+def test_semantic_validation_uses_dedicated_judge_configuration() -> None:
+    responses = FakeResponses()
+    provider = _provider(responses)
+
+    provider.generate_structured(
+        _messages(),
+        ParsedIntent,
+        purpose=ModelPurpose.VALIDATE,
+    )
+
+    assert responses.parse_calls[0]["model"] == "validation-model"
+    assert responses.parse_calls[0]["reasoning"] == {"effort": "low"}
+    assert responses.parse_calls[0]["max_output_tokens"] == 333
+
+
 @pytest.mark.parametrize("purpose", [ModelPurpose.ANSWER, ModelPurpose.REPAIR])
 def test_text_generation_uses_answer_model_without_reasoning_output(
     purpose: ModelPurpose,
@@ -211,8 +226,10 @@ def _provider(responses: FakeResponses) -> OpenAIResearchModelProvider:
         api_key="test-key",
         planning_model="planning-model",
         answer_model="answer-model",
+        validation_model="validation-model",
         planning_max_output_tokens=111,
         answer_max_output_tokens=222,
+        validation_max_output_tokens=333,
         client=SimpleNamespace(responses=responses),
     )
 

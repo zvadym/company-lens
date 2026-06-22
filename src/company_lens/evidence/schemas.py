@@ -26,6 +26,13 @@ class SourceStatus(enum.StrEnum):
     UNCHECKED = "unchecked"
 
 
+class SemanticSupportStatus(enum.StrEnum):
+    NOT_RUN = "not_run"
+    SUPPORTED = "supported"
+    UNSUPPORTED = "unsupported"
+    UNAVAILABLE = "unavailable"
+
+
 class EvidenceMetadata(FrozenModel):
     company_id: uuid.UUID | None = None
     company_name: str | None = None
@@ -92,11 +99,19 @@ class ValidationIssue(FrozenModel):
     evidence_id: str | None = None
 
 
+class SemanticSupportResult(FrozenModel):
+    status: SemanticSupportStatus
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    prompt_version: str = Field(min_length=1)
+    model: str | None = None
+
+
 class ClaimValidation(FrozenModel):
     claim_id: str
     supported: bool
     evidence_ids: tuple[str, ...] = ()
     issues: tuple[ValidationIssue, ...] = ()
+    semantic_support: SemanticSupportResult | None = None
 
 
 class AnswerValidation(FrozenModel):

@@ -12,6 +12,8 @@ from company_lens.evidence import (
     EvidenceKind,
     EvidenceMetadata,
     EvidenceRegistry,
+    SemanticSupportResult,
+    SemanticSupportStatus,
     SourceStatus,
     citation_metrics,
     extract_claims,
@@ -134,11 +136,38 @@ def test_optional_semantic_judge_can_reject_superficially_valid_support() -> Non
     )
 
     validation = AnswerValidator(
-        EvidenceRegistry((fact,)), semantic_judge=lambda _claim, _evidence: False
+        EvidenceRegistry((fact,)),
+        semantic_judge=lambda _claim, _evidence: SemanticSupportResult(
+            status=SemanticSupportStatus.UNSUPPORTED,
+            reason_code="evidence_does_not_entail_claim",
+            prompt_version="test.v1",
+        ),
     ).validate("Cloudflare revenue was 100 USD in 2025 [financial_fact:cloudflare].")
 
     assert validation.valid is False
     assert validation.reason_codes == ("semantic_support_failed",)
+
+
+def test_unavailable_semantic_judge_is_distinct_from_unsupported_claim() -> None:
+    fact = _fact(
+        "financial_fact:cloudflare",
+        company_id=CLOUDFLARE_ID,
+        company_name="Cloudflare",
+        year=2025,
+    )
+
+    validation = AnswerValidator(
+        EvidenceRegistry((fact,)),
+        semantic_judge=lambda _claim, _evidence: SemanticSupportResult(
+            status=SemanticSupportStatus.UNAVAILABLE,
+            reason_code="provider_timeout",
+            prompt_version="test.v1",
+        ),
+    ).validate("Cloudflare revenue was 100 USD in 2025 [financial_fact:cloudflare].")
+
+    assert validation.valid is True
+    assert validation.claims[0].semantic_support is not None
+    assert validation.claims[0].semantic_support.status is SemanticSupportStatus.UNAVAILABLE
 
 
 def test_source_hydration_reports_exact_pages_and_inaccessible_urls() -> None:

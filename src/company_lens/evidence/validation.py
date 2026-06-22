@@ -12,10 +12,12 @@ from company_lens.evidence.schemas import (
     ClaimValidation,
     EvidenceEnvelope,
     EvidenceKind,
+    SemanticSupportResult,
+    SemanticSupportStatus,
     ValidationIssue,
 )
 
-SemanticSupportJudge = Callable[[ClaimRecord, tuple[EvidenceEnvelope, ...]], bool]
+SemanticSupportJudge = Callable[[ClaimRecord, tuple[EvidenceEnvelope, ...]], SemanticSupportResult]
 
 YEAR_PATTERN = re.compile(r"\b(?:19|20)\d{2}\b")
 NUMBER_PATTERN = re.compile(r"(?<![\w-])[-+]?\d[\d,]*(?:\.\d+)?")
@@ -62,6 +64,7 @@ class AnswerValidator:
 
     def _validate_claim(self, claim: ClaimRecord, *, citations_required: bool) -> ClaimValidation:
         issues: list[ValidationIssue] = []
+        semantic_support: SemanticSupportResult | None = None
         known_evidence = tuple(
             evidence
             for evidence_id in claim.evidence_ids
@@ -88,23 +91,22 @@ class AnswerValidator:
         if known_evidence:
             issues.extend(self._validate_metadata(claim, known_evidence))
             issues.extend(self._validate_lineage(claim, known_evidence))
-            if (
-                not issues
-                and self._semantic_judge is not None
-                and not self._semantic_judge(claim, known_evidence)
-            ):
-                issues.append(
-                    self._issue(
-                        "semantic_support_failed",
-                        "The cited evidence does not semantically support the claim.",
-                        claim,
+            if not issues and self._semantic_judge is not None:
+                semantic_support = self._semantic_judge(claim, known_evidence)
+                if semantic_support.status is SemanticSupportStatus.UNSUPPORTED:
+                    issues.append(
+                        self._issue(
+                            "semantic_support_failed",
+                            "The cited evidence does not semantically support the claim.",
+                            claim,
+                        )
                     )
-                )
         return ClaimValidation(
             claim_id=claim.claim_id,
             supported=not issues and (bool(known_evidence) or not claim.material),
             evidence_ids=claim.evidence_ids,
             issues=tuple(issues),
+            semantic_support=semantic_support,
         )
 
     def _validate_metadata(

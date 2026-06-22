@@ -80,7 +80,7 @@ from company_lens.analytics.schemas import (
 )
 from company_lens.evidence.claims import extract_claims
 from company_lens.evidence.registry import EvidenceRegistry, SourceChecker
-from company_lens.evidence.schemas import EvidenceMetadata
+from company_lens.evidence.schemas import EvidenceMetadata, SemanticSupportStatus
 from company_lens.evidence.validation import AnswerValidator, SemanticSupportJudge
 from company_lens.retrieval.adaptive_schemas import ResolvedQuery
 from company_lens.retrieval.embeddings import DEFAULT_OPENAI_INDEX_VERSION
@@ -983,6 +983,9 @@ def _validate_citations(
         for item in validation.cited_evidence_ids
     )
     previews = registry.hydrate_sources(runtime.context.source_checker)
+    semantic_results = tuple(
+        claim.semantic_support for claim in validation.claims if claim.semantic_support is not None
+    )
     return {
         "answer_validation": validation,
         "claims": claims,
@@ -1002,6 +1005,17 @@ def _validate_citations(
                     "claims": len(claims),
                     "citations": len(citations),
                     "issues": len(validation.issues),
+                    "semantic_supported": sum(
+                        item.status is SemanticSupportStatus.SUPPORTED for item in semantic_results
+                    ),
+                    "semantic_unsupported": sum(
+                        item.status is SemanticSupportStatus.UNSUPPORTED
+                        for item in semantic_results
+                    ),
+                    "semantic_unavailable": sum(
+                        item.status is SemanticSupportStatus.UNAVAILABLE
+                        for item in semantic_results
+                    ),
                 },
             ),
         ),

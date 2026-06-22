@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     openai_embedding_dimensions: int = Field(default=384, ge=1)
     openai_planning_model: str = Field(default="gpt-5.4-mini")
     openai_answer_model: str = Field(default="gpt-5.5")
+    semantic_judge_enabled: bool = Field(default=False)
+    semantic_judge_model: str = Field(default="gpt-5.4-mini", min_length=1)
+    semantic_judge_reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] = "low"
+    semantic_judge_max_output_tokens: int = Field(default=512, ge=1)
     openai_planning_reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] = "low"
     openai_answer_reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] = "medium"
     openai_planning_max_output_tokens: int = Field(default=2_000, ge=1)
