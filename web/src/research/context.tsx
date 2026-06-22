@@ -46,6 +46,11 @@ import { getSessionId, loadTrace, storeTrace } from "./storage";
 
 type ConnectionState = "idle" | "connecting" | "live" | "reconnecting" | "closed";
 
+export type EvidenceFocus = {
+  evidenceId: string;
+  requestId: number;
+};
+
 type ResearchMessage = {
   id: string;
   role: "user" | "assistant";
@@ -67,6 +72,8 @@ type ResearchContextValue = {
   isLoading: boolean;
   inspector: "trace" | "sources";
   setInspector: (value: "trace" | "sources") => void;
+  evidenceFocus: EvidenceFocus | null;
+  focusEvidence: (evidenceId: string) => void;
   start: (question: string) => Promise<void>;
   cancel: () => Promise<void>;
   retry: () => Promise<void>;
@@ -192,6 +199,7 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
   const selectedRunId = params.runId === "new" ? null : params.runId ?? null;
   const queryClient = useQueryClient();
   const [inspector, setInspector] = useState<"trace" | "sources">("trace");
+  const [evidenceFocus, setEvidenceFocus] = useState<EvidenceFocus | null>(null);
 
   const historyQuery = useQuery({
     queryKey: queryKeys.history(sessionId),
@@ -298,6 +306,14 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
     await feedbackMutation.mutateAsync({ runId: selectedRunId, rating });
   };
 
+  const focusEvidence = useCallback((evidenceId: string) => {
+    setInspector("sources");
+    setEvidenceFocus((current) => ({
+      evidenceId,
+      requestId: (current?.requestId ?? 0) + 1,
+    }));
+  }, []);
+
   const runtime = useExternalStoreRuntime<ResearchMessage>({
     messages,
     isLoading: historyQuery.isLoading || runQuery.isLoading,
@@ -321,6 +337,8 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
     isLoading: historyQuery.isLoading || runQuery.isLoading,
     inspector,
     setInspector,
+    evidenceFocus,
+    focusEvidence,
     start,
     cancel,
     retry,

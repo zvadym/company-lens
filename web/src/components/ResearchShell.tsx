@@ -13,6 +13,7 @@ import { isTerminal } from "@/api/types";
 import { useResearch } from "@/research/context";
 
 import { ResearchThread } from "./ResearchThread";
+import { groupEvidenceSources } from "./sourcePresentation";
 import { SourcesPanel } from "./SourcesPanel";
 import { TracePanel } from "./TracePanel";
 
@@ -76,7 +77,17 @@ function MobileHistory() {
 }
 
 function Inspector() {
-  const { inspector, setInspector, events, sources, selectedRun, connection } = useResearch();
+  const {
+    inspector,
+    setInspector,
+    events,
+    sources,
+    selectedRun,
+    connection,
+    evidenceFocus,
+  } = useResearch();
+  const citations = selectedRun?.result?.citations ?? [];
+  const sourceCount = groupEvidenceSources(sources, citations).length;
   return (
     <aside className="inspector">
       <div className="inspector-tabs" role="tablist" aria-label="Run details">
@@ -93,12 +104,12 @@ function Inspector() {
           className={inspector === "sources" ? "is-active" : ""}
           onClick={() => setInspector("sources")}
           type="button"
-        ><FileText size={14} /> Sources <span>{sources.length}</span></button>
+        ><FileText size={14} /> Sources <span>{sourceCount}</span></button>
       </div>
       {inspector === "trace" ? (
         <TracePanel events={events} connection={connection} />
       ) : (
-        <SourcesPanel sources={sources} citations={selectedRun?.result?.citations ?? []} />
+        <SourcesPanel sources={sources} citations={citations} evidenceFocus={evidenceFocus} />
       )}
     </aside>
   );
