@@ -60,6 +60,16 @@ class Settings(BaseSettings):
         default="openai-text-embedding-3-small-384.v1",
         min_length=1,
     )
+    research_run_timeout_seconds: int = Field(default=600, ge=10, le=24 * 60 * 60)
+    research_worker_poll_seconds: float = Field(default=1.0, gt=0, le=60)
+    research_worker_lease_seconds: int = Field(default=60, ge=10, le=60 * 60)
+    research_sse_poll_seconds: float = Field(default=0.25, gt=0, le=10)
+    research_sse_heartbeat_seconds: float = Field(default=15.0, gt=0, le=120)
+    api_max_body_bytes: int = Field(default=16_384, ge=1_024, le=10 * 1024 * 1024)
+    research_question_max_chars: int = Field(default=4_000, ge=1, le=4_000)
+    feedback_comment_max_chars: int = Field(default=2_000, ge=1, le=2_000)
+    research_start_rate_limit_per_minute: int = Field(default=10, ge=0, le=10_000)
+    feedback_rate_limit_per_minute: int = Field(default=30, ge=0, le=10_000)
 
     model_config = SettingsConfigDict(
         env_file=".env",

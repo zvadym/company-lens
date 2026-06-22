@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal
 from typing import cast
 
@@ -31,12 +32,22 @@ class FinancialFactQueryService:
         statement = statement.order_by(
             Company.display_name,
             FinancialFact.canonical_metric,
-            FinancialFact.period_end,
-            FinancialFact.filed_date,
-            FinancialFact.accession_number,
-            FinancialFact.id,
+            FinancialFact.period_end.desc(),
+            FinancialFact.filed_date.desc(),
+            FinancialFact.accession_number.desc(),
+            FinancialFact.id.desc(),
         ).limit(request.limit)
-        rows = self._session.execute(statement).all()
+        rows = sorted(
+            self._session.execute(statement).all(),
+            key=lambda row: (
+                row[1].display_name,
+                row[0].canonical_metric,
+                row[0].period_end,
+                row[0].filed_date or date.min,
+                row[0].accession_number or "",
+                str(row[0].id),
+            ),
+        )
 
         tickers = self._ticker_map({fact.company_id for fact, _ in rows})
         conflict_ids = self._conflict_ids([fact for fact, _ in rows])

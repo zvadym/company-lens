@@ -184,6 +184,33 @@ class FakeResearchTools:
             self.barrier.wait(timeout=2)
 
 
+class MixedPeriodFinancialTools(FakeResearchTools):
+    def query_financial_facts(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
+        self.calls["financial"] += 1
+        annual_2023 = _financial_observation(date(2023, 12, 31), Decimal("100"))
+        comparative_2023 = annual_2023.model_copy(
+            update={
+                "id": uuid.uuid4(),
+                "fiscal_year": 2024,
+                "filed_date": date(2025, 2, 20),
+                "accession_number": "2024-comparative",
+            }
+        )
+        return FinancialFactQueryResult(
+            query=request,
+            observations=(
+                _financial_observation(date(2022, 12, 31), Decimal("80")),
+                _financial_observation(date(2023, 3, 31), Decimal("20")).model_copy(
+                    update={"period_type": "quarter", "fiscal_period": "Q1"}
+                ),
+                annual_2023,
+                comparative_2023,
+                _financial_observation(date(2024, 12, 31), Decimal("125")),
+            ),
+            available_units=("USD",),
+        )
+
+
 class FlakyFinancialTools(FakeResearchTools):
     def query_financial_facts(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
         self.calls["financial"] += 1
@@ -378,6 +405,49 @@ def test_calculation_route_generates_deterministic_evidence() -> None:
     assert result["status"] is AgentRunStatus.COMPLETED
     assert result["calculations"][0].result.values[0].value == Decimal("25.00")
     assert any(item.evidence_id == "calculation:growth" for item in result["evidence"])
+
+
+def test_yoy_growth_selects_latest_annual_pair_from_mixed_comparative_facts() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Calculate revenue growth",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+    )
+    facts = FinancialFactsBranch(
+        branch_id="financial",
+        request=FinancialFactQuery(
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+            period_types=("quarter", "annual"),
+            limit=20,
+        ),
+    )
+    growth = CalculationBranch(
+        branch_id="growth",
+        operation="year_over_year_growth",
+        input_refs=(facts.branch_id,),
+        depends_on=(facts.branch_id,),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.CALCULATION, branches=(facts, growth)),
+        texts=("Revenue growth was 25 percent [calculation:growth].",),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, MixedPeriodFinancialTools())).run(
+        "Calculate revenue growth", session_id="session-many-growth-facts"
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    calculation = result["calculations"][0].result
+    assert calculation.values[0].value == Decimal("25.00")
+    assert [item.observed_at for item in calculation.inputs] == [
+        date(2023, 12, 31),
+        date(2024, 12, 31),
+    ]
 
 
 @pytest.mark.parametrize(

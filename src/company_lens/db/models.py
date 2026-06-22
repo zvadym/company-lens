@@ -8,17 +8,20 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     Date,
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -257,6 +260,99 @@ class ResearchSession(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class ResearchRun(Base):
+    __tablename__ = "research_runs"
+    __table_args__ = (
+        Index(
+            "uq_research_runs_active_session",
+            "session_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running', 'cancellation_requested')"),
+            sqlite_where=text("status IN ('queued', 'running', 'cancellation_requested')"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    result_json: Mapped[JsonObject | None] = mapped_column(JSON_TYPE)
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    queued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    cancellation_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    worker_id: Mapped[str | None] = mapped_column(String(128))
+    worker_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    events: Mapped[list[ResearchEvent]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+    feedback: Mapped[list[ResearchFeedback]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+
+
+class ResearchEvent(Base):
+    __tablename__ = "research_events"
+    __table_args__ = (UniqueConstraint("run_id", "event_key", name="uq_research_event_key"),)
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("research_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+    payload_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    run: Mapped[ResearchRun] = relationship(back_populates="events")
+
+
+class ResearchFeedback(Base):
+    __tablename__ = "research_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("research_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    rating: Mapped[str] = mapped_column(String(16), nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text)
+    actor_id: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    run: Mapped[ResearchRun] = relationship(back_populates="feedback")
+
+
+class RateLimitBucket(Base):
+    __tablename__ = "rate_limit_buckets"
+
+    bucket_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    request_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
     )
 
 

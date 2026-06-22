@@ -22,6 +22,7 @@ from company_lens.agent.model import (
 )
 from company_lens.agent.persistence import (
     PersistentResearchAgent,
+    ResearchRunInterrupted,
     ResearchSessionError,
     ResearchSessionRepository,
     SessionErrorCode,
@@ -397,6 +398,36 @@ def test_session_ids_are_checkpoint_isolation_boundaries(
     assert [message.content for message in second["messages"] if message.role == "user"] == [
         "Second company question"
     ]
+
+
+def test_cooperative_cancellation_terminalizes_checkpoint_and_session_remains_usable(
+    repository: ResearchSessionRepository,
+) -> None:
+    model = QueueModelProvider(
+        analyses=(_analysis(False),),
+        plans=(_plan(2025),),
+        texts=(_answer(2025),),
+    )
+    agent = _agent(
+        model,
+        CountingTools(),
+        repository,
+        InMemorySaver(serde=checkpoint_serializer()),
+    )
+
+    with pytest.raises(ResearchRunInterrupted) as captured:
+        agent.run(
+            "Cancel this turn",
+            session_id="cancelled-session",
+            control=lambda: "cancelled",
+        )
+
+    assert captured.value.reason == "cancelled"
+    cancelled = agent.inspect_session("cancelled-session")
+    assert cancelled is not None
+    assert cancelled.pending_nodes == ()
+    completed = agent.run("Revenue?", session_id="cancelled-session")
+    assert completed["status"] is AgentRunStatus.COMPLETED
 
 
 def test_session_message_limit_is_enforced_after_checkpoint_round_trips(

@@ -127,6 +127,13 @@ def test_typed_query_orders_observations_and_marks_conflicts(
     assert result.available_units == ("USD",)
     assert result.warnings == ("conflicting_or_restated_values_present",)
 
+    latest = FinancialFactQueryService(session=session).query(
+        FinancialFactQuery(tickers=("NET",), metrics=("revenue",), limit=2)
+    )
+    assert [item.period_end for item in latest.observations] == sorted(
+        item.period_end for item in result.observations
+    )[-2:]
+
 
 def test_missing_metric_returns_typed_empty_result(session: Session) -> None:
     result = FinancialFactQueryService(session=session).query(

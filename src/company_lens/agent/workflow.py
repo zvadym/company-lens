@@ -82,6 +82,7 @@ from company_lens.evidence.claims import extract_claims
 from company_lens.evidence.registry import EvidenceRegistry, SourceChecker
 from company_lens.evidence.schemas import EvidenceMetadata, SemanticSupportStatus
 from company_lens.evidence.validation import AnswerValidator, SemanticSupportJudge
+from company_lens.financials.schemas import FinancialFactObservation
 from company_lens.retrieval.adaptive_schemas import ResolvedQuery
 from company_lens.retrieval.embeddings import DEFAULT_OPENAI_INDEX_VERSION
 
@@ -1567,8 +1568,10 @@ def _failed_planned_branches[BranchT: ExecutionBranch](
 
 
 def _execute_calculation(branch: CalculationBranch, state: AgentState) -> CalculationResult:
-    series = [_numeric_series(reference, state) for reference in branch.input_refs]
     operation = branch.operation
+    series = [
+        _numeric_series(reference, state, operation=operation) for reference in branch.input_refs
+    ]
     if operation == "quarter_over_quarter_growth":
         previous, current = _two_observations(series[0])
         return quarter_over_quarter_growth(current, previous)
@@ -1595,12 +1598,18 @@ def _execute_calculation(branch: CalculationBranch, state: AgentState) -> Calcul
     return correlation(series[0], series[1])
 
 
-def _numeric_series(branch_id: str, state: AgentState) -> tuple[NumericObservation, ...]:
+def _numeric_series(
+    branch_id: str,
+    state: AgentState,
+    *,
+    operation: str | None = None,
+) -> tuple[NumericObservation, ...]:
     financial = next(
         (item for item in state.get("financial_results", ()) if item.branch_id == branch_id),
         None,
     )
     if financial is not None:
+        selected = _select_financial_observations(financial.result.observations, operation)
         observations = tuple(
             NumericObservation(
                 label=f"{item.company_name} {item.metric} {item.period_end.isoformat()}",
@@ -1609,7 +1618,7 @@ def _numeric_series(branch_id: str, state: AgentState) -> tuple[NumericObservati
                 source_url=item.source_url,
                 observed_at=item.period_end,
             )
-            for item in financial.result.observations
+            for item in selected
         )
         return tuple(sorted(observations, key=lambda item: item.observed_at or datetime.min.date()))
     macro = next(
@@ -1630,6 +1639,74 @@ def _numeric_series(branch_id: str, state: AgentState) -> tuple[NumericObservati
         if not item.is_missing
     )
     return tuple(sorted(observations, key=lambda item: item.observed_at or datetime.min.date()))
+
+
+def _select_financial_observations(
+    observations: Sequence[FinancialFactObservation],
+    operation: str | None,
+) -> tuple[FinancialFactObservation, ...]:
+    deduplicated: dict[tuple[object, ...], FinancialFactObservation] = {}
+    for item in observations:
+        key = (
+            item.company_id,
+            item.metric,
+            item.unit,
+            item.period_start,
+            item.period_end,
+            item.period_type,
+            item.fiscal_period,
+        )
+        existing = deduplicated.get(key)
+        if existing is None or _financial_filing_key(item) > _financial_filing_key(existing):
+            deduplicated[key] = item
+    ordered = tuple(
+        sorted(
+            deduplicated.values(),
+            key=lambda item: (item.period_end, *_financial_filing_key(item)),
+        )
+    )
+    if operation not in {"year_over_year_growth", "quarter_over_quarter_growth"}:
+        return ordered
+    series_keys = {(item.company_id, item.metric, item.unit) for item in ordered}
+    if len(series_keys) != 1:
+        raise ValueError("Growth requires exactly one company, metric, and unit series.")
+    if operation == "quarter_over_quarter_growth":
+        quarters = tuple(item for item in ordered if item.period_type == "quarter")
+        if len(quarters) < 2:
+            raise ValueError("Quarter-over-quarter growth requires two quarterly observations.")
+        return quarters[-2:]
+    annual = tuple(item for item in ordered if item.period_type == "annual")
+    if len(annual) >= 2:
+        return annual[-2:]
+    comparable = tuple(item for item in ordered if item.period_type in {"quarter", "year_to_date"})
+    if len(comparable) < 2:
+        raise ValueError("Year-over-year growth requires two comparable observations.")
+    current = comparable[-1]
+    previous = next(
+        (item for item in reversed(comparable[:-1]) if _same_reporting_period(item, current)),
+        None,
+    )
+    if previous is None:
+        raise ValueError("Year-over-year growth requires matching reporting periods.")
+    return previous, current
+
+
+def _financial_filing_key(item: FinancialFactObservation) -> tuple[date, str, str]:
+    return item.filed_date or date.min, item.accession_number or "", str(item.id)
+
+
+def _same_reporting_period(
+    previous: FinancialFactObservation,
+    current: FinancialFactObservation,
+) -> bool:
+    if previous.period_type != current.period_type:
+        return False
+    if previous.fiscal_period and current.fiscal_period:
+        return previous.fiscal_period == current.fiscal_period
+    return (previous.period_end.month, previous.period_end.day) == (
+        current.period_end.month,
+        current.period_end.day,
+    )
 
 
 def _two_observations(

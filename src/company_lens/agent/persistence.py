@@ -4,12 +4,12 @@ import enum
 import inspect
 import re
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from importlib import import_module
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -23,7 +23,14 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from company_lens.agent.schemas import AgentState, ExecutionPolicy
+from company_lens.agent.schemas import (
+    AgentError,
+    AgentErrorCategory,
+    AgentErrorSeverity,
+    AgentRunStatus,
+    AgentState,
+    ExecutionPolicy,
+)
 from company_lens.agent.workflow import (
     ResearchAgentRuntime,
     build_research_graph,
@@ -35,6 +42,21 @@ from company_lens.db.session import build_session_factory
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 GRAPH_VERSION = "company-lens-research.v1"
+
+InterruptionReason = Literal["cancelled", "timed_out"]
+
+
+@dataclass(frozen=True)
+class AgentExecutionEvent:
+    event_type: Literal["node.status", "tool.call", "retrieval.summary", "chart.ready"]
+    data: dict[str, str | int | float | bool | None]
+
+
+class ResearchRunInterrupted(RuntimeError):
+    def __init__(self, reason: InterruptionReason, state: AgentState) -> None:
+        self.reason = reason
+        self.state = state
+        super().__init__(f"Research run was {reason}.")
 
 
 class SessionErrorCode(enum.StrEnum):
@@ -103,6 +125,7 @@ class ResearchSessionRepository:
         *,
         now: datetime,
         lease_expires_at: datetime,
+        allow_same_run_takeover: bool = False,
     ) -> None:
         with self._session_factory.begin() as session:
             row = session.scalar(
@@ -118,6 +141,7 @@ class ResearchSessionRepository:
                 row.active_run_id is not None
                 and row.lease_expires_at is not None
                 and _aware(row.lease_expires_at) > now
+                and not (allow_same_run_takeover and row.active_run_id == run_id)
             ):
                 raise ResearchSessionError(
                     SessionErrorCode.BUSY, "Research session already has an active run."
@@ -279,6 +303,9 @@ class PersistentResearchAgent:
         session_id: str,
         policy: ExecutionPolicy | None = None,
         run_id: uuid.UUID | None = None,
+        observer: Callable[[AgentExecutionEvent], None] | None = None,
+        control: Callable[[], InterruptionReason | None] | None = None,
+        allow_run_takeover: bool = False,
     ) -> AgentState:
         _validate_session_id(session_id)
         now = datetime.now(UTC)
@@ -306,10 +333,28 @@ class PersistentResearchAgent:
                 SessionErrorCode.RESUME_REQUIRED,
                 "Research session has an unfinished run that must be resumed or cleared.",
             )
-        self._acquire(session_id, active_run_id, now)
-        return self._execute(state, session_id=session_id, run_id=active_run_id)
+        self._acquire(
+            session_id,
+            active_run_id,
+            now,
+            allow_same_run_takeover=allow_run_takeover,
+        )
+        return self._execute(
+            state,
+            session_id=session_id,
+            run_id=active_run_id,
+            observer=observer,
+            control=control,
+        )
 
-    def resume(self, session_id: str) -> AgentState:
+    def resume(
+        self,
+        session_id: str,
+        *,
+        observer: Callable[[AgentExecutionEvent], None] | None = None,
+        control: Callable[[], InterruptionReason | None] | None = None,
+        allow_run_takeover: bool = False,
+    ) -> AgentState:
         _validate_session_id(session_id)
         now = datetime.now(UTC)
         metadata = self._require_metadata(session_id)
@@ -322,8 +367,19 @@ class PersistentResearchAgent:
             )
         state = cast(AgentState, snapshot.values)
         run_id = state["run_id"]
-        self._acquire(session_id, run_id, now)
-        return self._execute(None, session_id=session_id, run_id=run_id)
+        self._acquire(
+            session_id,
+            run_id,
+            now,
+            allow_same_run_takeover=allow_run_takeover,
+        )
+        return self._execute(
+            None,
+            session_id=session_id,
+            run_id=run_id,
+            observer=observer,
+            control=control,
+        )
 
     def inspect_session(self, session_id: str) -> ResearchSessionSnapshot | None:
         return self._session_manager.inspect_session(session_id)
@@ -340,6 +396,8 @@ class PersistentResearchAgent:
         *,
         session_id: str,
         run_id: uuid.UUID,
+        observer: Callable[[AgentExecutionEvent], None] | None,
+        control: Callable[[], InterruptionReason | None] | None,
     ) -> AgentState:
         config = _thread_config(
             session_id,
@@ -347,20 +405,41 @@ class PersistentResearchAgent:
             environment=self._environment,
         )
         latest: AgentState | None = None
-        for value in self._graph.stream(
+        previous: AgentState | None = None
+        interruption: InterruptionReason | None = None
+        stream = self._graph.stream(
             graph_input,
             config=config,
             context=self._runtime,
             stream_mode="values",
-        ):
-            latest = cast(AgentState, value)
-            now = datetime.now(UTC)
-            self._repository.renew(
-                session_id,
-                run_id,
-                now=now,
-                lease_expires_at=now + self._lease_duration,
+        )
+        try:
+            for value in stream:
+                latest = cast(AgentState, value)
+                _emit_execution_events(previous, latest, observer)
+                previous = latest
+                now = datetime.now(UTC)
+                self._repository.renew(
+                    session_id,
+                    run_id,
+                    now=now,
+                    lease_expires_at=now + self._lease_duration,
+                )
+                interruption = control() if control is not None else None
+                if interruption is not None:
+                    break
+        finally:
+            close = getattr(stream, "close", None)
+            if callable(close):
+                close()
+        if interruption is not None:
+            interrupted_state = self._abort_execution(
+                config,
+                session_id=session_id,
+                run_id=run_id,
+                reason=interruption,
             )
+            raise ResearchRunInterrupted(interruption, interrupted_state)
         if latest is None:
             latest = cast(AgentState, self._graph.get_state(config).values)
         now = datetime.now(UTC)
@@ -375,12 +454,61 @@ class PersistentResearchAgent:
         )
         return latest
 
-    def _acquire(self, session_id: str, run_id: uuid.UUID, now: datetime) -> None:
+    def _abort_execution(
+        self,
+        config: RunnableConfig,
+        *,
+        session_id: str,
+        run_id: uuid.UUID,
+        reason: InterruptionReason,
+    ) -> AgentState:
+        code = "research_cancelled" if reason == "cancelled" else "research_timed_out"
+        message = (
+            "Research run was cancelled."
+            if reason == "cancelled"
+            else "Research run exceeded its execution deadline."
+        )
+        self._graph.update_state(
+            config,
+            {
+                "status": AgentRunStatus.FAILED,
+                "final_answer": None,
+                "errors": (
+                    AgentError(
+                        category=AgentErrorCategory.BUDGET,
+                        severity=AgentErrorSeverity.TERMINAL,
+                        code=code,
+                        message=message,
+                    ),
+                ),
+            },
+            as_node="finalize_response",
+        )
+        state = cast(AgentState, self._graph.get_state(config).values)
+        now = datetime.now(UTC)
+        self._repository.release(
+            session_id,
+            run_id,
+            now=now,
+            expires_at=now + self._ttl,
+            increment_turn=True,
+        )
+        return state
+
+    def _acquire(
+        self,
+        session_id: str,
+        run_id: uuid.UUID,
+        now: datetime,
+        *,
+        allow_same_run_takeover: bool = False,
+    ) -> None:
         self._repository.acquire(
             session_id,
             run_id,
             now=now,
             lease_expires_at=now + self._lease_duration,
+            allow_same_run_takeover=allow_same_run_takeover,
         )
 
     def _require_metadata(self, session_id: str) -> ResearchSessionMetadata:
@@ -482,6 +610,62 @@ def _thread_config(
             "graph_version": GRAPH_VERSION,
         }
     return config
+
+
+def _emit_execution_events(
+    previous: AgentState | None,
+    current: AgentState,
+    observer: Callable[[AgentExecutionEvent], None] | None,
+) -> None:
+    if observer is None:
+        return
+    old_trajectory = previous.get("trajectory", ()) if previous is not None else ()
+    for event in current.get("trajectory", ())[len(old_trajectory) :]:
+        observer(
+            AgentExecutionEvent(
+                event_type="node.status",
+                data={
+                    "node": event.node,
+                    "status": event.status.value,
+                    "summary": event.summary,
+                    "duration_ms": event.duration_ms,
+                },
+            )
+        )
+    old_outcomes = previous.get("branch_outcomes", ()) if previous is not None else ()
+    for outcome in current.get("branch_outcomes", ())[len(old_outcomes) :]:
+        observer(
+            AgentExecutionEvent(
+                event_type="tool.call",
+                data={
+                    "branch_id": outcome.branch_id,
+                    "kind": outcome.kind,
+                    "status": outcome.status.value,
+                    "attempts": outcome.attempts,
+                    "error_code": outcome.error.code if outcome.error is not None else None,
+                },
+            )
+        )
+    old_retrieval = previous.get("retrieval_results", ()) if previous is not None else ()
+    for retrieval in current.get("retrieval_results", ())[len(old_retrieval) :]:
+        observer(
+            AgentExecutionEvent(
+                event_type="retrieval.summary",
+                data={
+                    "branch_id": retrieval.branch_id,
+                    "passages": len(retrieval.result.context),
+                },
+            )
+        )
+    previous_chart = previous.get("chart_spec") if previous is not None else None
+    chart = current.get("chart_spec")
+    if previous_chart is None and chart is not None:
+        observer(
+            AgentExecutionEvent(
+                event_type="chart.ready",
+                data={"chart_type": chart.chart_type, "title": chart.title},
+            )
+        )
 
 
 def _metadata(row: ResearchSession) -> ResearchSessionMetadata:

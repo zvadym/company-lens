@@ -17,6 +17,19 @@ services:
       retries: 5
       start_period: 10s
 
+  worker:
+    build: .
+    command: ["company-lens", "research-worker"]
+    environment:
+      COMPANY_LENS_ENVIRONMENT: local
+      COMPANY_LENS_LOG_LEVEL: INFO
+      COMPANY_LENS_DATABASE_URL: postgresql+psycopg://company_lens:company_lens@postgres:5432/company_lens
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   postgres:
     image: pgvector/pgvector:pg16
     environment:
@@ -35,4 +48,3 @@ services:
 
 volumes:
   postgres-data:
-
