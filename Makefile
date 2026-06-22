@@ -1,4 +1,4 @@
-.PHONY: install format lint type test check migrate docker-up docker-down run-api
+.PHONY: install format lint type test check migrate docker-up docker-down run-api run-worker
 
 install:
 	python -m pip install -e ".[dev]"
@@ -31,3 +31,5 @@ docker-down:
 run-api:
 	uvicorn company_lens.main:app --reload --host 0.0.0.0 --port 8000
 
+run-worker:
+	company-lens research-worker

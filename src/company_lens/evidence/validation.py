@@ -21,6 +21,20 @@ SemanticSupportJudge = Callable[[ClaimRecord, tuple[EvidenceEnvelope, ...]], Sem
 
 YEAR_PATTERN = re.compile(r"\b(?:19|20)\d{2}\b")
 NUMBER_PATTERN = re.compile(r"(?<![\w-])[-+]?\d[\d,]*(?:\.\d+)?")
+SCALED_NUMBER_PATTERN = re.compile(
+    r"(?<![\w-])(?P<number>[-+]?\d[\d,]*(?:\.\d+)?)"
+    r"(?:\s*(?P<scale>thousand|million|billion|trillion|k|mn|bn))?",
+    re.IGNORECASE,
+)
+NUMBER_SCALES = {
+    "k": Decimal("1000"),
+    "thousand": Decimal("1000"),
+    "mn": Decimal("1000000"),
+    "million": Decimal("1000000"),
+    "bn": Decimal("1000000000"),
+    "billion": Decimal("1000000000"),
+    "trillion": Decimal("1000000000000"),
+}
 CAUSATION_PATTERN = re.compile(
     r"\b(?:cause[ds]?|causing|led to|resulted in|drove|because of|due to)\b", re.IGNORECASE
 )
@@ -248,11 +262,7 @@ def _unsupported_numbers(
     claim_text: str, evidence: tuple[EvidenceEnvelope, ...]
 ) -> tuple[Decimal, ...]:
     claim_years = {Decimal(value) for value in YEAR_PATTERN.findall(claim_text)}
-    claim_numbers = {
-        parsed
-        for value in NUMBER_PATTERN.findall(claim_text)
-        if (parsed := _decimal(value)) is not None and parsed not in claim_years
-    }
+    claim_numbers = _claim_numbers(claim_text, claim_years)
     if not claim_numbers:
         return ()
     supported: set[Decimal] = set()
@@ -265,11 +275,43 @@ def _unsupported_numbers(
             if (parsed := _decimal(value)) is not None
         )
         values = item.payload.get("values")
-        if isinstance(values, list):
-            for point in values:
+        inputs = item.payload.get("inputs")
+        for collection in (values, inputs):
+            if not isinstance(collection, list):
+                continue
+            for point in collection:
                 if isinstance(point, dict) and (parsed := _decimal(point.get("value"))) is not None:
                     supported.add(parsed)
-    return tuple(sorted(claim_numbers - supported))
+    return tuple(
+        sorted(
+            value
+            for value, tolerance in claim_numbers
+            if not any(abs(candidate - value) <= tolerance for candidate in supported)
+        )
+    )
+
+
+def _claim_numbers(
+    claim_text: str,
+    claim_years: set[Decimal],
+) -> tuple[tuple[Decimal, Decimal], ...]:
+    result: list[tuple[Decimal, Decimal]] = []
+    for match in SCALED_NUMBER_PATTERN.finditer(claim_text):
+        raw = match.group("number")
+        parsed = _decimal(raw)
+        if parsed is None:
+            continue
+        scale_name = match.group("scale")
+        if scale_name is None and parsed in claim_years:
+            continue
+        multiplier = (
+            NUMBER_SCALES.get(scale_name.casefold(), Decimal(1)) if scale_name else Decimal(1)
+        )
+        normalized = parsed * multiplier
+        decimal_places = len(raw.rsplit(".", 1)[1]) if "." in raw else 0
+        displayed_quantum = Decimal(1).scaleb(-decimal_places) * multiplier
+        result.append((normalized, displayed_quantum / 2))
+    return tuple(result)
 
 
 def _decimal(value: object) -> Decimal | None:

@@ -5,7 +5,7 @@ import json
 import sys
 import uuid
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -63,6 +63,8 @@ from company_lens.processing.service import (
     DocumentProcessingService,
 )
 from company_lens.processing.stats import corpus_stats, demo_chunks
+from company_lens.research.repository import ResearchRunRepository
+from company_lens.research.worker import ResearchWorker
 from company_lens.retrieval.adaptive import AdaptiveRetrievalService
 from company_lens.retrieval.adaptive_schemas import AdaptiveRetrievalRequest
 from company_lens.retrieval.benchmark import (
@@ -390,6 +392,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     research_expire_parser.add_argument("--limit", type=int, default=100)
     _add_json_options(research_expire_parser)
 
+    worker_parser = subparsers.add_parser(
+        "research-worker",
+        help="Execute durable research runs from the PostgreSQL queue.",
+    )
+    worker_parser.add_argument("--once", action="store_true", help="Claim at most one run.")
+
     args = parser.parse_args(argv)
     if args.command == "ingest-sec":
         return _run_ingest_sec(args)
@@ -417,12 +425,36 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_benchmark_retrieval(args)
     if args.command == "research":
         return _run_research(args)
+    if args.command == "research-worker":
+        return _run_research_worker(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 
 
 def _add_json_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--pretty", action="store_true", help="Indent JSON output.")
+
+
+def _run_research_worker(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    repository = ResearchRunRepository(build_session_factory(settings.database_url))
+    try:
+        with open_persistent_research_agent(settings) as agent:
+            worker = ResearchWorker(
+                repository=repository,
+                agent=agent,
+                lease=timedelta(seconds=settings.research_worker_lease_seconds),
+            )
+            if args.once:
+                worker.run_once()
+            else:
+                worker.run_forever(poll_seconds=settings.research_worker_poll_seconds)
+    except ResearchApplicationConfigurationError as exc:
+        print(f"Research worker configuration failed: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 0
+    return 0
 
 
 def _add_research_output_options(parser: argparse.ArgumentParser) -> None:

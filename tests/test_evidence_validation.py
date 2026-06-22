@@ -127,6 +127,76 @@ def test_calculated_claim_requires_complete_input_lineage() -> None:
     assert "incomplete_calculation_lineage" in invalid.reason_codes
 
 
+def test_validation_accepts_rounded_percentages_and_scaled_financial_values() -> None:
+    previous = _fact(
+        "financial_fact:previous",
+        company_id=CLOUDFLARE_ID,
+        company_name="Cloudflare",
+        year=2024,
+    ).model_copy(
+        update={
+            "metadata": EvidenceMetadata(
+                company_id=CLOUDFLARE_ID,
+                company_name="Cloudflare",
+                metric="revenue",
+                period_end=date(2024, 12, 31),
+                fiscal_year=2024,
+                fiscal_period="FY",
+                unit="USD",
+                value=Decimal("1669626000"),
+            )
+        }
+    )
+    current = _fact(
+        "financial_fact:current",
+        company_id=CLOUDFLARE_ID,
+        company_name="Cloudflare",
+        year=2025,
+    ).model_copy(
+        update={
+            "metadata": EvidenceMetadata(
+                company_id=CLOUDFLARE_ID,
+                company_name="Cloudflare",
+                metric="revenue",
+                period_end=date(2025, 12, 31),
+                fiscal_year=2025,
+                fiscal_period="FY",
+                unit="USD",
+                value=Decimal("2167937000"),
+            )
+        }
+    )
+    calculation = EvidenceEnvelope(
+        evidence_id="calculation:growth",
+        kind=EvidenceKind.CALCULATION,
+        summary="year_over_year_growth: 29.845666035387565838 percent",
+        source_urls=("https://example.test/fact",),
+        lineage_refs=(previous.evidence_id, current.evidence_id),
+        metadata=EvidenceMetadata(
+            operation="year_over_year_growth",
+            formula="(current / previous - 1) * 100",
+            unit="percent",
+            value=Decimal("29.845666035387565838"),
+        ),
+        payload={
+            "values": [{"value": "29.845666035387565838"}],
+            "inputs": [{"value": "1669626000"}, {"value": "2167937000"}],
+        },
+    )
+    answer = (
+        "Cloudflare revenue growth was 29.85% year over year "
+        "[calculation:growth], based on revenue rising from $1.670 billion in 2024 "
+        "[financial_fact:previous] to $2.168 billion in 2025 [financial_fact:current]."
+    )
+
+    validation = AnswerValidator(EvidenceRegistry((previous, current, calculation))).validate(
+        answer
+    )
+
+    assert validation.valid is True
+    assert validation.reason_codes == ()
+
+
 def test_optional_semantic_judge_can_reject_superficially_valid_support() -> None:
     fact = _fact(
         "financial_fact:cloudflare",
