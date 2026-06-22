@@ -192,9 +192,10 @@ def test_session_run_history_returns_latest_runs_in_chronological_order(api) -> 
     assert history.status_code == 200
     assert history.json()["total"] == 3
     assert [item["run_id"] for item in history.json()["items"]] == run_ids[-2:]
-    assert client.get(
-        "/api/v1/research", params={"session_id": "unknown-session"}
-    ).json() == {"items": [], "total": 0}
+    assert client.get("/api/v1/research", params={"session_id": "unknown-session"}).json() == {
+        "items": [],
+        "total": 0,
+    }
 
 
 def test_event_stream_replays_legacy_v1_rows(api) -> None:

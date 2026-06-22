@@ -143,9 +143,7 @@ def project_agent_transition(
         claims = current.get("claims", ())
         supported = sum(item.supported for item in validation.claims)
         semantic = tuple(
-            item.semantic_support
-            for item in validation.claims
-            if item.semantic_support is not None
+            item.semantic_support for item in validation.claims if item.semantic_support is not None
         )
         repair_attempt = current.get("repair_attempts", 0)
         events.append(
@@ -304,9 +302,7 @@ def _branch_summary(branch: ExecutionBranch) -> dict[str, object]:
                 else None
             ),
             "observation_end": (
-                macro_request.observation_end.isoformat()
-                if macro_request.observation_end
-                else None
+                macro_request.observation_end.isoformat() if macro_request.observation_end else None
             ),
             "include_missing": macro_request.include_missing,
             "limit": macro_request.limit,

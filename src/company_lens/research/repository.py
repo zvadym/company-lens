@@ -115,11 +115,14 @@ class ResearchRunRepository:
 
     def list_session_runs(self, session_id: str, *, limit: int) -> ResearchRunListResponse:
         with self._session_factory() as session:
-            total = session.scalar(
-                select(func.count()).select_from(ResearchRun).where(
-                    ResearchRun.session_id == session_id
+            total = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ResearchRun)
+                    .where(ResearchRun.session_id == session_id)
                 )
-            ) or 0
+                or 0
+            )
             rows = session.scalars(
                 select(ResearchRun)
                 .where(ResearchRun.session_id == session_id)
