@@ -34,6 +34,70 @@ def test_claims_map_inline_citations_at_sentence_level() -> None:
     assert claims[0].claim_id != claims[1].claim_id
 
 
+def test_claims_attach_citations_written_after_sentence_punctuation() -> None:
+    claims = extract_claims(
+        "Revenue grew by 25 percent. [calculation:growth] Margin improved. [financial_fact:margin]"
+    )
+
+    assert len(claims) == 2
+    assert claims[0].text == "Revenue grew by 25 percent."
+    assert claims[0].evidence_ids == ("calculation:growth",)
+    assert claims[1].text == "Margin improved."
+    assert claims[1].evidence_ids == ("financial_fact:margin",)
+
+
+def test_validation_accepts_citation_block_after_terminal_period() -> None:
+    fact = _fact(
+        "financial_fact:cloudflare",
+        company_id=CLOUDFLARE_ID,
+        company_name="Cloudflare",
+        year=2025,
+    )
+
+    validation = AnswerValidator(EvidenceRegistry((fact,))).validate(
+        "Cloudflare revenue was 100 USD in 2025. [financial_fact:cloudflare]"
+    )
+
+    assert validation.valid is True
+    assert validation.claims[0].evidence_ids == ("financial_fact:cloudflare",)
+
+
+def test_claims_parse_markdown_table_rows_without_structural_claims() -> None:
+    claims = extract_claims(
+        """## Revenue growth
+
+| Year | Revenue | YoY growth | Evidence |
+|---|---:|---:|---|
+| 2023 | $1.297 billion | 33.0% vs. 2022 | [financial_fact:2023] |
+| 2024 | $1.670 billion | 28.8% vs. 2023 | [financial_fact:2024] |
+| 2025 | $2.168 billion | 29.8% vs. 2024 | [calculation:growth] |
+"""
+    )
+
+    assert len(claims) == 3
+    assert [claim.evidence_ids for claim in claims] == [
+        ("financial_fact:2023",),
+        ("financial_fact:2024",),
+        ("calculation:growth",),
+    ]
+    assert all("vs." in claim.text for claim in claims)
+
+
+def test_filing_form_is_not_treated_as_an_unsupported_number() -> None:
+    fact = _fact(
+        "financial_fact:cloudflare",
+        company_id=CLOUDFLARE_ID,
+        company_name="Cloudflare",
+        year=2025,
+    )
+
+    validation = AnswerValidator(EvidenceRegistry((fact,))).validate(
+        "Cloudflare reported 100 USD in its 2025 Form 10-K [financial_fact:cloudflare]."
+    )
+
+    assert validation.valid is True
+
+
 def test_validation_rejects_wrong_company_and_period() -> None:
     registry = EvidenceRegistry(
         (
@@ -125,6 +189,37 @@ def test_calculated_claim_requires_complete_input_lineage() -> None:
     assert valid.valid is True
     assert invalid.valid is False
     assert "incomplete_calculation_lineage" in invalid.reason_codes
+
+
+def test_calculation_formula_constants_and_company_metadata_support_claim() -> None:
+    fact = _fact(
+        "financial_fact:cloudflare",
+        company_id=CLOUDFLARE_ID,
+        company_name="Cloudflare",
+        year=2025,
+    )
+    calculation = EvidenceEnvelope(
+        evidence_id="calculation:growth",
+        kind=EvidenceKind.CALCULATION,
+        summary="year_over_year_growth: 25 percent",
+        source_urls=("https://example.test/fact",),
+        lineage_refs=(fact.evidence_id,),
+        metadata=EvidenceMetadata(
+            company_id=CLOUDFLARE_ID,
+            company_name="Cloudflare",
+            metric="revenue",
+            operation="year_over_year_growth",
+            formula="(current / prior_year - 1) * 100",
+            unit="percent",
+            value=Decimal("25"),
+        ),
+    )
+
+    validation = AnswerValidator(EvidenceRegistry((fact, calculation))).validate(
+        "Cloudflare revenue growth uses (current / prior year - 1) times 100 [calculation:growth]."
+    )
+
+    assert validation.valid is True
 
 
 def test_validation_accepts_rounded_percentages_and_scaled_financial_values() -> None:

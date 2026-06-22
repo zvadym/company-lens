@@ -109,7 +109,11 @@ class AdaptiveRetrievalService:
 
     def retrieve(self, request: AdaptiveRetrievalRequest) -> AdaptiveRetrievalResponse:
         resolved = self._resolver.resolve(request.query)
-        plan = self._planner.plan(resolved, max_attempts=request.max_attempts)
+        plan = self._planner.plan(
+            resolved,
+            max_attempts=request.max_attempts,
+            evidence_scope=request.evidence_scope,
+        )
         attempts: list[RetrievalAttempt] = []
         final_context: tuple[ContextEvidence, ...] = ()
 
@@ -352,6 +356,16 @@ class AdaptiveRetrievalService:
 
 
 def _strategy_sequence(plan: RetrievalPlan) -> tuple[RetrievalStrategy, ...]:
+    if plan.evidence_scope == "documents":
+        document_sequences: dict[RetrievalStrategy, tuple[RetrievalStrategy, ...]] = {
+            "none": ("none",),
+            "summary_only": ("summary_only", "section_level", "detailed"),
+            "section_level": ("section_level", "detailed", "summary_only"),
+            "detailed": ("detailed", "section_level", "summary_only"),
+            "structured_only": ("detailed", "section_level", "summary_only"),
+            "hybrid": ("detailed", "section_level", "summary_only"),
+        }
+        return document_sequences[plan.strategy][: plan.max_attempts]
     sequences: dict[RetrievalStrategy, tuple[RetrievalStrategy, ...]] = {
         "none": ("none",),
         "summary_only": ("summary_only", "section_level", "detailed"),
@@ -395,6 +409,10 @@ def _apply_filters(statement: Select[Any], filters: RetrievalFilters) -> Select[
 
 def _is_sufficient(context: tuple[ContextEvidence, ...], plan: RetrievalPlan) -> bool:
     if not context:
+        return False
+    if plan.evidence_scope == "documents" and not any(
+        item.kind in {"document_summary", "section_summary", "chunk"} for item in context
+    ):
         return False
     requested_companies = set(plan.filters.company_ids)
     if requested_companies and not requested_companies.issubset(

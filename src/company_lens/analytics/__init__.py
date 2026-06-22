@@ -8,6 +8,7 @@ from company_lens.analytics.calculations import (
     quarter_over_quarter_growth,
     rolling_average,
     year_over_year_growth,
+    year_over_year_growth_series,
 )
 from company_lens.analytics.charts import generate_chart_specification
 
@@ -22,4 +23,5 @@ __all__ = [
     "quarter_over_quarter_growth",
     "rolling_average",
     "year_over_year_growth",
+    "year_over_year_growth_series",
 ]

@@ -15,6 +15,10 @@ venv/
 
 dist/
 build/
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
 
 data/sec-artifacts/
 data/investor-pdf-artifacts/

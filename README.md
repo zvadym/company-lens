@@ -982,6 +982,18 @@ make run-api
 make check
 ```
 
+Run the React research workspace in a separate terminal (Node.js 22+ and pnpm are required):
+
+```bash
+corepack enable
+make web-install
+make web-dev
+```
+
+Open `http://127.0.0.1:5173`. The development server proxies `/api` to the FastAPI service on
+port 8000. Frontend setup, contract generation, and test commands are documented in
+[`web/README.md`](web/README.md).
+
 Environment variables:
 
 ```dotenv
@@ -994,6 +1006,9 @@ COMPANY_LENS_OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 COMPANY_LENS_OPENAI_EMBEDDING_DIMENSIONS=384
 COMPANY_LENS_OPENAI_PLANNING_MODEL=gpt-5.4-mini
 COMPANY_LENS_OPENAI_ANSWER_MODEL=gpt-5.5
+COMPANY_LENS_OPENAI_REPAIR_MODEL=gpt-5.4-mini
+COMPANY_LENS_OPENAI_REQUEST_TIMEOUT_SECONDS=30
+COMPANY_LENS_OPENAI_REPAIR_TIMEOUT_SECONDS=30
 COMPANY_LENS_SEMANTIC_JUDGE_ENABLED=false
 COMPANY_LENS_SEMANTIC_JUDGE_MODEL=gpt-5.4-mini
 COMPANY_LENS_AGENT_RETRIEVAL_INDEX_NAME=default

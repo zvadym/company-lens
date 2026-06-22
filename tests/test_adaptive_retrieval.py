@@ -86,6 +86,38 @@ def test_known_metric_uses_structured_fact_without_chunk_search(session: Session
     assert response.trace.abstained is False
 
 
+def test_document_scope_never_degrades_metric_query_to_structured_facts(
+    session: Session,
+) -> None:
+    query = "Cloudflare annual filings supporting revenue growth drivers for fiscal year 2025"
+    response = AdaptiveRetrievalService(session=session).retrieve(
+        AdaptiveRetrievalRequest(query=query, evidence_scope="documents")
+    )
+
+    assert response.plan.strategy == "detailed"
+    assert response.plan.rationale == ("document_evidence_required",)
+    assert response.context
+    assert {item.kind for item in response.context} <= {
+        "document_summary",
+        "section_summary",
+        "chunk",
+    }
+    assert response.trace.attempts[0].action == "detailed_chunk_search"
+
+
+def test_failed_run_query_expands_year_range_and_requires_documents(session: Session) -> None:
+    query = (
+        "Cloudflare annual filings supporting revenue growth drivers for fiscal years 2023 to 2025"
+    )
+    resolved = EntityResolver(session=session).resolve(query)
+    plan = RetrievalPlanner().plan(resolved, evidence_scope="documents")
+
+    assert resolved.fiscal_years == (2023, 2024, 2025)
+    assert plan.strategy == "detailed"
+    assert plan.filters.fiscal_years == (2023, 2024, 2025)
+    assert plan.rationale == ("document_evidence_required",)
+
+
 def test_detailed_context_orders_summaries_before_source_chunks(session: Session) -> None:
     response = AdaptiveRetrievalService(session=session).retrieve(
         AdaptiveRetrievalRequest(query="Cloudflare security platform evidence")

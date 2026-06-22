@@ -406,7 +406,8 @@ class PersistentResearchAgent:
             environment=self._environment,
         )
         latest: AgentState | None = None
-        previous: AgentState | None = None
+        checkpoint = self._graph.get_state(config)
+        previous = cast(AgentState, checkpoint.values) if checkpoint.values else None
         interruption: InterruptionReason | None = None
         stream = self._graph.stream(
             graph_input,
@@ -432,9 +433,7 @@ class PersistentResearchAgent:
                     node = str(data["name"])
                     task_input = data.get("input")
                     branch = (
-                        task_input.get("active_branch")
-                        if isinstance(task_input, dict)
-                        else None
+                        task_input.get("active_branch") if isinstance(task_input, dict) else None
                     )
                     attempt_key = f"{node}:{getattr(branch, 'branch_id', '')}"
                     if "input" in data:

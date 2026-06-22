@@ -31,6 +31,7 @@ from company_lens.agent import (
     StructuredModelResult,
     TextModelResult,
 )
+from company_lens.agent.model import ModelProviderError
 from company_lens.agent.schemas import (
     CalculationBranch,
     ChartBranch,
@@ -59,6 +60,10 @@ from company_lens.retrieval.adaptive_schemas import (
 
 COMPANY_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 FACT_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
+ANNUAL_FACT_IDS = {
+    year: uuid.uuid5(uuid.NAMESPACE_DNS, f"company-lens-test-revenue-{year}")
+    for year in range(2022, 2026)
+}
 
 
 class FakeModelProvider:
@@ -73,6 +78,7 @@ class FakeModelProvider:
         self.plan = plan
         self.texts = list(texts)
         self.purposes: list[ModelPurpose] = []
+        self.model_calls: list[tuple[ModelPurpose, tuple[ModelMessage, ...]]] = []
 
     def generate_structured[OutputT: BaseModel](
         self,
@@ -82,6 +88,7 @@ class FakeModelProvider:
         purpose: ModelPurpose,
     ) -> StructuredModelResult[OutputT]:
         self.purposes.append(purpose)
+        self.model_calls.append((purpose, tuple(messages)))
         if output_type is QuestionAnalysis:
             output: BaseModel = self.analysis
         elif output_type is ModelExecutionPlan:
@@ -101,11 +108,32 @@ class FakeModelProvider:
         purpose: ModelPurpose,
     ) -> TextModelResult:
         self.purposes.append(purpose)
+        self.model_calls.append((purpose, tuple(messages)))
         return TextModelResult(
             model="fake-answer",
             response_id=f"response-{purpose}-{len(self.purposes)}",
             text=self.texts.pop(0),
         )
+
+
+class RepairTimeoutModelProvider(FakeModelProvider):
+    def generate_text(
+        self,
+        messages: Sequence[ModelMessage],
+        *,
+        purpose: ModelPurpose,
+    ) -> TextModelResult:
+        if purpose is ModelPurpose.REPAIR:
+            self.purposes.append(purpose)
+            raise ModelProviderError(
+                AgentError(
+                    category=AgentErrorCategory.PROVIDER_TIMEOUT,
+                    severity=AgentErrorSeverity.RECOVERABLE,
+                    code="openai_timeout",
+                    message="OpenAI request timed out.",
+                )
+            )
+        return super().generate_text(messages, purpose=purpose)
 
 
 class FakeResearchTools:
@@ -135,6 +163,7 @@ class FakeResearchTools:
                     source_url="https://sec.example/risk",
                     source_id="cloudflare-risk",
                     company_id=COMPANY_ID,
+                    company_name="Cloudflare",
                     token_count=10,
                 ),
             ),
@@ -207,6 +236,33 @@ class MixedPeriodFinancialTools(FakeResearchTools):
                 comparative_2023,
                 _financial_observation(date(2024, 12, 31), Decimal("125")),
             ),
+            available_units=("USD",),
+        )
+
+
+class AnnualSeriesFinancialTools(FakeResearchTools):
+    def query_financial_facts(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
+        self.calls["financial"] += 1
+        annual = tuple(
+            _financial_observation(date(year, 12, 31), value).model_copy(
+                update={"id": ANNUAL_FACT_IDS[year]}
+            )
+            for year, value in zip(
+                range(2022, 2026),
+                (Decimal("64"), Decimal("80"), Decimal("100"), Decimal("125")),
+                strict=True,
+            )
+        )
+        comparative_2023 = annual[1].model_copy(
+            update={
+                "id": uuid.uuid4(),
+                "filed_date": date(2025, 2, 20),
+                "accession_number": "2023-comparative",
+            }
+        )
+        return FinancialFactQueryResult(
+            query=request,
+            observations=(*annual, comparative_2023),
             available_units=("USD",),
         )
 
@@ -343,6 +399,7 @@ def test_runtime_overrides_model_selected_retrieval_index() -> None:
     assert result["status"] is AgentRunStatus.COMPLETED
     assert tools.retrieval_requests[0].index_name == "production"
     assert tools.retrieval_requests[0].index_version == "openai-index.v2"
+    assert tools.retrieval_requests[0].evidence_scope == "documents"
 
 
 def test_api_only_route_generates_chart_from_macro_series() -> None:
@@ -404,10 +461,23 @@ def test_calculation_route_generates_deterministic_evidence() -> None:
 
     assert result["status"] is AgentRunStatus.COMPLETED
     assert result["calculations"][0].result.values[0].value == Decimal("25.00")
-    assert any(item.evidence_id == "calculation:growth" for item in result["evidence"])
+    calculation_evidence = next(
+        item for item in result["evidence"] if item.evidence_id == "calculation:growth"
+    )
+    assert calculation_evidence.metadata.company_id == COMPANY_ID
+    assert calculation_evidence.metadata.company_name == "Cloudflare"
+    assert calculation_evidence.metadata.metric == "revenue"
+    answer_context = next(
+        messages[-1].content
+        for purpose, messages in model.model_calls
+        if purpose is ModelPurpose.ANSWER
+    )
+    assert '"calculation"' in answer_context
+    assert '"values"' in answer_context
+    assert '"payload"' not in answer_context
 
 
-def test_yoy_growth_selects_latest_annual_pair_from_mixed_comparative_facts() -> None:
+def test_yoy_growth_selects_deduplicated_annual_series_from_mixed_facts() -> None:
     analysis = QuestionAnalysis(
         normalized_question="Calculate revenue growth",
         route=ResearchRoute.CALCULATION,
@@ -443,11 +513,134 @@ def test_yoy_growth_selects_latest_annual_pair_from_mixed_comparative_facts() ->
 
     assert result["status"] is AgentRunStatus.COMPLETED
     calculation = result["calculations"][0].result
-    assert calculation.values[0].value == Decimal("25.00")
+    assert [point.value for point in calculation.values] == [
+        Decimal("25.00"),
+        Decimal("25.00"),
+    ]
     assert [item.observed_at for item in calculation.inputs] == [
+        date(2022, 12, 31),
         date(2023, 12, 31),
         date(2024, 12, 31),
     ]
+
+
+def test_yoy_growth_returns_full_deduplicated_annual_series() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Calculate annual revenue growth",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+    )
+    facts = FinancialFactsBranch(
+        branch_id="financial",
+        request=FinancialFactQuery(
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+            period_types=("annual",),
+            fiscal_years=(2023, 2024, 2025),
+            limit=20,
+        ),
+    )
+    growth = CalculationBranch(
+        branch_id="growth",
+        operation="year_over_year_growth",
+        input_refs=(facts.branch_id,),
+        depends_on=(facts.branch_id,),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.CALCULATION, branches=(facts, growth)),
+        texts=("Revenue growth was 25 percent [calculation:growth].",),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, AnnualSeriesFinancialTools())).run(
+        "Calculate annual revenue growth", session_id="session-growth-series"
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    calculation = result["calculations"][0].result
+    assert [point.observed_at for point in calculation.values] == [
+        date(2023, 12, 31),
+        date(2024, 12, 31),
+        date(2025, 12, 31),
+    ]
+    assert [point.value for point in calculation.values] == [
+        Decimal("25.00"),
+        Decimal("25.00"),
+        Decimal("25.00"),
+    ]
+    assert len(calculation.inputs) == 4
+    assert calculation.inputs[0].observed_at == date(2022, 12, 31)
+
+
+def test_financial_markdown_table_passes_end_to_end_validation() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Compare annual revenue growth and explain the drivers",
+        route=ResearchRoute.HYBRID,
+        required_capabilities=(
+            AgentCapability.DOCUMENTS,
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+    )
+    documents = DocumentRetrievalBranch(
+        branch_id="documents",
+        request=AdaptiveRetrievalRequest(query="Cloudflare growth drivers"),
+    )
+    facts = FinancialFactsBranch(
+        branch_id="financial",
+        request=FinancialFactQuery(
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+            period_types=("annual",),
+            limit=20,
+        ),
+    )
+    growth = CalculationBranch(
+        branch_id="growth",
+        operation="year_over_year_growth",
+        input_refs=(facts.branch_id,),
+        depends_on=(facts.branch_id,),
+    )
+    evidence_ids = {year: f"financial_fact:{ANNUAL_FACT_IDS[year]}" for year in range(2022, 2026)}
+    rows = "\n".join(
+        f"| {year} | {revenue} USD | 25.0% vs. {year - 1} | Form 10-K "
+        f"[{evidence_ids[year - 1]}] [{evidence_ids[year]}] [calculation:growth] |"
+        for year, revenue in ((2023, 80), (2024, 100), (2025, 125))
+    )
+    headline_citations = " ".join(f"[{evidence_ids[year]}]" for year in range(2022, 2026))
+    headline = (
+        "Cloudflare revenue grew 25.0% in 2023, 2024, and 2025 "
+        f"[calculation:growth] {headline_citations}."
+    )
+    answer = f"""{headline}
+
+| Year | Revenue | YoY growth | Supporting filing |
+|---|---:|---:|---|
+{rows}
+
+Cloudflare identified competition as a material business risk [document:cloudflare-risk].
+"""
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.HYBRID,
+            branches=(documents, facts, growth),
+        ),
+        texts=(answer,),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, AnnualSeriesFinancialTools())).run(
+        "Compare annual revenue growth and explain the drivers",
+        session_id="session-financial-table",
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["answer_validation"].valid is True
+    assert len(result["claims"]) == 5
+    assert result["repair_attempts"] == 0
 
 
 @pytest.mark.parametrize(
@@ -576,6 +769,39 @@ def test_invalid_citation_is_repaired_once() -> None:
     assert result["repair_attempts"] == 1
     assert ModelPurpose.REPAIR in model.purposes
     assert result["answer_validation"].valid is True
+    repair_context = next(
+        messages[-1].content
+        for purpose, messages in model.model_calls
+        if purpose is ModelPurpose.REPAIR
+    )
+    assert '"payload"' not in repair_context
+    assert "financial_fact:22222222-2222-2222-2222-222222222222" in repair_context
+
+
+def test_repair_timeout_is_not_retried_by_general_node_policy() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="What was revenue?",
+        route=ResearchRoute.STRUCTURED_ONLY,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS,),
+    )
+    model = RepairTimeoutModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.STRUCTURED_ONLY,
+            branches=(_financial_branch(),),
+        ),
+        texts=("Revenue was 125 USD [invented:evidence].",),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, FakeResearchTools())).run(
+        "What was revenue?",
+        session_id="session-repair-timeout",
+        policy=ExecutionPolicy(max_retries_per_node=2),
+    )
+
+    assert result["status"] is AgentRunStatus.ABSTAINED
+    assert model.purposes.count(ModelPurpose.REPAIR) == 1
+    assert any(error.code == "openai_timeout" for error in result["errors"])
 
 
 def test_recoverable_tool_failure_retries_within_global_call_budget() -> None:
@@ -687,7 +913,7 @@ def test_over_budget_plan_fails_before_source_calls() -> None:
     assert any(error.code == "invalid_execution_plan" for error in result["errors"])
 
 
-def test_scalar_calculation_chart_fails_without_fabricating_answer() -> None:
+def test_dated_growth_calculation_can_generate_chart() -> None:
     analysis = QuestionAnalysis(
         normalized_question="Chart revenue growth",
         route=ResearchRoute.CALCULATION,
@@ -715,15 +941,16 @@ def test_scalar_calculation_chart_fails_without_fabricating_answer() -> None:
     model = FakeModelProvider(
         analysis=analysis,
         plan=ExecutionPlan(route=ResearchRoute.CALCULATION, branches=(facts, growth, chart)),
+        texts=("Revenue growth was 25 percent [calculation:growth].",),
     )
 
     result = ResearchAgent(runtime=ResearchAgentRuntime(model, FakeResearchTools())).run(
         "Chart revenue growth", session_id="session-6"
     )
 
-    assert result["status"] is AgentRunStatus.FAILED
-    assert result["final_answer"] is None
-    assert any(error.code == "invalid_chart_dataset" for error in result["errors"])
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["chart_spec"] is not None
+    assert result["chart_spec"].data[0].x == date(2025, 12, 31)
 
 
 def _financial_branch() -> FinancialFactsBranch:

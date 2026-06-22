@@ -68,7 +68,7 @@ from company_lens.analytics.calculations import (
     percentage_change,
     quarter_over_quarter_growth,
     rolling_average,
-    year_over_year_growth,
+    year_over_year_growth_series,
 )
 from company_lens.analytics.charts import generate_chart_specification
 from company_lens.analytics.schemas import (
@@ -911,13 +911,7 @@ def _generate_answer(
     state: AgentState, runtime: Runtime[ResearchAgentRuntime]
 ) -> dict[str, object]:
     started = time.monotonic()
-    context = json.dumps(
-        [
-            EvidenceEnvelope.model_validate(item).model_dump(mode="json")
-            for item in state.get("evidence", ())
-        ],
-        sort_keys=True,
-    )
+    context = json.dumps(_compact_evidence_context(state.get("evidence", ())), sort_keys=True)
     conversation = json.dumps(
         [message.model_dump(mode="json") for message in state["messages"]],
         sort_keys=True,
@@ -928,8 +922,9 @@ def _generate_answer(
             content=(
                 "Answer only from the supplied evidence. Preserve the language of the user's "
                 "question. Add an inline [evidence_id] marker to every factual statement. Never "
-                "invent citation IDs and do not reveal hidden reasoning. If evidence is partial, "
-                "state the limitation explicitly."
+                "invent citation IDs and do not reveal hidden reasoning. Markdown tables are "
+                "allowed, but every data row must contain its supporting inline evidence IDs in "
+                "that same row. If evidence is partial, state the limitation explicitly."
             ),
         ),
         ModelMessage(
@@ -1075,10 +1070,7 @@ def _repair_or_abstain(
                         if validation
                         else []
                     ),
-                    "evidence": [
-                        EvidenceEnvelope.model_validate(item).model_dump(mode="json")
-                        for item in state.get("evidence", ())
-                    ],
+                    "evidence": _compact_evidence_context(state.get("evidence", ())),
                     "allowed_evidence_ids": evidence_ids,
                 },
                 sort_keys=True,
@@ -1089,7 +1081,9 @@ def _repair_or_abstain(
         runtime.context.model_provider,
         messages,
         purpose=ModelPurpose.REPAIR,
-        max_retries=state["policy"].max_retries_per_node,
+        # Repair has its own attempt budget. A provider timeout must not multiply the general
+        # node retry budget and hold a run open for several minutes.
+        max_retries=0,
         node="repair_or_abstain",
     )
     update = _model_node_update("repair_or_abstain", attempts, started, error)
@@ -1099,6 +1093,27 @@ def _repair_or_abstain(
     else:
         update["draft_answer"] = text
     return update
+
+
+def _compact_evidence_context(
+    evidence: Sequence[EvidenceEnvelope],
+) -> tuple[dict[str, object], ...]:
+    compact: list[dict[str, object]] = []
+    for item in evidence:
+        record: dict[str, object] = {
+            "evidence_id": item.evidence_id,
+            "kind": item.kind.value,
+            "summary": item.summary,
+            "lineage_refs": item.lineage_refs,
+            "metadata": item.metadata.model_dump(mode="json", exclude_none=True),
+        }
+        if item.kind is EvidenceKind.CALCULATION:
+            record["calculation"] = {
+                "values": item.payload.get("values", ()),
+                "inputs": item.payload.get("inputs", ()),
+            }
+        compact.append(record)
+    return tuple(compact)
 
 
 def _route_after_repair(
@@ -1224,6 +1239,7 @@ def _normalize_and_validate_plan(
                 update={
                     "index_name": retrieval_index_name,
                     "index_version": retrieval_index_version,
+                    "evidence_scope": "documents",
                 }
             )
             branch = branch.model_copy(update={"request": retrieval_request})
@@ -1576,8 +1592,7 @@ def _execute_calculation(branch: CalculationBranch, state: AgentState) -> Calcul
         previous, current = _two_observations(series[0])
         return quarter_over_quarter_growth(current, previous)
     if operation == "year_over_year_growth":
-        previous, current = _two_observations(series[0])
-        return year_over_year_growth(current, previous)
+        return year_over_year_growth_series(series[0])
     if operation == "cagr":
         start, end = _endpoints(series[0])
         assert branch.years is not None
@@ -1609,7 +1624,11 @@ def _numeric_series(
         None,
     )
     if financial is not None:
-        selected = _select_financial_observations(financial.result.observations, operation)
+        selected = _select_financial_observations(
+            financial.result.observations,
+            operation,
+            requested_fiscal_years=financial.result.query.fiscal_years,
+        )
         observations = tuple(
             NumericObservation(
                 label=f"{item.company_name} {item.metric} {item.period_end.isoformat()}",
@@ -1644,6 +1663,8 @@ def _numeric_series(
 def _select_financial_observations(
     observations: Sequence[FinancialFactObservation],
     operation: str | None,
+    *,
+    requested_fiscal_years: tuple[int, ...] = (),
 ) -> tuple[FinancialFactObservation, ...]:
     deduplicated: dict[tuple[object, ...], FinancialFactObservation] = {}
     for item in observations:
@@ -1677,7 +1698,15 @@ def _select_financial_observations(
         return quarters[-2:]
     annual = tuple(item for item in ordered if item.period_type == "annual")
     if len(annual) >= 2:
-        return annual[-2:]
+        if requested_fiscal_years:
+            first_year = min(requested_fiscal_years) - 1
+            last_year = max(requested_fiscal_years)
+            annual = tuple(
+                item for item in annual if first_year <= item.period_end.year <= last_year
+            )
+        if len(annual) < 2:
+            raise ValueError("Year-over-year growth requires a prior-year baseline.")
+        return annual
     comparable = tuple(item for item in ordered if item.period_type in {"quarter", "year_to_date"})
     if len(comparable) < 2:
         raise ValueError("Year-over-year growth requires two comparable observations.")
@@ -1887,6 +1916,32 @@ def _evidence_from_state(state: AgentState) -> tuple[EvidenceEnvelope, ...]:
         input_evidence_ids = _input_evidence_ids(
             plan_branch.input_refs if plan_branch else (), state
         )
+        input_records = tuple(
+            item for item in evidence if item.evidence_id in set(input_evidence_ids)
+        )
+        company_ids = {
+            item.metadata.company_id
+            for item in input_records
+            if item.metadata.company_id is not None
+        }
+        company_names = {
+            item.metadata.company_name
+            for item in input_records
+            if item.metadata.company_name is not None
+        }
+        metrics = {
+            item.metadata.metric for item in input_records if item.metadata.metric is not None
+        }
+        period_starts = tuple(
+            item.metadata.period_start
+            for item in input_records
+            if item.metadata.period_start is not None
+        )
+        period_ends = tuple(
+            item.metadata.period_end
+            for item in input_records
+            if item.metadata.period_end is not None
+        )
         result_value = (
             calculation.result.values[0].value if len(calculation.result.values) == 1 else None
         )
@@ -1901,6 +1956,11 @@ def _evidence_from_state(state: AgentState) -> tuple[EvidenceEnvelope, ...]:
                 source_urls=calculation.result.sources,
                 lineage_refs=input_evidence_ids,
                 metadata=EvidenceMetadata(
+                    company_id=next(iter(company_ids)) if len(company_ids) == 1 else None,
+                    company_name=(next(iter(company_names)) if len(company_names) == 1 else None),
+                    metric=next(iter(metrics)) if len(metrics) == 1 else None,
+                    period_start=min(period_starts) if period_starts else None,
+                    period_end=max(period_ends) if period_ends else None,
                     unit=calculation.result.unit,
                     value=result_value,
                     formula=calculation.result.formula,

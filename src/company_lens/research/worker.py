@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -56,9 +57,15 @@ class ResearchWorker:
             self._repository.heartbeat(run.id, self._worker_id, lease=self._lease)
 
         try:
-            state = self._execute_run(
-                run.id, run.session_id, run.question, run.policy_json, observe
-            )
+            with _LeaseHeartbeat(
+                self._repository,
+                run.id,
+                self._worker_id,
+                lease=self._lease,
+            ):
+                state = self._execute_run(
+                    run.id, run.session_id, run.question, run.policy_json, observe
+                )
         except ResearchRunInterrupted as exc:
             self._repository.finalize(
                 run.id,
@@ -143,6 +150,52 @@ class ResearchWorker:
             control=control,
             allow_run_takeover=True,
         )
+
+
+class _LeaseHeartbeat:
+    def __init__(
+        self,
+        repository: ResearchRunRepository,
+        run_id: uuid.UUID,
+        worker_id: str,
+        *,
+        lease: timedelta,
+    ) -> None:
+        self._repository = repository
+        self._run_id = run_id
+        self._worker_id = worker_id
+        self._lease = lease
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> _LeaseHeartbeat:
+        interval = max(0.05, min(10.0, self._lease.total_seconds() / 3))
+        self._thread = threading.Thread(
+            target=self._run,
+            args=(interval,),
+            name=f"research-heartbeat-{self._run_id}",
+            daemon=True,
+        )
+        self._thread.start()
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+
+    def _run(self, interval: float) -> None:
+        while not self._stop.wait(interval):
+            try:
+                self._repository.heartbeat(
+                    self._run_id,
+                    self._worker_id,
+                    lease=self._lease,
+                )
+            except Exception:
+                # Execution still checks ownership and interruption at graph boundaries. A
+                # transient heartbeat failure must not terminate this daemon thread noisily.
+                continue
 
 
 def _public_status(status: AgentRunStatus) -> ResearchRunStatus:
