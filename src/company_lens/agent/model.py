@@ -15,6 +15,7 @@ class ModelPurpose(enum.StrEnum):
     PARSE = "parse"
     PLAN = "plan"
     ANSWER = "answer"
+    VALIDATE = "validate"
     REPAIR = "repair"
 
 

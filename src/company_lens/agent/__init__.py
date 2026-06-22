@@ -69,6 +69,10 @@ from company_lens.agent.schemas import (
     SessionMessage,
     TrajectoryEvent,
 )
+from company_lens.agent.semantic_judge import (
+    ModelSemanticSupportJudge,
+    SemanticSupportJudgment,
+)
 from company_lens.agent.tools import ResearchToolError, ResearchTools, SqlResearchTools
 from company_lens.agent.workflow import (
     ResearchAgent,
@@ -103,6 +107,7 @@ __all__ = [
     "ModelMessage",
     "ModelProviderError",
     "ModelPurpose",
+    "ModelSemanticSupportJudge",
     "ModelUsage",
     "OpenAIResearchModelProvider",
     "PersistentResearchAgent",
@@ -126,6 +131,7 @@ __all__ = [
     "ResearchToolError",
     "ResearchTools",
     "SessionMessage",
+    "SemanticSupportJudgment",
     "SessionMemory",
     "SessionErrorCode",
     "StructuredModelResult",

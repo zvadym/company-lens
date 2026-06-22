@@ -448,6 +448,7 @@ def _checkpoint_type_allowlist() -> tuple[tuple[str, ...], ...]:
     modules = (
         "company_lens.agent.schemas",
         "company_lens.analytics.schemas",
+        "company_lens.evidence.schemas",
         "company_lens.financials.schemas",
         "company_lens.macro.schemas",
         "company_lens.retrieval.adaptive_schemas",
