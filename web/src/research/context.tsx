@@ -43,6 +43,7 @@ import {
   researchEventTypes,
 } from "./events";
 import { getSessionId, loadTrace, storeTrace } from "./storage";
+import { selectRunsForThread } from "./threadRuns";
 
 type ConnectionState = "idle" | "connecting" | "live" | "reconnecting" | "closed";
 
@@ -250,10 +251,14 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
     [historyQuery.data?.items, runQuery.data],
   );
   const selectedRun = runQuery.data ?? runs.find((run) => run.run_id === selectedRunId) ?? null;
+  const threadRuns = useMemo(
+    () => selectRunsForThread(runs, selectedRunId),
+    [runs, selectedRunId],
+  );
 
   const messages = useMemo<ResearchMessage[]>(() => {
     const result: ResearchMessage[] = [];
-    for (const run of runs) {
+    for (const run of threadRuns) {
       result.push({
         id: `${run.run_id}:user`,
         role: "user",
@@ -273,7 +278,7 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
       });
     }
     return result;
-  }, [runs, selectedRunId, streamedAnswer]);
+  }, [selectedRunId, streamedAnswer, threadRuns]);
 
   const startMutation = useMutation({ mutationFn: (question: string) => startResearch(question, sessionId) });
   const cancelMutation = useMutation({ mutationFn: cancelResearch });
@@ -343,8 +348,15 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
     cancel,
     retry,
     feedback,
-    selectRun: (runId) => { void navigate(`/research/${runId}`); },
-    newResearch: () => { void navigate("/research/new"); },
+    selectRun: (runId) => {
+      setEvidenceFocus(null);
+      void navigate(`/research/${runId}`);
+    },
+    newResearch: () => {
+      setInspector("trace");
+      setEvidenceFocus(null);
+      void navigate("/research/new");
+    },
   };
 
   return (
