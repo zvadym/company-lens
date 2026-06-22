@@ -40,8 +40,17 @@ class FakeAgent:
         del question, policy, allow_run_takeover
         observer(
             AgentExecutionEvent(
+                event_key="node:finalize:test",
                 event_type="node.status",
-                data={"node": "finalize_response", "status": "completed"},
+                data={
+                    "step_id": "finalize-test",
+                    "node": "finalize_response",
+                    "branch_id": None,
+                    "status": "completed",
+                    "attempt": 1,
+                    "summary": "Research response finalized.",
+                    "duration_ms": 1,
+                },
             )
         )
         assert control() is None
@@ -76,6 +85,7 @@ def test_worker_persists_validated_answer_events_and_result() -> None:
         "answer.token",
         "run.terminal",
     ]
+    assert all(event.schema_version == "2" for event in events)
     assert "UNVALIDATED" not in "".join(str(event.data) for event in events)
 
 

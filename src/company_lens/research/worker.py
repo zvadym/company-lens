@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import socket
 import time
 import uuid
 from collections.abc import Callable
 from datetime import timedelta
 
+from company_lens.agent.events import AgentExecutionEvent
 from company_lens.agent.output import research_run_output
 from company_lens.agent.persistence import (
-    AgentExecutionEvent,
     InterruptionReason,
     PersistentResearchAgent,
     ResearchRunInterrupted,
@@ -49,15 +47,11 @@ class ResearchWorker:
             return True
 
         def observe(event: AgentExecutionEvent) -> None:
-            encoded = json.dumps(
-                {"type": event.event_type, "data": event.data}, sort_keys=True, default=str
-            )
-            key = f"agent:{hashlib.sha256(encoded.encode()).hexdigest()}"
             self._repository.append_event(
                 run.id,
                 event.event_type,
                 event.data,
-                event_key=key,
+                event_key=f"agent:v2:{event.event_key}",
             )
             self._repository.heartbeat(run.id, self._worker_id, lease=self._lease)
 

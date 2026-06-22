@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from datetime import timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Request, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from company_lens.api.dependencies import (
@@ -22,6 +22,7 @@ from company_lens.research.repository import ResearchRunRepository
 from company_lens.research.schemas import (
     PublicErrorResponse,
     ResearchAccepted,
+    ResearchRunListResponse,
     ResearchRunResponse,
     ResearchSourcesResponse,
     StartResearchRequest,
@@ -72,6 +73,22 @@ def start_research(
     )
 
 
+@router.get("", response_model=ResearchRunListResponse)
+def list_research_runs(
+    session_id: Annotated[
+        str,
+        Query(
+            min_length=1,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        ),
+    ],
+    repository: Annotated[ResearchRunRepository, Depends(get_research_repository)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> ResearchRunListResponse:
+    return repository.list_session_runs(session_id, limit=limit)
+
+
 @router.get("/{run_id}", response_model=ResearchRunResponse)
 def get_research(
     run_id: uuid.UUID,
@@ -111,15 +128,17 @@ def stream_events(
     repository: Annotated[ResearchRunRepository, Depends(get_research_repository)],
     settings: Annotated[Settings, Depends(get_api_settings)],
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+    after_id: Annotated[int, Query(ge=0)] = 0,
 ) -> StreamingResponse:
     try:
-        cursor = int(last_event_id) if last_event_id is not None else 0
+        header_cursor = int(last_event_id) if last_event_id is not None else 0
     except ValueError:
         raise PublicApiError(
             400, "invalid_event_cursor", "Last-Event-ID must be an integer."
         ) from None
-    if cursor < 0:
+    if header_cursor < 0:
         raise PublicApiError(400, "invalid_event_cursor", "Last-Event-ID cannot be negative.")
+    cursor = max(header_cursor, after_id)
     repository.require(run_id)
 
     def generate() -> Iterator[str]:

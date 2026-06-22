@@ -14,6 +14,7 @@ from sqlalchemy import Table, create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from company_lens.agent.events import AgentExecutionEvent
 from company_lens.agent.model import (
     ModelMessage,
     ModelPurpose,
@@ -216,8 +217,13 @@ def test_two_turns_preserve_messages_reset_run_state_and_reuse_exact_result(
     tools = CountingTools()
     checkpointer = InMemorySaver(serde=checkpoint_serializer())
     agent = _agent(model, tools, repository, checkpointer)
+    events: list[AgentExecutionEvent] = []
 
-    first = agent.run("What was Cloudflare revenue?", session_id="conversation-1")
+    first = agent.run(
+        "What was Cloudflare revenue?",
+        session_id="conversation-1",
+        observer=events.append,
+    )
     second = agent.run("And what about that result?", session_id="conversation-1")
 
     assert first["status"] is AgentRunStatus.COMPLETED
@@ -238,6 +244,23 @@ def test_two_turns_preserve_messages_reset_run_state_and_reuse_exact_result(
     assert inspected is not None
     assert inspected.metadata.turn_count == 2
     assert inspected.pending_nodes == ()
+    event_types = [event.event_type for event in events]
+    assert "analysis.summary" in event_types
+    assert "entities.summary" in event_types
+    assert "plan.summary" in event_types
+    assert "validation.summary" in event_types
+    assert any(
+        event.event_type == "node.status" and event.data["status"] == "started"
+        for event in events
+    )
+    assert any(
+        event.event_type == "node.status" and event.data["status"] == "completed"
+        for event in events
+    )
+    assert any(
+        event.event_type == "tool.status" and event.data["status"] == "completed"
+        for event in events
+    )
 
 
 def test_changed_typed_request_does_not_reuse_cached_result(
