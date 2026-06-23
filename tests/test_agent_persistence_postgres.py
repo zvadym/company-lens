@@ -31,6 +31,7 @@ from company_lens.agent.workflow import ResearchAgentRuntime
 from company_lens.db.models import ResearchSession
 from company_lens.db.session import build_session_factory
 from company_lens.financials.schemas import FinancialFactQuery, FinancialFactQueryResult
+from company_lens.ingestion.on_demand import CompanyDataPreparationResult
 from company_lens.macro.schemas import FredSeriesQuery, FredSeriesResult
 from company_lens.retrieval.adaptive_schemas import (
     AdaptiveRetrievalRequest,
@@ -79,6 +80,21 @@ class UnsupportedModel:
 class NoDataTools:
     def resolve_entities(self, query: str) -> ResolvedQuery:
         return ResolvedQuery(query=query)
+
+    def prepare_companies(
+        self,
+        *,
+        tickers: tuple[str, ...],
+        company_ids: tuple[str, ...],
+        index_name: str,
+        index_version: str,
+    ) -> CompanyDataPreparationResult:
+        return CompanyDataPreparationResult(
+            status="skipped",
+            requested_tickers=tickers,
+            skipped_tickers=tickers,
+            prepared_tickers=(),
+        )
 
     def retrieve_documents(self, request: AdaptiveRetrievalRequest) -> AdaptiveRetrievalResponse:
         raise AssertionError

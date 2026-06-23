@@ -5,6 +5,7 @@ import json
 import time
 import uuid
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -204,6 +205,10 @@ def build_research_graph(
     builder.add_node("start_turn", _observed_node("start_turn", _start_turn))
     builder.add_node("parse_question", _observed_node("parse_question", _parse_question))
     builder.add_node("resolve_entities", _observed_node("resolve_entities", _resolve_entities))
+    builder.add_node(
+        "prepare_company_data",
+        _observed_node("prepare_company_data", _prepare_company_data),
+    )
     builder.add_node("plan_request", _observed_node("plan_request", _plan_request))
     builder.add_node(
         "hydrate_cached_results",
@@ -235,7 +240,8 @@ def build_research_graph(
     builder.add_edge(START, "start_turn")
     builder.add_edge("start_turn", "parse_question")
     builder.add_edge("parse_question", "resolve_entities")
-    builder.add_edge("resolve_entities", "plan_request")
+    builder.add_edge("resolve_entities", "prepare_company_data")
+    builder.add_edge("prepare_company_data", "plan_request")
     builder.add_edge("plan_request", "hydrate_cached_results")
     builder.add_conditional_edges(
         "hydrate_cached_results",
@@ -432,6 +438,77 @@ def _resolve_entities(
                 "Entity resolution completed.",
                 started,
                 details={"entities": len(resolved.entities)},
+            ),
+        ),
+    }
+
+
+def _prepare_company_data(
+    state: AgentState, runtime: Runtime[ResearchAgentRuntime]
+) -> dict[str, object]:
+    if state["status"] is not AgentRunStatus.RUNNING:
+        return _skipped("prepare_company_data")
+    resolved = state.get("resolved_query")
+    if resolved is None:
+        return _skipped("prepare_company_data")
+    tickers = _on_demand_tickers(resolved)
+    company_ids = tuple(str(company_id) for company_id in resolved.company_ids)
+    if not tickers and not company_ids:
+        return _skipped("prepare_company_data")
+
+    started = time.monotonic()
+    try:
+        result = runtime.context.tools.prepare_companies(
+            tickers=tickers,
+            company_ids=company_ids,
+            index_name=runtime.context.retrieval_index_name,
+            index_version=runtime.context.retrieval_index_version,
+        )
+    except ResearchToolError as exc:
+        error = exc.error.model_copy(update={"node": "prepare_company_data"})
+        return {
+            "errors": (error,),
+            "node_attempts": (NodeAttempt(node="prepare_company_data", attempts=1),),
+            "trajectory": (
+                _event(
+                    "prepare_company_data",
+                    TrajectoryStatus.COMPLETED,
+                    "Company report download was unavailable; continuing with existing data.",
+                    started,
+                ),
+            ),
+        }
+    if result.prepared_tickers:
+        with suppress(Exception):
+            resolved = runtime.context.tools.resolve_entities(state["question"])
+
+    summary = (
+        "Company report data is already available."
+        if result.status == "skipped"
+        else "Company report data was downloaded and indexed."
+        if result.status == "success"
+        else "Company report data was partially prepared."
+    )
+    return {
+        "resolved_query": resolved,
+        "node_attempts": (NodeAttempt(node="prepare_company_data", attempts=1),),
+        "trajectory": (
+            _event(
+                "prepare_company_data",
+                TrajectoryStatus.COMPLETED,
+                summary,
+                started,
+                details={
+                    "requested_tickers": ",".join(result.requested_tickers),
+                    "prepared_tickers": ",".join(result.prepared_tickers),
+                    "skipped_tickers": ",".join(result.skipped_tickers),
+                    "companies_seen": result.companies_seen,
+                    "filings_seen": result.filings_seen,
+                    "facts_seen": result.facts_seen,
+                    "documents_processed": result.documents_processed,
+                    "chunks_indexed": result.chunks_indexed,
+                    "failures": result.failures,
+                },
             ),
         ),
     }
@@ -1604,6 +1681,18 @@ def _source_branches(
         for item in plan.branches
         if isinstance(item, (DocumentRetrievalBranch, FinancialFactsBranch, MacroSeriesBranch))
     )
+
+
+def _on_demand_tickers(resolved: ResolvedQuery) -> tuple[str, ...]:
+    tickers: list[str] = []
+    for entity in resolved.entities:
+        if entity.kind != "public_company":
+            continue
+        for candidate in entity.candidates:
+            ticker = candidate.canonical_value.strip().upper()
+            if ticker:
+                tickers.append(ticker)
+    return tuple(dict.fromkeys(tickers))
 
 
 def _source_request_fingerprint(

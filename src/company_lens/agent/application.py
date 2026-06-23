@@ -78,7 +78,11 @@ def open_persistent_research_agent(settings: Settings) -> Iterator[PersistentRes
     session_factory = build_session_factory(settings.database_url)
     runtime = ResearchAgentRuntime(
         model_provider=model_provider,
-        tools=SqlResearchTools(session_factory=session_factory, embedder=embedder),
+        tools=SqlResearchTools(
+            session_factory=session_factory,
+            embedder=embedder,
+            settings=settings,
+        ),
         max_session_messages=settings.agent_session_max_messages,
         max_cached_source_results=settings.agent_session_max_cached_results,
         retrieval_index_name=settings.agent_retrieval_index_name,

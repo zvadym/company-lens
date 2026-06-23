@@ -486,6 +486,7 @@ def _started_summary(node: str) -> str:
     return {
         "parse_question": "Classifying the research question.",
         "resolve_entities": "Resolving companies, metrics, and reporting periods.",
+        "prepare_company_data": "Downloading report...",
         "plan_request": "Building a bounded execution plan.",
         "hydrate_cached_results": "Checking reusable session results.",
         "retrieve_documents": "Retrieving documentary evidence.",

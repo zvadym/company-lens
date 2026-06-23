@@ -261,6 +261,27 @@ def metric_aliases(metric: str) -> tuple[str, ...]:
     return METRIC_ALIASES.get(metric, (metric,))
 
 
+def public_company_resolution(
+    *,
+    mention: str,
+    ticker: str,
+    display_name: str,
+    match_kind: str,
+) -> EntityResolution:
+    return EntityResolution(
+        kind="public_company",
+        mention=mention,
+        status="unresolved",
+        candidates=(
+            EntityCandidate(
+                canonical_value=ticker.upper(),
+                display_value=display_name,
+                match_kind=match_kind,
+            ),
+        ),
+    )
+
+
 def _fiscal_years(query: str) -> tuple[int, ...]:
     years = {int(value) for value in YEAR_RE.findall(query)}
     for start_text, end_text in YEAR_RANGE_RE.findall(query):

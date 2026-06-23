@@ -164,7 +164,12 @@ function Composer() {
 }
 
 export function ResearchThread() {
-  const { selectedRun } = useResearch();
+  const { selectedRun, events } = useResearch();
+  const latestNodeEvent = [...events].reverse().find((event) => event.type === "node.status");
+  const runningLabel = latestNodeEvent?.type === "node.status"
+    && latestNodeEvent.data.status === "started"
+    ? latestNodeEvent.data.summary
+    : "Research graph is working";
   return (
     <ThreadPrimitive.Root className="thread-root">
       <ThreadPrimitive.Viewport className="thread-viewport" turnAnchor="top">
@@ -174,7 +179,7 @@ export function ResearchThread() {
         </Suspense>
         {selectedRun && !isTerminal(selectedRun.status) ? (
           <div className="researching-indicator" role="status">
-            <span /><span /><span /> Research graph is working
+            <span /><span /><span /> {runningLabel}
           </div>
         ) : null}
         {selectedRun?.result?.chart ? (

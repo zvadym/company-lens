@@ -44,6 +44,7 @@ from company_lens.financials.schemas import (
     FinancialFactQuery,
     FinancialFactQueryResult,
 )
+from company_lens.ingestion.on_demand import CompanyDataPreparationResult
 from company_lens.macro.schemas import (
     FredObservation,
     FredSeriesQuery,
@@ -53,6 +54,8 @@ from company_lens.retrieval.adaptive_schemas import (
     AdaptiveRetrievalRequest,
     AdaptiveRetrievalResponse,
     ContextEvidence,
+    EntityCandidate,
+    EntityResolution,
     ResolvedQuery,
     RetrievalPlan,
     RetrievalTrace,
@@ -146,6 +149,22 @@ class FakeResearchTools:
     def resolve_entities(self, query: str) -> ResolvedQuery:
         self.calls["resolve"] += 1
         return ResolvedQuery(query=query, company_ids=(COMPANY_ID,), metrics=("revenue",))
+
+    def prepare_companies(
+        self,
+        *,
+        tickers: tuple[str, ...],
+        company_ids: tuple[str, ...],
+        index_name: str,
+        index_version: str,
+    ) -> CompanyDataPreparationResult:
+        self.calls["prepare"] += 1
+        return CompanyDataPreparationResult(
+            status="skipped",
+            requested_tickers=tickers,
+            skipped_tickers=tickers,
+            prepared_tickers=(),
+        )
 
     def retrieve_documents(self, request: AdaptiveRetrievalRequest) -> AdaptiveRetrievalResponse:
         self.calls["retrieval"] += 1
@@ -520,6 +539,82 @@ def test_repair_prompt_includes_invalid_claim_previews_for_sec_label_answers() -
     )
     assert "invalid_claims" in repair_context
     assert "Item 1. Business / Overview" in repair_context
+
+
+def test_workflow_prepares_unavailable_public_company_before_planning() -> None:
+    class OnDemandTools(FakeResearchTools):
+        def resolve_entities(self, query: str) -> ResolvedQuery:
+            self.calls["resolve"] += 1
+            if self.calls["resolve"] == 1:
+                return ResolvedQuery(
+                    query=query,
+                    entities=(
+                        EntityResolution(
+                            kind="public_company",
+                            mention="netflix",
+                            status="unresolved",
+                            candidates=(
+                                EntityCandidate(
+                                    canonical_value="NFLX",
+                                    display_value="NETFLIX INC",
+                                    match_kind="sec_company_name",
+                                ),
+                            ),
+                        ),
+                    ),
+                )
+            return ResolvedQuery(query=query, company_ids=(COMPANY_ID,))
+
+        def prepare_companies(
+            self,
+            *,
+            tickers: tuple[str, ...],
+            company_ids: tuple[str, ...],
+            index_name: str,
+            index_version: str,
+        ) -> CompanyDataPreparationResult:
+            self.calls["prepare"] += 1
+            assert tickers == ("NFLX",)
+            assert company_ids == ()
+            return CompanyDataPreparationResult(
+                status="success",
+                requested_tickers=tickers,
+                skipped_tickers=(),
+                prepared_tickers=tickers,
+                companies_seen=1,
+                filings_seen=1,
+                facts_seen=10,
+                documents_processed=1,
+                chunks_indexed=2,
+            )
+
+    analysis = QuestionAnalysis(
+        normalized_question="What risks did Netflix report?",
+        route=ResearchRoute.RAG_ONLY,
+        required_capabilities=(AgentCapability.DOCUMENTS,),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.RAG_ONLY,
+            branches=(
+                DocumentRetrievalBranch(
+                    branch_id="documents",
+                    request=AdaptiveRetrievalRequest(query="Netflix business risks"),
+                ),
+            ),
+        ),
+        texts=("Competition was a reported risk [document:cloudflare-risk].",),
+    )
+    tools = OnDemandTools()
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, tools)).run(
+        "What risks did Netflix report?", session_id="session-on-demand"
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert tools.calls["prepare"] == 1
+    assert tools.calls["resolve"] == 2
 
 
 def test_runtime_overrides_model_selected_retrieval_index() -> None:
