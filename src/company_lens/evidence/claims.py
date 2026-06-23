@@ -15,6 +15,7 @@ HEADING_PATTERN = re.compile(r"^\s{0,3}#{1,6}\s+(?P<text>.+?)\s*#*\s*$")
 LIST_MARKER_PATTERN = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+")
 HORIZONTAL_RULE_PATTERN = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 FACTUAL_HEADING_PATTERN = re.compile(r"\d|\[[a-z][a-z0-9_.:-]*\]")
+FACTUAL_LABEL_MARKER_PATTERN = re.compile(r"\d|[$€£¥%]")
 ABBREVIATIONS = ("vs.", "e.g.", "i.e.", "Inc.", "Corp.", "Ltd.")
 FINANCIAL_ABBREVIATIONS = (
     "Co.",
@@ -152,7 +153,7 @@ def _merge_structural_fragments(segments: list[str]) -> list[str]:
         if (
             index + 1 < len(segments)
             and not CITATION_PATTERN.search(segment)
-            and _is_structural_fragment(segment)
+            and _is_mergeable_structural_fragment(segment)
         ):
             merged.append(f"{segment} {segments[index + 1]}")
             index += 2
@@ -163,9 +164,25 @@ def _merge_structural_fragments(segments: list[str]) -> list[str]:
 
 
 def _is_structural_fragment(text: str) -> bool:
+    return _is_generic_structural_label(text) or _is_mergeable_structural_fragment(text)
+
+
+def _is_mergeable_structural_fragment(text: str) -> bool:
     stripped = text.strip()
     if len(stripped) > 120 or not SEC_LABEL_FRAGMENT_PATTERN.search(stripped):
         return False
     if stripped.count("**") % 2 == 1:
         return True
     return bool(STRUCTURAL_FRAGMENT_PREFIX_PATTERN.search(stripped))
+
+
+def _is_generic_structural_label(text: str) -> bool:
+    stripped = text.strip().strip("*_`")
+    if not stripped.endswith(":") or len(stripped) > 120:
+        return False
+    if CITATION_PATTERN.search(stripped) or re.search(r"[.!?]", stripped):
+        return False
+    label = stripped[:-1].strip().strip("*_`")
+    if not label:
+        return False
+    return not bool(FACTUAL_LABEL_MARKER_PATTERN.search(label))

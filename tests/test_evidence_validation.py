@@ -128,6 +128,53 @@ def test_sec_section_labels_do_not_create_unsupported_claim_fragments(answer: st
     assert validation.valid is True
 
 
+@pytest.mark.parametrize(
+    "heading",
+    (
+        "Коротко по суті:",
+        "Summary:",
+        "Resumen:",
+        "Zusammenfassung:",
+        "Основні ризики:",
+    ),
+)
+def test_language_agnostic_standalone_labels_are_not_material_claims(heading: str) -> None:
+    answer = f"{heading}\nCloudflare builds a connectivity cloud [document:business]."
+    document = EvidenceEnvelope(
+        evidence_id="document:business",
+        kind=EvidenceKind.DOCUMENT,
+        summary="Cloudflare builds a connectivity cloud.",
+        source_urls=("https://example.test/report",),
+        metadata=EvidenceMetadata(company_id=CLOUDFLARE_ID, company_name="Cloudflare"),
+    )
+
+    claims = extract_claims(answer)
+    validation = AnswerValidator(EvidenceRegistry((document,))).validate(answer)
+
+    assert len(claims) == 2
+    assert claims[0].text == heading
+    assert claims[0].material is False
+    assert claims[0].evidence_ids == ()
+    assert claims[1].material is True
+    assert claims[1].evidence_ids == ("document:business",)
+    assert validation.valid is True
+
+
+@pytest.mark.parametrize(
+    "answer",
+    (
+        "Revenue: 100 USD",
+        "2025 results:",
+        "Growth: 25%",
+    ),
+)
+def test_factual_or_numeric_labels_still_require_citations(answer: str) -> None:
+    validation = AnswerValidator(EvidenceRegistry(())).validate(answer)
+
+    assert validation.valid is False
+    assert validation.reason_codes == ("unsupported_claim",)
+
+
 def test_real_unsupported_claim_still_requires_a_citation() -> None:
     validation = AnswerValidator(EvidenceRegistry(())).validate("Revenue was 100 USD.")
 
