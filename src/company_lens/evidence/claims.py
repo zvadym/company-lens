@@ -16,6 +16,39 @@ LIST_MARKER_PATTERN = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+")
 HORIZONTAL_RULE_PATTERN = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 FACTUAL_HEADING_PATTERN = re.compile(r"\d|\[[a-z][a-z0-9_.:-]*\]")
 ABBREVIATIONS = ("vs.", "e.g.", "i.e.", "Inc.", "Corp.", "Ltd.")
+FINANCIAL_ABBREVIATIONS = (
+    "Co.",
+    "Cos.",
+    "LLC.",
+    "L.L.C.",
+    "LP.",
+    "L.P.",
+    "N.A.",
+    "No.",
+    "S.A.",
+    "U.K.",
+    "U.S.",
+    "U.S.A.",
+)
+SEC_ITEM_LABEL_PATTERN = re.compile(
+    r"\bItem\s+(?:\d{1,2}[A-Z]?|[IVX]+)\.(?=\s+[A-Z][A-Za-z&/(), -]*)",
+    re.IGNORECASE,
+)
+SEC_PART_LABEL_PATTERN = re.compile(r"\bPart\s+(?:[IVX]+|\d+)\.(?=\s+|$)", re.IGNORECASE)
+SEC_LABEL_FRAGMENT_PATTERN = re.compile(
+    r"\b(?:Item\s+(?:\d{1,2}[A-Z]?|[IVX]+)|Part\s+(?:[IVX]+|\d+))\.\s*(?:\*\*)?$",
+    re.IGNORECASE,
+)
+STRUCTURAL_FRAGMENT_PREFIX_PATTERN = re.compile(
+    r"(?:^|\b)(?:"
+    r"коротко\s+по\s+суті|"
+    r"(?:у|в)\s+розділі|"
+    r"(?:in|under)\s+(?:the\s+)?section|"
+    r"section|розділ|розділі|пункт|"
+    r"(?:у|в)\s+\**(?:item|part)\b"
+    r")",
+    re.IGNORECASE,
+)
 NON_MATERIAL_PATTERN = re.compile(
     r"^(?:note|sources?|limitations?|insufficient evidence)\s*:?$", re.IGNORECASE
 )
@@ -36,12 +69,15 @@ def extract_claims(answer: str) -> tuple[ClaimRecord, ...]:
             continue
         sentence_index = len(claims)
         digest = hashlib.sha256(f"{sentence_index}:{text}".encode()).hexdigest()[:16]
+        material = not bool(NON_MATERIAL_PATTERN.fullmatch(text))
+        if not evidence_ids and _is_structural_fragment(text):
+            material = False
         claims.append(
             ClaimRecord(
                 claim_id=f"claim:{digest}",
                 text=text,
                 evidence_ids=evidence_ids,
-                material=not bool(NON_MATERIAL_PATTERN.fullmatch(text)),
+                material=material,
                 sentence_index=sentence_index,
             )
         )
@@ -70,12 +106,7 @@ def _claim_segments(answer: str) -> tuple[str, ...]:
                 segments.append(heading_text)
             continue
         content = LIST_MARKER_PATTERN.sub("", line)
-        protected = content
-        replacements: dict[str, str] = {}
-        for offset, abbreviation in enumerate(ABBREVIATIONS):
-            placeholder = f"__abbr_{offset}__"
-            protected = protected.replace(abbreviation, placeholder)
-            replacements[placeholder] = abbreviation
+        protected, replacements = _protect_sentence_boundaries(content)
         for sentence in SENTENCE_PATTERN.split(protected):
             restored = sentence
             for placeholder, abbreviation in replacements.items():
@@ -86,8 +117,55 @@ def _claim_segments(answer: str) -> tuple[str, ...]:
                 restored = leading_citations.group("remainder")
             if restored.strip():
                 segments.append(restored.strip())
-    return tuple(segments)
+    return tuple(_merge_structural_fragments(segments))
 
 
 def _is_table_row(line: str) -> bool:
     return line.count("|") >= 2
+
+
+def _protect_sentence_boundaries(content: str) -> tuple[str, dict[str, str]]:
+    protected = content
+    replacements: dict[str, str] = {}
+    for offset, abbreviation in enumerate((*ABBREVIATIONS, *FINANCIAL_ABBREVIATIONS)):
+        placeholder = f"__abbr_{offset}__"
+        protected = protected.replace(abbreviation, placeholder)
+        replacements[placeholder] = abbreviation
+
+    for pattern in (SEC_ITEM_LABEL_PATTERN, SEC_PART_LABEL_PATTERN):
+        protected = pattern.sub(lambda match: _protect_match(match, replacements), protected)
+    return protected, replacements
+
+
+def _protect_match(match: re.Match[str], replacements: dict[str, str]) -> str:
+    value = match.group(0)
+    placeholder = f"__protected_period_{len(replacements)}__"
+    replacements[placeholder] = "."
+    return value.replace(".", placeholder)
+
+
+def _merge_structural_fragments(segments: list[str]) -> list[str]:
+    merged: list[str] = []
+    index = 0
+    while index < len(segments):
+        segment = segments[index]
+        if (
+            index + 1 < len(segments)
+            and not CITATION_PATTERN.search(segment)
+            and _is_structural_fragment(segment)
+        ):
+            merged.append(f"{segment} {segments[index + 1]}")
+            index += 2
+            continue
+        merged.append(segment)
+        index += 1
+    return merged
+
+
+def _is_structural_fragment(text: str) -> bool:
+    stripped = text.strip()
+    if len(stripped) > 120 or not SEC_LABEL_FRAGMENT_PATTERN.search(stripped):
+        return False
+    if stripped.count("**") % 2 == 1:
+        return True
+    return bool(STRUCTURAL_FRAGMENT_PREFIX_PATTERN.search(stripped))

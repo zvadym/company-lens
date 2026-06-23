@@ -42,6 +42,7 @@ It is designed as both a usable MVP and a hands-on laboratory for **RAG**, **age
 - [Implementation roadmap](#-implementation-roadmap)
 - [Quality targets](#-quality-targets)
 - [Local development](#-local-development)
+- [Operations runbook](docs/operations.md)
 - [Design principles](#-design-principles)
 
 ---
@@ -999,6 +1000,7 @@ Environment variables:
 ```dotenv
 COMPANY_LENS_ENVIRONMENT=local
 COMPANY_LENS_LOG_LEVEL=INFO
+COMPANY_LENS_TRACE_CONTENT=metadata
 COMPANY_LENS_DATABASE_URL=postgresql+psycopg://company_lens:company_lens@localhost:5432/company_lens
 OPENAI_API_KEY=
 FRED_API_KEY=

@@ -277,6 +277,7 @@ class ResearchRun(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(128), index=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     policy_json: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)

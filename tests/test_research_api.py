@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -65,14 +65,26 @@ def api() -> Iterator[tuple[TestClient, ResearchRunRepository, sessionmaker]]:
 
 
 def test_start_get_cancel_and_reconnect_event_stream(api) -> None:
-    client, _, _ = api
-    started = client.post("/api/v1/research", json={"question": "Compare NET revenue"})
+    client, _, factory = api
+    started = client.post(
+        "/api/v1/research",
+        json={"question": "Compare NET revenue"},
+        headers={"X-Request-ID": "research-request-1"},
+    )
 
     assert started.status_code == 202
     accepted = started.json()
     run_id = accepted["run_id"]
     assert accepted["status"] == "queued"
     assert accepted["events_url"].endswith(f"/api/v1/research/{run_id}/events")
+    with factory() as session:
+        stored = session.scalar(select(ResearchRun).where(ResearchRun.id == uuid.UUID(run_id)))
+        assert stored is not None
+        assert stored.correlation_id == "research-request-1"
+
+    metrics = client.get("/metrics")
+    assert metrics.status_code == 200
+    assert "company_lens_operation_count" in metrics.text
 
     queued = client.get(f"/api/v1/research/{run_id}")
     assert queued.status_code == 200

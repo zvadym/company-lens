@@ -360,6 +360,84 @@ def test_rag_only_route_uses_document_retrieval() -> None:
 
     assert result["status"] is AgentRunStatus.COMPLETED
     assert tools.calls["retrieval"] == 1
+    answer_messages = next(
+        messages for purpose, messages in model.model_calls if purpose is ModelPurpose.ANSWER
+    )
+    assert "untrusted data" in answer_messages[0].content
+    assert '"trust": "untrusted_external_data"' in answer_messages[1].content
+
+
+def test_sec_item_labels_do_not_trigger_false_abstain() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="What is in Cloudflare's report?",
+        route=ResearchRoute.RAG_ONLY,
+        required_capabilities=(AgentCapability.DOCUMENTS,),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.RAG_ONLY,
+            branches=(
+                DocumentRetrievalBranch(
+                    branch_id="documents",
+                    request=AdaptiveRetrievalRequest(query="Cloudflare annual report"),
+                ),
+            ),
+        ),
+        texts=(
+            "Коротко по суті: у розділі **Item 1. Business / Overview** Cloudflare "
+            "identified competition as a material business risk [document:cloudflare-risk].",
+        ),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, FakeResearchTools())).run(
+        "Що там з репортом Cloudflare?", session_id="session-sec-item-label"
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["repair_attempts"] == 0
+    assert result["answer_validation"].valid is True
+    assert ModelPurpose.REPAIR not in model.purposes
+
+
+def test_repair_prompt_includes_invalid_claim_previews_for_sec_label_answers() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="What is in Cloudflare's report?",
+        route=ResearchRoute.RAG_ONLY,
+        required_capabilities=(AgentCapability.DOCUMENTS,),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.RAG_ONLY,
+            branches=(
+                DocumentRetrievalBranch(
+                    branch_id="documents",
+                    request=AdaptiveRetrievalRequest(query="Cloudflare annual report"),
+                ),
+            ),
+        ),
+        texts=(
+            "У **Item 1. Business / Overview** Cloudflare identified competition as a "
+            "material business risk [invented:evidence].",
+            "У **Item 1. Business / Overview** Cloudflare identified competition as a "
+            "material business risk [document:cloudflare-risk].",
+        ),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, FakeResearchTools())).run(
+        "Що там з репортом Cloudflare?", session_id="session-sec-item-label-repair"
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["repair_attempts"] == 1
+    repair_context = next(
+        messages[-1].content
+        for purpose, messages in model.model_calls
+        if purpose is ModelPurpose.REPAIR
+    )
+    assert "invalid_claims" in repair_context
+    assert "Item 1. Business / Overview" in repair_context
 
 
 def test_runtime_overrides_model_selected_retrieval_index() -> None:

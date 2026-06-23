@@ -8,6 +8,8 @@ from typing import Any
 import httpx
 
 from company_lens.macro.schemas import FredObservation, FredSeriesMetadata
+from company_lens.reliability import CircuitBreaker, RetryPolicy, call_with_resilience
+from company_lens.security import OutboundUrlPolicy
 
 FRED_SERIES_PAGE = "https://fred.stlouisfed.org/series/{series_id}"
 QueryParameter = str | int | float | bool | None
@@ -30,7 +32,10 @@ class FredClient:
         if not api_key.strip():
             raise ValueError("A non-empty FRED API key is required.")
         self._api_key = api_key
-        self._retry_attempts = retry_attempts
+        self._retry_policy = RetryPolicy(max_attempts=max(1, retry_attempts))
+        self._circuit_breaker = CircuitBreaker()
+        self._url_policy = OutboundUrlPolicy(frozenset({"api.stlouisfed.org"}))
+        self._url_policy.validate(base_url)
         self._client = httpx.Client(
             base_url=base_url.rstrip("/"),
             timeout=timeout_seconds,
@@ -109,30 +114,31 @@ class FredClient:
 
     def _get(self, path: str, params: Mapping[str, QueryParameter]) -> dict[str, Any]:
         request_params = {**params, "api_key": self._api_key, "file_type": "json"}
-        last_error: Exception | None = None
-        for attempt in range(self._retry_attempts):
-            try:
-                response = self._client.get(path, params=request_params)
-                if response.status_code >= 500 and attempt + 1 < self._retry_attempts:
-                    continue
-                response.raise_for_status()
-                payload = response.json()
-                if not isinstance(payload, dict):
-                    raise FredClientError("FRED response must be a JSON object.")
-                return payload
-            except httpx.HTTPStatusError as exc:
-                last_error = FredClientError(f"FRED returned HTTP {exc.response.status_code}.")
-                if attempt + 1 >= self._retry_attempts:
-                    break
-            except httpx.HTTPError as exc:
-                last_error = FredClientError(f"FRED transport error: {type(exc).__name__}.")
-                if attempt + 1 >= self._retry_attempts:
-                    break
-            except (ValueError, FredClientError) as exc:
-                last_error = exc
-                if attempt + 1 >= self._retry_attempts:
-                    break
-        raise FredClientError(f"FRED request failed: {last_error}") from last_error
+
+        def request() -> dict[str, Any]:
+            response = self._client.get(path, params=request_params)
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise FredClientError("FRED response must be a JSON object.")
+            return payload
+
+        try:
+            return call_with_resilience(
+                request,
+                provider="fred",
+                retry_policy=self._retry_policy,
+                circuit_breaker=self._circuit_breaker,
+                retry_if=_retryable_http_error,
+            )
+        except httpx.HTTPStatusError as exc:
+            raise FredClientError(f"FRED returned HTTP {exc.response.status_code}.") from None
+        except httpx.HTTPError as exc:
+            raise FredClientError(f"FRED transport error: {type(exc).__name__}.") from None
+        except FredClientError:
+            raise
+        except Exception as exc:
+            raise FredClientError(f"FRED request failed: {type(exc).__name__}.") from None
 
 
 def _mapping(value: object, context: str) -> Mapping[str, Any]:
@@ -145,3 +151,11 @@ def _optional_datetime(value: object) -> datetime | None:
     if not value:
         return None
     return datetime.fromisoformat(str(value).replace(" ", "T"))
+
+
+def _retryable_http_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.RequestError):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and (
+        exc.response.status_code == 429 or exc.response.status_code >= 500
+    )

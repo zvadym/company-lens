@@ -15,6 +15,9 @@ from company_lens.agent.persistence import (
     ResearchRunInterrupted,
 )
 from company_lens.agent.schemas import AgentRunStatus, AgentState, ExecutionPolicy
+from company_lens.db.models import ResearchRun
+from company_lens.observability.context import bind_context
+from company_lens.observability.telemetry import observe_operation
 from company_lens.research.repository import ResearchRunRepository
 from company_lens.research.schemas import ResearchResult, ResearchRunStatus
 
@@ -37,6 +40,21 @@ class ResearchWorker:
         run = self._repository.claim(self._worker_id, lease=self._lease)
         if run is None:
             return False
+        with (
+            bind_context(
+                correlation_id=run.correlation_id,
+                run_id=run.id,
+                session_id=run.session_id,
+            ),
+            observe_operation(
+                "research.run",
+                kind="workflow",
+                attributes={"research.session_id": run.session_id},
+            ),
+        ):
+            return self._run_claimed(run)
+
+    def _run_claimed(self, run: ResearchRun) -> bool:
         initial_reason = self._repository.interruption_reason(run.id)
         if initial_reason is not None:
             self._repository.finalize(

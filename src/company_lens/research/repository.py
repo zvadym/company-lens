@@ -62,12 +62,14 @@ class ResearchRunRepository:
         *,
         session_id: str,
         timeout: timedelta,
+        correlation_id: str | None = None,
         now: datetime | None = None,
     ) -> ResearchRun:
         current = now or datetime.now(UTC)
         run = ResearchRun(
             id=uuid.uuid4(),
             session_id=session_id,
+            correlation_id=correlation_id,
             question=request.question,
             policy_json=request.policy.model_dump(mode="json"),
             status=ResearchRunStatus.QUEUED.value,

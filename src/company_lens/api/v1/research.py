@@ -18,6 +18,8 @@ from company_lens.api.dependencies import (
 )
 from company_lens.api.errors import PublicApiError
 from company_lens.config import Settings
+from company_lens.observability.correlation import CORRELATION_ID_STATE_KEY
+from company_lens.observability.telemetry import observe_operation
 from company_lens.research.repository import ResearchRunRepository
 from company_lens.research.schemas import (
     PublicErrorResponse,
@@ -57,11 +59,13 @@ def start_research(
         window_seconds=60,
     )
     session_id = payload.session_id or f"session-{uuid.uuid4()}"
-    run = repository.enqueue(
-        payload,
-        session_id=session_id,
-        timeout=timedelta(seconds=settings.research_run_timeout_seconds),
-    )
+    with observe_operation("research.enqueue", kind="api"):
+        run = repository.enqueue(
+            payload,
+            session_id=session_id,
+            timeout=timedelta(seconds=settings.research_run_timeout_seconds),
+            correlation_id=getattr(request.state, CORRELATION_ID_STATE_KEY, None),
+        )
     base = str(request.base_url).rstrip("/")
     path = f"/api/v1/research/{run.id}"
     return ResearchAccepted(

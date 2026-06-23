@@ -8,6 +8,9 @@ from typing import Any
 
 import httpx
 
+from company_lens.reliability import CircuitBreaker, RetryPolicy, call_with_resilience
+from company_lens.security import OutboundUrlPolicy
+
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 SEC_COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
@@ -72,12 +75,16 @@ class SecClient:
         timeout_seconds: float = 30.0,
         retry_attempts: int = 3,
         rate_limit_per_second: float = 9.0,
+        max_response_bytes: int = 50 * 1024 * 1024,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         if not user_agent.strip():
             raise ValueError("SEC user agent must be provided.")
-        self._retry_attempts = max(1, retry_attempts)
+        self._retry_policy = RetryPolicy(max_attempts=max(1, retry_attempts))
+        self._circuit_breaker = CircuitBreaker()
+        self._url_policy = OutboundUrlPolicy(frozenset({"www.sec.gov", "data.sec.gov"}))
         self._rate_limiter = RateLimiter(rate_limit_per_second)
+        self._max_response_bytes = max_response_bytes
         self._client = httpx.Client(
             headers={
                 "User-Agent": user_agent,
@@ -85,7 +92,7 @@ class SecClient:
                 "Accept": "application/json,text/html,text/plain,*/*",
             },
             timeout=timeout_seconds,
-            follow_redirects=True,
+            follow_redirects=False,
             transport=transport,
         )
 
@@ -199,19 +206,28 @@ class SecClient:
         return payload
 
     def _request(self, method: str, url: str) -> httpx.Response:
-        last_error: Exception | None = None
-        for attempt in range(1, self._retry_attempts + 1):
+        self._url_policy.validate(url)
+
+        def request() -> httpx.Response:
             self._rate_limiter.wait()
-            try:
-                response = self._client.request(method, url)
-                response.raise_for_status()
-                return response
-            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-                last_error = exc
-                if attempt == self._retry_attempts:
-                    break
-                sleep(min(2.0, 0.25 * attempt))
-        raise SecClientError(f"SEC request failed for {url}: {last_error!r}")
+            response = self._client.request(method, url)
+            response.raise_for_status()
+            if len(response.content) > self._max_response_bytes:
+                raise SecClientError("SEC response exceeds the configured size limit.")
+            return response
+
+        try:
+            return call_with_resilience(
+                request,
+                provider="sec",
+                retry_policy=self._retry_policy,
+                circuit_breaker=self._circuit_breaker,
+                retry_if=_retryable_http_error,
+            )
+        except Exception as exc:
+            raise SecClientError(
+                f"SEC request failed for allowlisted host: {type(exc).__name__}."
+            ) from exc
 
     @staticmethod
     def _recent_rows(recent: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -261,3 +277,11 @@ def _parse_int(value: object) -> int | None:
         return int(str(value))
     except ValueError:
         return None
+
+
+def _retryable_http_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.RequestError):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and (
+        exc.response.status_code == 429 or exc.response.status_code >= 500
+    )

@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
-from company_lens.ingestion.sec_client import SEC_SUBMISSIONS_URL, SEC_TICKERS_URL, SecClient
+from company_lens.ingestion.sec_client import (
+    SEC_SUBMISSIONS_URL,
+    SEC_TICKERS_URL,
+    SecClient,
+    SecClientError,
+)
 
 
 def test_sec_client_resolves_ticker_and_builds_recent_filing_metadata() -> None:
@@ -64,3 +70,42 @@ def test_sec_client_resolves_ticker_and_builds_recent_filing_metadata() -> None:
         "https://www.sec.gov/Archives/edgar/data/"
         "1477333/000147733326000001/0001477333-26-000001.txt"
     )
+
+
+def test_sec_client_retries_timeout_but_not_non_retryable_http_error() -> None:
+    attempts = 0
+
+    def timeout_then_success(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectTimeout("timed out", request=request)
+        return httpx.Response(200, json={})
+
+    with SecClient(
+        "CompanyLens tests@example.com",
+        retry_attempts=2,
+        rate_limit_per_second=0,
+        transport=httpx.MockTransport(timeout_then_success),
+    ) as client:
+        assert client.fetch_ticker_map() == {}
+    assert attempts == 2
+
+    attempts = 0
+
+    def bad_request(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(400)
+
+    with (
+        SecClient(
+            "CompanyLens tests@example.com",
+            retry_attempts=3,
+            rate_limit_per_second=0,
+            transport=httpx.MockTransport(bad_request),
+        ) as client,
+        pytest.raises(SecClientError),
+    ):
+        client.fetch_ticker_map()
+    assert attempts == 1

@@ -11,6 +11,25 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     environment: str = Field(default="local")
     log_level: str = Field(default="INFO")
+    service_name: str = Field(default="company-lens", min_length=1)
+    service_version: str = Field(default="0.1.0", min_length=1)
+    telemetry_enabled: bool = Field(default=True)
+    metrics_enabled: bool = Field(default=True)
+    trace_content: Literal["metadata", "redacted", "full"] = Field(default="metadata")
+    langfuse_public_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("COMPANY_LENS_LANGFUSE_PUBLIC_KEY", "LANGFUSE_PUBLIC_KEY"),
+    )
+    langfuse_secret_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("COMPANY_LENS_LANGFUSE_SECRET_KEY", "LANGFUSE_SECRET_KEY"),
+    )
+    langfuse_base_url: str = Field(
+        default="https://cloud.langfuse.com",
+        validation_alias=AliasChoices("COMPANY_LENS_LANGFUSE_BASE_URL", "LANGFUSE_BASE_URL"),
+    )
+    prompt_version: str = Field(default="research-v1", min_length=1)
+    parser_version: str = Field(default="document-parser-v1", min_length=1)
     database_url: str = Field(
         default="postgresql+psycopg://company_lens:company_lens@localhost:5432/company_lens"
     )
@@ -19,6 +38,7 @@ class Settings(BaseSettings):
     sec_rate_limit_per_second: float = Field(default=9.0)
     sec_request_timeout_seconds: float = Field(default=30.0)
     sec_retry_attempts: int = Field(default=3)
+    sec_max_response_bytes: int = Field(default=50 * 1024 * 1024, ge=1_024)
     sec_filings_per_form: int = Field(default=3)
     sec_download_exhibits: bool = Field(default=False)
     investor_pdf_manifest_path: Path = Field(default=Path("config/investor_pdfs.yaml"))
@@ -26,7 +46,14 @@ class Settings(BaseSettings):
     investor_pdf_user_agent: str = Field(default="CompanyLens PDF ingestion")
     investor_pdf_request_timeout_seconds: float = Field(default=30.0)
     investor_pdf_retry_attempts: int = Field(default=3)
-    fred_api_key: str | None = Field(
+    investor_pdf_max_bytes: int = Field(default=25 * 1024 * 1024, ge=1_024)
+    investor_pdf_allowed_hosts: tuple[str, ...] = (
+        "cloudflare2019ipo.q4web.com",
+        "www.annualreports.com",
+        "s26.q4cdn.com",
+        "stocklight.com",
+    )
+    fred_api_key: SecretStr | None = Field(
         default=None,
         validation_alias=AliasChoices("COMPANY_LENS_FRED_API_KEY", "FRED_API_KEY"),
     )
@@ -74,6 +101,8 @@ class Settings(BaseSettings):
     feedback_comment_max_chars: int = Field(default=2_000, ge=1, le=2_000)
     research_start_rate_limit_per_minute: int = Field(default=10, ge=0, le=10_000)
     feedback_rate_limit_per_minute: int = Field(default=30, ge=0, le=10_000)
+    circuit_breaker_failure_threshold: int = Field(default=5, ge=1, le=100)
+    circuit_breaker_recovery_seconds: float = Field(default=30.0, gt=0, le=3600)
 
     model_config = SettingsConfigDict(
         env_file=".env",

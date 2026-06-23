@@ -7,8 +7,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from time import sleep
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 from sqlalchemy import delete, select
@@ -34,6 +34,8 @@ from company_lens.db.models import (
 from company_lens.ingestion.artifacts import ArtifactStore, StoredArtifact
 from company_lens.ingestion.pdf_manifest import InvestorPdfManifestDocument
 from company_lens.ingestion.pdf_parser import ParsedPdf, PdfParseError, PdfParser
+from company_lens.reliability import CircuitBreaker, RetryPolicy, call_with_resilience
+from company_lens.security import OutboundUrlPolicy
 
 INVESTOR_PDF_SOURCE_SYSTEM = "investor_relations_pdf"
 
@@ -65,16 +67,21 @@ class InvestorPdfClient:
         user_agent: str,
         timeout_seconds: float = 30.0,
         retry_attempts: int = 3,
+        allowed_hosts: Sequence[str] = (),
+        max_bytes: int = 25 * 1024 * 1024,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        self._retry_attempts = max(1, retry_attempts)
+        self._retry_policy = RetryPolicy(max_attempts=max(1, retry_attempts))
+        self._circuit_breaker = CircuitBreaker()
+        self._url_policy = OutboundUrlPolicy(frozenset(host.lower() for host in allowed_hosts))
+        self._max_bytes = max_bytes
         self._client = httpx.Client(
             headers={
                 "User-Agent": user_agent,
                 "Accept": "application/pdf,*/*",
             },
             timeout=timeout_seconds,
-            follow_redirects=True,
+            follow_redirects=False,
             transport=transport,
         )
 
@@ -88,18 +95,35 @@ class InvestorPdfClient:
         self.close()
 
     def get_bytes(self, url: str) -> tuple[bytes, str | None]:
-        last_error: Exception | None = None
-        for attempt in range(1, self._retry_attempts + 1):
-            try:
-                response = self._client.get(url)
+        def request() -> tuple[bytes, str | None]:
+            current = url
+            for _ in range(6):
+                self._url_policy.validate(current)
+                response = self._client.get(current)
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise InvestorPdfClientError("PDF redirect had no location.")
+                    current = urljoin(current, location)
+                    continue
                 response.raise_for_status()
+                if len(response.content) > self._max_bytes:
+                    raise InvestorPdfClientError("PDF exceeds the configured size limit.")
                 return response.content, response.headers.get("content-type")
-            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-                last_error = exc
-                if attempt == self._retry_attempts:
-                    break
-                sleep(min(2.0, 0.25 * attempt))
-        raise InvestorPdfClientError(f"PDF request failed for {url}: {last_error!r}")
+            raise InvestorPdfClientError("PDF exceeded the redirect limit.")
+
+        try:
+            return call_with_resilience(
+                request,
+                provider="investor_pdf",
+                retry_policy=self._retry_policy,
+                circuit_breaker=self._circuit_breaker,
+                retry_if=_retryable_pdf_error,
+            )
+        except InvestorPdfClientError:
+            raise
+        except Exception as exc:
+            raise InvestorPdfClientError(f"PDF request failed: {type(exc).__name__}.") from None
 
 
 class InvestorPdfIngestionService:
@@ -574,6 +598,16 @@ def build_investor_pdf_client_from_settings(settings: Settings) -> InvestorPdfCl
         user_agent=settings.investor_pdf_user_agent,
         timeout_seconds=settings.investor_pdf_request_timeout_seconds,
         retry_attempts=settings.investor_pdf_retry_attempts,
+        allowed_hosts=settings.investor_pdf_allowed_hosts,
+        max_bytes=settings.investor_pdf_max_bytes,
+    )
+
+
+def _retryable_pdf_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.RequestError):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and (
+        exc.response.status_code == 429 or exc.response.status_code >= 500
     )
 
 
