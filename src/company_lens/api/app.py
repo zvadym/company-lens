@@ -4,6 +4,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy.engine import Engine
 
 from company_lens import __version__
@@ -16,12 +18,18 @@ from company_lens.config import get_settings
 from company_lens.db.session import build_session_factory
 from company_lens.observability.correlation import CorrelationIdMiddleware
 from company_lens.observability.logging import configure_logging
+from company_lens.observability.telemetry import (
+    configure_telemetry,
+    instrument_fastapi,
+    shutdown_telemetry,
+)
 from company_lens.research.repository import ResearchRunRepository
 
 
 def create_app(*, research_repository: ResearchRunRepository | None = None) -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level)
+    configure_telemetry(settings)
     session_factory = None
     if research_repository is None:
         session_factory = build_session_factory(settings.database_url)
@@ -33,6 +41,7 @@ def create_app(*, research_repository: ResearchRunRepository | None = None) -> F
         try:
             yield
         finally:
+            shutdown_telemetry()
             if session_factory is not None:
                 engine = session_factory.kw.get("bind")
                 if isinstance(engine, Engine):
@@ -53,4 +62,11 @@ def create_app(*, research_repository: ResearchRunRepository | None = None) -> F
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(research_router, prefix="/api/v1")
     app.include_router(catalog_router, prefix="/api/v1")
+    if settings.metrics_enabled:
+        app.add_api_route(
+            "/metrics",
+            lambda: Response(generate_latest(), media_type=CONTENT_TYPE_LATEST),
+            include_in_schema=False,
+        )
+    instrument_fastapi(app)
     return app

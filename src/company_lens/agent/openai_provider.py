@@ -15,6 +15,7 @@ from openai import (
 )
 from openai.types.responses import EasyInputMessageParam, ResponseInputParam
 from openai.types.shared_params import Reasoning
+from pydantic import BaseModel
 
 from company_lens.agent.model import (
     ModelMessage,
@@ -27,6 +28,17 @@ from company_lens.agent.model import (
 )
 from company_lens.agent.schemas import AgentError, AgentErrorCategory, AgentErrorSeverity
 from company_lens.config import Settings
+from company_lens.observability.telemetry import (
+    TraceContentPolicy,
+    observe_operation,
+    record_generation,
+)
+from company_lens.reliability import (
+    CircuitBreaker,
+    CircuitOpenError,
+    RetryPolicy,
+    call_with_resilience,
+)
 
 ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh"]
 
@@ -51,6 +63,9 @@ class OpenAIResearchModelProvider:
         timeout_seconds: float = 30.0,
         repair_timeout_seconds: float = 30.0,
         max_retries: int = 0,
+        circuit_breaker_failure_threshold: int = 5,
+        circuit_breaker_recovery_seconds: float = 30.0,
+        trace_content: TraceContentPolicy = "metadata",
         client: Any | None = None,
     ) -> None:
         if not api_key:
@@ -76,6 +91,12 @@ class OpenAIResearchModelProvider:
         self._validation_max_output_tokens = validation_max_output_tokens
         self._timeout_seconds = timeout_seconds
         self._repair_timeout_seconds = repair_timeout_seconds
+        self._circuit_breaker = CircuitBreaker(
+            failure_threshold=circuit_breaker_failure_threshold,
+            recovery_seconds=circuit_breaker_recovery_seconds,
+        )
+        self._single_attempt = RetryPolicy(max_attempts=1)
+        self._trace_content = trace_content
         self._client = client or OpenAI(
             api_key=api_key,
             timeout=timeout_seconds,
@@ -92,14 +113,49 @@ class OpenAIResearchModelProvider:
         model, reasoning_effort, max_output_tokens = self._configuration(purpose)
         input_items = _message_input(messages)
         try:
-            response = self._client.responses.parse(
-                model=model,
-                input=input_items,
-                text_format=output_type,
-                reasoning=Reasoning(effort=reasoning_effort),
-                max_output_tokens=max_output_tokens,
-                store=False,
-            )
+            with observe_operation(
+                "model.generate_structured",
+                kind="model",
+                attributes={
+                    "gen_ai.system": "openai",
+                    "gen_ai.request.model": model,
+                    "company_lens.model.purpose": purpose.value,
+                },
+            ):
+                response = call_with_resilience(
+                    lambda: self._client.responses.parse(
+                        model=model,
+                        input=input_items,
+                        text_format=output_type,
+                        reasoning=Reasoning(effort=reasoning_effort),
+                        max_output_tokens=max_output_tokens,
+                        store=False,
+                    ),
+                    provider="openai",
+                    retry_policy=self._single_attempt,
+                    circuit_breaker=self._circuit_breaker,
+                    retry_if=_retryable_provider_error,
+                )
+                usage = _response_usage(response)
+                response_model = _response_model(response, model)
+                response_id = _optional_response_id(response)
+                refusal = _response_refusal(response)
+                output = getattr(response, "output_parsed", None)
+                record_generation(
+                    model=response_model,
+                    purpose=purpose.value,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    total_tokens=usage.total_tokens,
+                    trace_content=self._trace_content,
+                    input_payload=_messages_payload(messages),
+                    output_payload=_structured_output_payload(output, refusal=refusal),
+                    response_id=response_id,
+                    model_parameters={
+                        "reasoning_effort": reasoning_effort,
+                        "max_output_tokens": max_output_tokens,
+                    },
+                )
         except Exception as exc:
             raise _map_provider_error(exc) from None
 
@@ -110,7 +166,7 @@ class OpenAIResearchModelProvider:
                 model=_response_model(response, model),
                 response_id=_response_id(response),
                 refusal=refusal,
-                usage=_response_usage(response),
+                usage=usage,
             )
         if not isinstance(output, output_type):
             raise _invalid_response_error("OpenAI returned no parsed structured output.")
@@ -118,7 +174,7 @@ class OpenAIResearchModelProvider:
             model=_response_model(response, model),
             response_id=_response_id(response),
             output=output,
-            usage=_response_usage(response),
+            usage=usage,
         )
 
     def generate_text(
@@ -135,14 +191,49 @@ class OpenAIResearchModelProvider:
                 if purpose is ModelPurpose.REPAIR
                 else self._timeout_seconds
             )
-            response = self._client.responses.create(
-                model=model,
-                input=input_items,
-                reasoning=Reasoning(effort=reasoning_effort),
-                max_output_tokens=max_output_tokens,
-                store=False,
-                timeout=request_timeout,
-            )
+            with observe_operation(
+                "model.generate_text",
+                kind="model",
+                attributes={
+                    "gen_ai.system": "openai",
+                    "gen_ai.request.model": model,
+                    "company_lens.model.purpose": purpose.value,
+                },
+            ):
+                response = call_with_resilience(
+                    lambda: self._client.responses.create(
+                        model=model,
+                        input=input_items,
+                        reasoning=Reasoning(effort=reasoning_effort),
+                        max_output_tokens=max_output_tokens,
+                        store=False,
+                        timeout=request_timeout,
+                    ),
+                    provider="openai",
+                    retry_policy=self._single_attempt,
+                    circuit_breaker=self._circuit_breaker,
+                    retry_if=_retryable_provider_error,
+                )
+                usage = _response_usage(response)
+                response_model = _response_model(response, model)
+                response_id = _optional_response_id(response)
+                refusal = _response_refusal(response)
+                text = getattr(response, "output_text", None)
+                record_generation(
+                    model=response_model,
+                    purpose=purpose.value,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    total_tokens=usage.total_tokens,
+                    trace_content=self._trace_content,
+                    input_payload=_messages_payload(messages),
+                    output_payload=_text_output_payload(text, refusal=refusal),
+                    response_id=response_id,
+                    model_parameters={
+                        "reasoning_effort": reasoning_effort,
+                        "max_output_tokens": max_output_tokens,
+                    },
+                )
         except Exception as exc:
             raise _map_provider_error(exc) from None
 
@@ -153,7 +244,7 @@ class OpenAIResearchModelProvider:
                 model=_response_model(response, model),
                 response_id=_response_id(response),
                 refusal=refusal,
-                usage=_response_usage(response),
+                usage=usage,
             )
         if not isinstance(text, str) or not text.strip():
             raise _invalid_response_error("OpenAI returned no text output.")
@@ -161,7 +252,7 @@ class OpenAIResearchModelProvider:
             model=_response_model(response, model),
             response_id=_response_id(response),
             text=text,
-            usage=_response_usage(response),
+            usage=usage,
         )
 
     def _configuration(self, purpose: ModelPurpose) -> tuple[str, ReasoningEffort, int]:
@@ -212,6 +303,9 @@ def build_openai_model_provider(settings: Settings) -> OpenAIResearchModelProvid
         # Workflow retries are observable and budgeted. Retrying inside the SDK as well would
         # multiply worst-case latency and hide attempts from the execution trace.
         max_retries=0,
+        circuit_breaker_failure_threshold=settings.circuit_breaker_failure_threshold,
+        circuit_breaker_recovery_seconds=settings.circuit_breaker_recovery_seconds,
+        trace_content=settings.trace_content,
     )
 
 
@@ -227,6 +321,10 @@ def _message_input(messages: Sequence[ModelMessage]) -> ResponseInputParam:
         EasyInputMessageParam(role=message.role, content=message.content) for message in messages
     ]
     return result
+
+
+def _messages_payload(messages: Sequence[ModelMessage]) -> list[dict[str, str]]:
+    return [{"role": message.role, "content": message.content} for message in messages]
 
 
 def _response_refusal(response: Any) -> str | None:
@@ -271,7 +369,33 @@ def _response_id(response: Any) -> str:
     return response_id
 
 
+def _optional_response_id(response: Any) -> str | None:
+    response_id = getattr(response, "id", None)
+    return response_id if isinstance(response_id, str) and response_id else None
+
+
+def _structured_output_payload(output: Any, *, refusal: str | None) -> object:
+    if refusal is not None:
+        return {"refusal": refusal}
+    if isinstance(output, BaseModel):
+        return output.model_dump(mode="json")
+    return {"output_type": type(output).__name__}
+
+
+def _text_output_payload(text: object, *, refusal: str | None) -> object:
+    if refusal is not None:
+        return {"refusal": refusal}
+    return text if isinstance(text, str) else {"output_type": type(text).__name__}
+
+
 def _map_provider_error(exc: Exception) -> ModelProviderError:
+    if isinstance(exc, CircuitOpenError):
+        return _error(
+            AgentErrorCategory.PROVIDER_SERVICE,
+            AgentErrorSeverity.RECOVERABLE,
+            "openai_circuit_open",
+            "OpenAI is temporarily unavailable after repeated failures.",
+        )
     if isinstance(exc, APITimeoutError):
         return _error(
             AgentErrorCategory.PROVIDER_TIMEOUT,
@@ -319,6 +443,12 @@ def _map_provider_error(exc: Exception) -> ModelProviderError:
         AgentErrorSeverity.TERMINAL,
         "openai_unexpected",
         "Unexpected OpenAI provider failure.",
+    )
+
+
+def _retryable_provider_error(exc: Exception) -> bool:
+    return isinstance(exc, (APITimeoutError, APIConnectionError, RateLimitError)) or (
+        isinstance(exc, APIStatusError) and exc.status_code >= 500
     )
 
 

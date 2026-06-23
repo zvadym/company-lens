@@ -6,7 +6,37 @@ validated chart specifications.
 
 ## Run locally
 
-Start PostgreSQL, apply migrations, and run the API and worker from the repository root:
+Run the full Docker developer stack from the repository root:
+
+```bash
+make migrate-dev-docker
+make start-dev-docker
+```
+
+`make migrate-dev-docker` applies backend migrations and initializes the LangGraph checkpoint
+tables required by research runs.
+
+To populate the initial company universe and build the retrieval index, run:
+
+```bash
+make index-dev
+```
+
+Use `DEV_EMBEDDING_PROVIDER=local make index-dev` for a cheaper local smoke-test index.
+
+Open <http://localhost:5173>. The API is available at <http://localhost:8000>.
+
+The backend dev containers load the repository `.env` file if it exists. Docker-specific
+environment values from `docker-compose.dev.yml` still override it.
+
+If host port `5432` is busy, run the stack with another exposed Postgres port:
+
+```bash
+COMPANY_LENS_DEV_POSTGRES_PORT=5433 make start-dev-docker
+```
+
+For non-Docker development, start PostgreSQL, apply migrations, and run the API and worker from
+the repository root:
 
 ```bash
 docker compose up -d postgres

@@ -1,0 +1,138 @@
+name: company-lens-dev
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    env_file:
+      - path: .env
+        required: false
+    command:
+      [
+        "uvicorn",
+        "company_lens.main:app",
+        "--reload",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
+    environment: &app-environment
+      COMPANY_LENS_ENVIRONMENT: local
+      COMPANY_LENS_LOG_LEVEL: INFO
+      COMPANY_LENS_DATABASE_URL: postgresql+psycopg://company_lens:company_lens@postgres:5432/company_lens
+      COMPANY_LENS_TRACE_CONTENT: ${COMPANY_LENS_TRACE_CONTENT:-metadata}
+      COMPANY_LENS_LANGFUSE_PUBLIC_KEY: ${COMPANY_LENS_LANGFUSE_PUBLIC_KEY:-}
+      COMPANY_LENS_LANGFUSE_SECRET_KEY: ${COMPANY_LENS_LANGFUSE_SECRET_KEY:-}
+      COMPANY_LENS_LANGFUSE_BASE_URL: ${COMPANY_LENS_LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      FRED_API_KEY: ${FRED_API_KEY:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    env_file:
+      - path: .env
+        required: false
+    command:
+      [
+        "watchfiles",
+        "--filter",
+        "python",
+        "company-lens research-worker",
+        "src",
+        "migrations",
+      ]
+    environment:
+      <<: *app-environment
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    image: node:22-slim
+    working_dir: /app
+    command:
+      [
+        "sh",
+        "-lc",
+        "corepack enable && corepack prepare pnpm@11.5.3 --activate && pnpm --store-dir /pnpm-store --dir web install && pnpm --dir web dev --host 0.0.0.0",
+      ]
+    environment:
+      VITE_API_PROXY_TARGET: http://api:8000
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+      - web-node-modules:/app/web/node_modules
+      - web-pnpm-store:/pnpm-store
+    depends_on:
+      api:
+        condition: service_healthy
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    env_file:
+      - path: .env
+        required: false
+    command:
+      [
+        "sh",
+        "-lc",
+        "alembic upgrade head && company-lens research setup",
+      ]
+    environment:
+      <<: *app-environment
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - tools
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: company_lens
+      POSTGRES_USER: company_lens
+      POSTGRES_PASSWORD: company_lens
+    ports:
+      - "${COMPANY_LENS_DEV_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-dev-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U company_lens -d company_lens"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-dev-data:
+  web-node-modules:
+  web-pnpm-store:

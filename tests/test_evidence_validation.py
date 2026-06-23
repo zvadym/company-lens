@@ -98,6 +98,90 @@ def test_filing_form_is_not_treated_as_an_unsupported_number() -> None:
     assert validation.valid is True
 
 
+@pytest.mark.parametrize(
+    "answer",
+    (
+        (
+            "Коротко по суті: у розділі **Item 1. Business / Overview** Cloudflare "
+            "формулює свою місію як “help build a better Internet” [document:business]."
+        ),
+        ("У **Item 1A. Risk Factors** Cloudflare описує material risks [document:business]."),
+        ("У Item 7. Management Discussion компанія пояснює результати [document:business]."),
+        "Part I. Business describes Cloudflare's operations [document:business].",
+        "Part II. Other Information covers later filing content [document:business].",
+    ),
+)
+def test_sec_section_labels_do_not_create_unsupported_claim_fragments(answer: str) -> None:
+    claims = extract_claims(answer)
+    document = EvidenceEnvelope(
+        evidence_id="document:business",
+        kind=EvidenceKind.DOCUMENT,
+        summary="Cloudflare business overview and report sections",
+        source_urls=("https://example.test/report",),
+        metadata=EvidenceMetadata(company_id=CLOUDFLARE_ID, company_name="Cloudflare"),
+    )
+    validation = AnswerValidator(EvidenceRegistry((document,))).validate(answer)
+
+    assert len(claims) == 1
+    assert claims[0].evidence_ids == ("document:business",)
+    assert "Item 1." not in claims[0].text or "Business" in claims[0].text
+    assert validation.valid is True
+
+
+@pytest.mark.parametrize(
+    "heading",
+    (
+        "Коротко по суті:",
+        "Summary:",
+        "Resumen:",
+        "Zusammenfassung:",
+        "Основні ризики:",
+    ),
+)
+def test_language_agnostic_standalone_labels_are_not_material_claims(heading: str) -> None:
+    answer = f"{heading}\nCloudflare builds a connectivity cloud [document:business]."
+    document = EvidenceEnvelope(
+        evidence_id="document:business",
+        kind=EvidenceKind.DOCUMENT,
+        summary="Cloudflare builds a connectivity cloud.",
+        source_urls=("https://example.test/report",),
+        metadata=EvidenceMetadata(company_id=CLOUDFLARE_ID, company_name="Cloudflare"),
+    )
+
+    claims = extract_claims(answer)
+    validation = AnswerValidator(EvidenceRegistry((document,))).validate(answer)
+
+    assert len(claims) == 2
+    assert claims[0].text == heading
+    assert claims[0].material is False
+    assert claims[0].evidence_ids == ()
+    assert claims[1].material is True
+    assert claims[1].evidence_ids == ("document:business",)
+    assert validation.valid is True
+
+
+@pytest.mark.parametrize(
+    "answer",
+    (
+        "Revenue: 100 USD",
+        "2025 results:",
+        "Growth: 25%",
+    ),
+)
+def test_factual_or_numeric_labels_still_require_citations(answer: str) -> None:
+    validation = AnswerValidator(EvidenceRegistry(())).validate(answer)
+
+    assert validation.valid is False
+    assert validation.reason_codes == ("unsupported_claim",)
+
+
+def test_real_unsupported_claim_still_requires_a_citation() -> None:
+    validation = AnswerValidator(EvidenceRegistry(())).validate("Revenue was 100 USD.")
+
+    assert validation.valid is False
+    assert validation.reason_codes == ("unsupported_claim",)
+
+
 def test_validation_rejects_wrong_company_and_period() -> None:
     registry = EvidenceRegistry(
         (

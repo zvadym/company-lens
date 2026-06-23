@@ -17,6 +17,13 @@ dependencies = [
   "langgraph>=1.2,<2",
   "langgraph-checkpoint-postgres>=3.1,<4",
   "openai>=2.11.0",
+  "langfuse>=4,<5",
+  "opentelemetry-api>=1.39,<2",
+  "opentelemetry-sdk>=1.39,<2",
+  "opentelemetry-instrumentation-fastapi>=0.60b0,<1",
+  "opentelemetry-instrumentation-sqlalchemy>=0.60b0,<1",
+  "opentelemetry-exporter-prometheus>=0.60b0,<1",
+  "prometheus-client>=0.23,<1",
   "pdfplumber>=0.11.5",
   "pydantic>=2.8.2",
   "pydantic-settings>=2.4.0",
@@ -32,7 +39,9 @@ company-lens = "company_lens.cli:main"
 
 [project.optional-dependencies]
 dev = [
+  "bandit>=1.9,<2",
   "mypy>=1.11.2",
+  "pip-audit>=2.9,<3",
   "pytest>=8.3.2",
   "ruff>=0.6.3",
   "types-PyYAML>=6.0.12.20250822",

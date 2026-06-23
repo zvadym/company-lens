@@ -42,6 +42,7 @@ It is designed as both a usable MVP and a hands-on laboratory for **RAG**, **age
 - [Implementation roadmap](#-implementation-roadmap)
 - [Quality targets](#-quality-targets)
 - [Local development](#-local-development)
+- [Operations runbook](docs/operations.md)
 - [Design principles](#-design-principles)
 
 ---
@@ -953,7 +954,7 @@ cd company-lens
 
 cp .env.example .env
 
-# Start PostgreSQL/pgvector and the API
+# Start the production-like backend stack
 docker compose up --build
 ```
 
@@ -962,6 +963,40 @@ The API is available at `http://localhost:8000`, and readiness is exposed at:
 ```bash
 curl http://localhost:8000/api/v1/health
 ```
+
+For the full Docker developer stack with PostgreSQL, API reload, worker restart-on-change, and
+Vite hot module replacement:
+
+```bash
+make migrate-dev-docker
+make start-dev-docker
+```
+
+`make migrate-dev-docker` applies Alembic migrations and initializes the LangGraph checkpoint
+tables used by persistent research runs.
+
+To populate the dev database with the initial company universe, SEC facts, recent SEC filings,
+processed chunks, and embeddings, run:
+
+```bash
+make index-dev
+```
+
+By default this uses OpenAI embeddings. For a cheaper local smoke-test index, run:
+
+```bash
+DEV_EMBEDDING_PROVIDER=local make index-dev
+```
+
+Open `http://localhost:5173` for the React frontend. The API is available at
+`http://localhost:8000`.
+
+The `api`, `worker`, and `migrate` dev containers load your local `.env` file if it exists.
+Docker-specific values declared in `docker-compose.dev.yml`, such as the in-network database
+URL, still take precedence.
+
+If port `5432` is already in use on your host, either stop the conflicting local Postgres
+process/container or run with `COMPANY_LENS_DEV_POSTGRES_PORT=5433 make start-dev-docker`.
 
 For local Python development:
 
@@ -999,6 +1034,7 @@ Environment variables:
 ```dotenv
 COMPANY_LENS_ENVIRONMENT=local
 COMPANY_LENS_LOG_LEVEL=INFO
+COMPANY_LENS_TRACE_CONTENT=metadata
 COMPANY_LENS_DATABASE_URL=postgresql+psycopg://company_lens:company_lens@localhost:5432/company_lens
 OPENAI_API_KEY=
 FRED_API_KEY=

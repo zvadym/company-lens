@@ -46,6 +46,10 @@ FILING_FORM_PATTERN = re.compile(
     r"\b(?:10-K|10-Q|8-K|20-F|40-F|6-K|S-1)(?:/A)?\b",
     re.IGNORECASE,
 )
+SEC_SECTION_LABEL_PATTERN = re.compile(
+    r"\b(?:Item\s+(?:\d{1,2}[A-Z]?|[IVX]+)|Part\s+(?:[IVX]+|\d+))\.",
+    re.IGNORECASE,
+)
 
 
 class AnswerValidator:
@@ -307,6 +311,7 @@ def _claim_numbers(
 ) -> tuple[tuple[Decimal, Decimal], ...]:
     result: list[tuple[Decimal, Decimal]] = []
     numeric_text = FILING_FORM_PATTERN.sub(" ", claim_text)
+    numeric_text = SEC_SECTION_LABEL_PATTERN.sub(" ", numeric_text)
     for match in SCALED_NUMBER_PATTERN.finditer(numeric_text):
         raw = match.group("number")
         parsed = _decimal(raw)

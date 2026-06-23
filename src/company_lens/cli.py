@@ -56,6 +56,8 @@ from company_lens.ingestion.sec_service import (
 from company_lens.macro.client import FredClient, FredClientError
 from company_lens.macro.schemas import FredSeriesQuery
 from company_lens.macro.service import FredIngestionService, FredQueryService
+from company_lens.observability.logging import configure_logging
+from company_lens.observability.telemetry import configure_telemetry, shutdown_telemetry
 from company_lens.processing.service import (
     DEFAULT_CHUNKING_VERSION,
     DEFAULT_SUMMARY_PROMPT_VERSION,
@@ -399,6 +401,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     worker_parser.add_argument("--once", action="store_true", help="Claim at most one run.")
 
     args = parser.parse_args(argv)
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    configure_telemetry(settings)
+    try:
+        return _dispatch_command(args)
+    finally:
+        shutdown_telemetry()
+
+
+def _dispatch_command(args: argparse.Namespace) -> int:
     if args.command == "ingest-sec":
         return _run_ingest_sec(args)
     if args.command == "ingest-company-facts":
@@ -427,8 +439,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_research(args)
     if args.command == "research-worker":
         return _run_research_worker(args)
-    parser.error(f"Unknown command: {args.command}")
-    return 2
+    raise AssertionError(f"Unknown command: {args.command}")
 
 
 def _add_json_options(parser: argparse.ArgumentParser) -> None:
@@ -680,7 +691,7 @@ def _run_ingest_fred(args: argparse.Namespace) -> int:
         with (
             session_factory() as session,
             FredClient(
-                api_key=settings.fred_api_key,
+                api_key=settings.fred_api_key.get_secret_value(),
                 base_url=settings.fred_base_url,
                 timeout_seconds=settings.fred_request_timeout_seconds,
                 retry_attempts=settings.fred_retry_attempts,

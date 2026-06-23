@@ -6,9 +6,11 @@ import re
 from collections.abc import Sequence
 from typing import Any, Literal, Protocol
 
-from openai import OpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, RateLimitError
 
+from company_lens.observability.telemetry import observe_operation
 from company_lens.processing.text import TOKEN_ENCODING
+from company_lens.reliability import CircuitBreaker, RetryPolicy, call_with_resilience
 
 DEFAULT_LOCAL_EMBEDDING_MODEL = "local-feature-hashing-v1"
 DEFAULT_LOCAL_EMBEDDING_DIMENSIONS = 384
@@ -80,16 +82,23 @@ class OpenAIEmbedder:
         dimensions: int = DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
         timeout_seconds: float = 30.0,
         max_retries: int = 2,
+        circuit_breaker_failure_threshold: int = 5,
+        circuit_breaker_recovery_seconds: float = 30.0,
         client: Any | None = None,
     ) -> None:
         if dimensions <= 0:
             raise ValueError("dimensions must be positive.")
         self.model_name = model_name
         self.dimensions = dimensions
+        self._retry_policy = RetryPolicy(max_attempts=max(1, max_retries + 1))
+        self._circuit_breaker = CircuitBreaker(
+            failure_threshold=circuit_breaker_failure_threshold,
+            recovery_seconds=circuit_breaker_recovery_seconds,
+        )
         self._client = client or OpenAI(
             api_key=api_key,
             timeout=timeout_seconds,
-            max_retries=max_retries,
+            max_retries=0,
         )
 
     def embed_query(self, text: str) -> list[float]:
@@ -110,12 +119,27 @@ class OpenAIEmbedder:
                     max_tokens=OPENAI_EMBEDDING_MAX_INPUT_TOKENS,
                 )
 
-        response = self._client.embeddings.create(
-            model=self.model_name,
-            input=inputs,
-            dimensions=self.dimensions,
-            encoding_format="float",
-        )
+        with observe_operation(
+            "model.embed",
+            kind="embedding",
+            attributes={
+                "gen_ai.system": "openai",
+                "gen_ai.request.model": self.model_name,
+                "company_lens.embedding.input_count": len(inputs),
+            },
+        ):
+            response = call_with_resilience(
+                lambda: self._client.embeddings.create(
+                    model=self.model_name,
+                    input=inputs,
+                    dimensions=self.dimensions,
+                    encoding_format="float",
+                ),
+                provider="openai_embeddings",
+                retry_policy=self._retry_policy,
+                circuit_breaker=self._circuit_breaker,
+                retry_if=_retryable_openai_error,
+            )
         ordered = sorted(response.data, key=lambda item: item.index)
         vectors = [list(item.embedding) for item in ordered]
         if len(vectors) != len(inputs):
@@ -174,3 +198,9 @@ def vector_to_pg(value: Sequence[float]) -> str:
 
 def _tokens(text: str) -> list[str]:
     return TOKEN_PATTERN.findall(text.lower())
+
+
+def _retryable_openai_error(exc: Exception) -> bool:
+    return isinstance(exc, (APITimeoutError, APIConnectionError, RateLimitError)) or (
+        isinstance(exc, APIStatusError) and exc.status_code >= 500
+    )

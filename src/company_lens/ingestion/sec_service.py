@@ -621,6 +621,7 @@ def build_sec_client_from_settings(settings: Settings) -> SecClient:
         timeout_seconds=settings.sec_request_timeout_seconds,
         retry_attempts=settings.sec_retry_attempts,
         rate_limit_per_second=settings.sec_rate_limit_per_second,
+        max_response_bytes=settings.sec_max_response_bytes,
     )
 
 
