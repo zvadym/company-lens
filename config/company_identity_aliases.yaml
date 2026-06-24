@@ -16,3 +16,22 @@ identities:
       - alias: Alphabet
         kind: common
         confidence: 1.0
+  - cik: "0001326801"
+    legal_name: Meta Platforms, Inc.
+    display_name: Meta Platforms, Inc.
+    source: manual
+    tickers:
+      - META
+    aliases:
+      - alias: Facebook
+        kind: brand
+        confidence: 1.0
+      - alias: Facebook Inc.
+        kind: former_name
+        confidence: 1.0
+      - alias: Meta
+        kind: common
+        confidence: 1.0
+      - alias: Meta Platforms
+        kind: common
+        confidence: 1.0

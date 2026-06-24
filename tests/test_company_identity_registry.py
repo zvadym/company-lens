@@ -35,6 +35,28 @@ def test_curated_google_alias_resolves_to_persisted_alphabet_identity(
     )
 
 
+def test_curated_facebook_alias_resolves_to_persisted_meta_identity(
+    session: Session,
+) -> None:
+    registry = CompanyIdentityRegistry(session=session)
+
+    registry.seed_curated_identities(load_curated_identities())
+    session.commit()
+
+    resolved = registry.resolve_mention("Facebook")
+
+    assert resolved.status == "resolved"
+    assert resolved.resolved is not None
+    assert resolved.resolved.display_name == "Meta Platforms, Inc."
+    assert resolved.resolved.cik == "0001326801"
+    assert resolved.resolved.primary_ticker == "META"
+    assert resolved.resolved.match_kind == "alias"
+    assert session.scalar(select(CompanyIdentity).where(CompanyIdentity.cik == "0001326801"))
+    assert session.scalar(
+        select(CompanyIdentityAlias).where(CompanyIdentityAlias.normalized_alias == "facebook")
+    )
+
+
 def test_sec_ticker_map_hydration_links_identity_to_existing_local_company(
     session: Session,
 ) -> None:
@@ -114,6 +136,23 @@ def test_entity_resolver_exposes_curated_identity_as_public_company_for_on_deman
     assert public_company.status == "unresolved"
     assert public_company.candidates[0].canonical_value == "GOOG"
     assert public_company.candidates[0].display_value == "Alphabet Inc."
+    assert resolved.company_ids == ()
+    assert resolved.metrics == ("revenue",)
+
+
+def test_entity_resolver_exposes_facebook_alias_as_meta_public_company_for_on_demand_prepare(
+    session: Session,
+) -> None:
+    CompanyIdentityRegistry(session=session).seed_curated_identities(load_curated_identities())
+    session.commit()
+
+    resolved = EntityResolver(session=session).resolve("а тепер те саме для facebook revenue")
+
+    public_company = next(entity for entity in resolved.entities if entity.kind == "public_company")
+    assert public_company.mention == "facebook"
+    assert public_company.status == "unresolved"
+    assert public_company.candidates[0].canonical_value == "META"
+    assert public_company.candidates[0].display_value == "Meta Platforms, Inc."
     assert resolved.company_ids == ()
     assert resolved.metrics == ("revenue",)
 
