@@ -35,6 +35,7 @@ function Series({ chart }: { chart: ChartSpecification }) {
         key={series.key}
         dataKey={series.key}
         fill={colors[index % colors.length]}
+        name={series.label}
         radius={[3, 3, 0, 0]}
       />
     ));
@@ -46,6 +47,7 @@ function Series({ chart }: { chart: ChartSpecification }) {
         dataKey={series.key}
         fill={colors[index % colors.length]}
         fillOpacity={0.14}
+        name={series.label}
         stroke={colors[index % colors.length]}
         strokeWidth={2}
         type="monotone"
@@ -67,6 +69,7 @@ function Series({ chart }: { chart: ChartSpecification }) {
       key={series.key}
       dataKey={series.key}
       dot={false}
+      name={series.label}
       stroke={colors[index % colors.length]}
       strokeWidth={2.25}
       type="monotone"
