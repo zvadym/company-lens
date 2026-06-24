@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseResearchEvent } from "./events";
+import { hasTerminalEvent, parseResearchEvent } from "./events";
 
 describe("parseResearchEvent", () => {
   it("accepts a typed version two execution event", () => {
@@ -41,5 +41,41 @@ describe("parseResearchEvent", () => {
         }),
       ),
     ).toBeNull();
+  });
+
+  it("detects terminal traces that should trigger final run refresh", () => {
+    const nodeEvent = parseResearchEvent(
+      JSON.stringify({
+        id: 12,
+        schema_version: "2",
+        run_id: "11111111-1111-4111-8111-111111111111",
+        type: "node.status",
+        occurred_at: "2026-06-22T12:00:00Z",
+        data: {
+          step_id: "step-1",
+          node: "finalize_response",
+          branch_id: null,
+          status: "completed",
+          attempt: 1,
+          summary: "Research response finalized.",
+          duration_ms: 18,
+        },
+      }),
+    );
+    const terminalEvent = parseResearchEvent(
+      JSON.stringify({
+        id: 13,
+        schema_version: "2",
+        run_id: "11111111-1111-4111-8111-111111111111",
+        type: "run.terminal",
+        occurred_at: "2026-06-22T12:00:01Z",
+        data: { status: "partial", error_code: null },
+      }),
+    );
+
+    expect(nodeEvent).not.toBeNull();
+    expect(terminalEvent).not.toBeNull();
+    expect(hasTerminalEvent([nodeEvent!])).toBe(false);
+    expect(hasTerminalEvent([nodeEvent!, terminalEvent!])).toBe(true);
   });
 });

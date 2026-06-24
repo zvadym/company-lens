@@ -390,7 +390,9 @@ def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -
     )
     update = _model_node_update("parse_question", attempts, started, error)
     if error is not None:
-        update["status"] = _terminal_model_status(error)
+        update["status"] = _terminal_parse_status(error)
+        if update["status"] is AgentRunStatus.ABSTAINED:
+            update["draft_answer"] = _parse_failure_answer(state, error)
     elif output is not None:
         update["analysis"] = output
     return update
@@ -1499,6 +1501,8 @@ def _fallback_financial_facts(
 def _fallback_financial_fact_table(evidence: Sequence[EvidenceEnvelope]) -> list[str]:
     if not evidence:
         return []
+    if len({item.metadata.company_name for item in evidence if item.metadata.company_name}) > 1:
+        return _fallback_multi_company_financial_fact_table(evidence)
     first = min(evidence, key=lambda item: item.metadata.period_end or date.max)
     latest = max(evidence, key=lambda item: item.metadata.period_end or date.min)
     metric = latest.metadata.metric or "metric"
@@ -1522,6 +1526,61 @@ def _fallback_financial_fact_table(evidence: Sequence[EvidenceEnvelope]) -> list
             f"| {value} [{item.evidence_id}] |"
         )
     return lines
+
+
+def _fallback_multi_company_financial_fact_table(
+    evidence: Sequence[EvidenceEnvelope],
+) -> list[str]:
+    first = min(evidence, key=lambda item: item.metadata.period_end or date.max)
+    latest = max(evidence, key=lambda item: item.metadata.period_end or date.min)
+    metric = latest.metadata.metric or "metric"
+    companies = tuple(
+        sorted(
+            {
+                _fallback_company_name(item.metadata.company_name)
+                for item in evidence
+                if item.metadata.company_name is not None
+            }
+        )
+    )
+    grouped: dict[tuple[date | None, str], dict[str, EvidenceEnvelope]] = {}
+    for item in evidence:
+        company = _fallback_company_name(item.metadata.company_name)
+        key = (item.metadata.period_end, item.metadata.metric or "metric")
+        grouped.setdefault(key, {})
+        grouped[key].setdefault(company, item)
+    lines = [
+        "## Supporting facts",
+        (
+            f"- {metric} facts cover {_fallback_period_value(first)} through "
+            f"{_fallback_period_value(latest)}. [{first.evidence_id}] [{latest.evidence_id}]"
+        ),
+        "",
+        f"| Period | Metric | {' | '.join(companies)} |",
+        f"|---|---|{'|'.join('---:' for _ in companies)}|",
+    ]
+    for period_end, row_metric in sorted(
+        grouped,
+        key=lambda item: (item[0] or date.min, item[1]),
+        reverse=True,
+    ):
+        row = grouped[(period_end, row_metric)]
+        values = [
+            _fallback_financial_fact_cell(row.get(company))
+            for company in companies
+        ]
+        period = period_end.isoformat() if period_end is not None else "available period"
+        lines.append(f"| {period} | {row_metric} | {' | '.join(values)} |")
+    return lines
+
+
+def _fallback_financial_fact_cell(item: EvidenceEnvelope | None) -> str:
+    if item is None:
+        return ""
+    value = _fallback_display_value(item.metadata.value, item.metadata.unit or "")
+    if value is None:
+        return f"[{item.evidence_id}]"
+    return f"{value} [{item.evidence_id}]"
 
 
 def _fallback_sentence(item: EvidenceEnvelope) -> str | None:
@@ -1558,9 +1617,86 @@ def _fallback_calculation_sentence(item: EvidenceEnvelope) -> str | None:
     unit = item.metadata.unit or ""
     period = _fallback_period(item)
     if value is None:
-        return item.summary
+        points = _fallback_calculation_points(item)
+        if not points:
+            return f"{company} {metric} {operation} was calculated."
+        latest = max(points, key=lambda point: point[0] or date.min)
+        latest_value = _fallback_value_with_unit(
+            _fallback_decimal(latest[1]) or str(latest[1]),
+            unit,
+            latest[1],
+        )
+        latest_period = f" at {latest[0].isoformat()}" if latest[0] is not None else ""
+        covered_period = _fallback_calculation_period(points)
+        return (
+            f"{company} {metric} {operation} covered {covered_period}; latest value was "
+            f"{latest_value}{latest_period}."
+        )
     value_with_unit = _fallback_value_with_unit(value, unit, item.metadata.value)
     return f"{company} {metric} {operation} was {value_with_unit}{period}."
+
+
+def _fallback_calculation_points(
+    item: EvidenceEnvelope,
+) -> tuple[tuple[date | None, Decimal, str | None], ...]:
+    values = item.payload.get("values")
+    if not isinstance(values, (list, tuple)):
+        return ()
+    points: list[tuple[date | None, Decimal, str | None]] = []
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        raw_value = _payload_decimal(value.get("value"))
+        if raw_value is None:
+            continue
+        label = value.get("label")
+        points.append(
+            (
+                _payload_date(value.get("observed_at")),
+                raw_value,
+                label if isinstance(label, str) else None,
+            )
+        )
+    return tuple(points)
+
+
+def _fallback_calculation_period(points: Sequence[tuple[date | None, Decimal, str | None]]) -> str:
+    dates = tuple(point[0] for point in points if point[0] is not None)
+    if not dates:
+        return "the available periods"
+    first = min(dates)
+    latest = max(dates)
+    if first == latest:
+        return first.isoformat()
+    return f"{first.isoformat()} through {latest.isoformat()}"
+
+
+def _payload_decimal(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float, str)):
+        try:
+            return Decimal(str(value))
+        except ArithmeticError:
+            return None
+    return None
+
+
+def _payload_date(value: object) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _fallback_company_name(company_name: str | None) -> str:
@@ -1662,6 +1798,23 @@ def _finalize_response(
                 ),
             }
         status = AgentRunStatus.ABSTAINED
+    if status is AgentRunStatus.ABSTAINED and answer:
+        return {
+            "status": status,
+            "final_answer": answer,
+            "messages": (
+                SessionMessage(role="assistant", content=answer, created_at=datetime.now(UTC)),
+            ),
+            "session_memory": memory,
+            "trajectory": (
+                _event(
+                    "finalize_response",
+                    TrajectoryStatus.COMPLETED,
+                    "Research run finalized with a user-facing explanation.",
+                    started,
+                ),
+            ),
+        }
     return {
         "status": status,
         "final_answer": None,
@@ -1942,6 +2095,32 @@ def _reconcile_analysis_with_plan(
 ) -> QuestionAnalysis:
     """Make a concrete supported plan authoritative over an inconsistent model classification."""
 
+    represented = _represented_capabilities(plan)
+    if (
+        analysis.route is not ResearchRoute.UNSUPPORTED
+        and plan.route is not ResearchRoute.UNSUPPORTED
+        and set(analysis.required_capabilities).issubset(represented)
+    ):
+        ordered_capabilities = tuple(
+            capability for capability in AgentCapability if capability in represented
+        )
+        chart_requested = AgentCapability.CHART in represented
+        if (
+            analysis.route is plan.route
+            and analysis.required_capabilities == ordered_capabilities
+            and analysis.chart_requested is chart_requested
+        ):
+            return analysis
+        return analysis.model_copy(
+            update={
+                "route": plan.route,
+                "required_capabilities": ordered_capabilities,
+                "chart_requested": chart_requested,
+                "reason_codes": tuple(
+                    dict.fromkeys((*analysis.reason_codes, "reconciled_to_valid_plan"))
+                ),
+            }
+        )
     if (
         analysis.route in {ResearchRoute.UNSUPPORTED, ResearchRoute.HYBRID}
         or plan.route is ResearchRoute.UNSUPPORTED
@@ -1949,7 +2128,6 @@ def _reconcile_analysis_with_plan(
         or AgentCapability.CHART in analysis.required_capabilities
     ):
         return analysis
-    represented = _represented_capabilities(plan)
     ordered_capabilities = tuple(
         capability for capability in AgentCapability if capability in represented
     )
@@ -2474,7 +2652,7 @@ def _chart_dataset(reference: str, state: AgentState) -> ValidatedChartDataset:
         series=(
             ChartSeries(
                 key=reference,
-                label=calculation.result.operation,
+                label=_calculation_series_label(calculation.result),
                 unit=calculation.result.unit,
             ),
         ),
@@ -2608,7 +2786,7 @@ def _chart_series_points(
     return (
         ChartSeries(
             key=reference,
-            label=calculation.result.operation,
+            label=_calculation_series_label(calculation.result),
             unit=calculation.result.unit,
         ),
         {
@@ -2616,6 +2794,46 @@ def _chart_series_points(
             for point in calculation.result.values
         },
     )
+
+
+def _calculation_series_label(result: CalculationResult) -> str:
+    label = (
+        result.values[-1].label
+        if result.values
+        else result.inputs[-1].label
+        if result.inputs
+        else "Calculation"
+    )
+    base = _strip_trailing_iso_date(label).strip()
+    operation = _short_operation_label(result.operation)
+    if operation and operation.casefold() not in base.casefold():
+        return f"{base} {operation}"
+    return base or operation or result.operation.replace("_", " ")
+
+
+def _strip_trailing_iso_date(value: str) -> str:
+    parts = value.rsplit(" ", 1)
+    if len(parts) != 2:
+        return value
+    try:
+        date.fromisoformat(parts[1])
+    except ValueError:
+        return value
+    return parts[0]
+
+
+def _short_operation_label(operation: str) -> str:
+    return {
+        "year_over_year_growth": "YoY",
+        "quarter_over_quarter_growth": "QoQ",
+        "percentage_change": "change",
+        "absolute_change": "change",
+        "compound_annual_growth_rate": "CAGR",
+        "cagr": "CAGR",
+        "rolling_average": "average",
+        "correlation": "correlation",
+        "margin": "margin",
+    }.get(operation, operation.replace("_", " "))
 
 
 def _numeric_series_for_chart(
@@ -2928,6 +3146,108 @@ def _terminal_model_status(error: AgentError) -> AgentRunStatus:
         if error.category is AgentErrorCategory.PROVIDER_REFUSAL
         else AgentRunStatus.FAILED
     )
+
+
+def _terminal_parse_status(error: AgentError) -> AgentRunStatus:
+    if error.category is AgentErrorCategory.PROVIDER_AUTH:
+        return AgentRunStatus.FAILED
+    return AgentRunStatus.ABSTAINED
+
+
+def _parse_failure_answer(state: AgentState, error: AgentError) -> str:
+    question = _latest_user_question(state)
+    details = [
+        "I could not start the research because the system could not classify the request.",
+        "No company reports, financial facts, macro series, or chart data were queried.",
+    ]
+    if _looks_like_incomplete_comparison(question):
+        peer = _comparison_target(question) or "the peer company"
+        details.append(
+            f"The comparison target also looks incomplete: specify which {peer} metric should "
+            "be used in the chart."
+        )
+    suggestions = "\n".join(f"- {item}" for item in _suggested_query_rewrites(question))
+    return (
+        "## I could not start this research\n\n"
+        + "\n\n".join(details)
+        + "\n\nTry one of these instead:\n\n"
+        + suggestions
+    )
+
+
+def _latest_user_question(state: AgentState) -> str:
+    for message in reversed(state.get("messages", ())):
+        if message.role == "user":
+            return message.content
+    return "the research question"
+
+
+def _looks_like_incomplete_comparison(question: str) -> bool:
+    target = _comparison_target(question)
+    if target is None:
+        return False
+    metric_terms = {
+        "asset",
+        "cash",
+        "debt",
+        "fedfunds",
+        "free cash flow",
+        "growth",
+        "income",
+        "liabilit",
+        "margin",
+        "profit",
+        "rate",
+        "revenue",
+        "sales",
+        "stock",
+        "subscriber",
+    }
+    normalized_target = target.lower()
+    return not any(term in normalized_target for term in metric_terms)
+
+
+def _suggested_query_rewrites(question: str) -> tuple[str, ...]:
+    normalized = " ".join(question.split())
+    comparison = _comparison_parts(normalized)
+    if comparison is not None:
+        left, target = comparison
+        return (
+            f"{left} against {target} revenue growth.",
+            f"{left} against {target} revenue.",
+            f"{left} against {target} operating margin.",
+        )
+    if "plot" in normalized.lower() or "chart" in normalized.lower():
+        return (
+            "Plot Cloudflare revenue growth over the last eight quarters.",
+            "Plot Cloudflare revenue growth against the federal funds rate.",
+            "Plot one company metric against one specific peer or macro metric.",
+        )
+    return (
+        "Compare Cloudflare revenue growth over the last eight quarters.",
+        "Summarize Netflix revenue growth from the latest available filings.",
+        "Ask for one company, one metric, and an optional date range.",
+    )
+
+
+def _comparison_parts(question: str) -> tuple[str, str] | None:
+    normalized = " ".join(question.split()).strip(" .")
+    marker = " against "
+    index = normalized.lower().find(marker)
+    if index < 0:
+        return None
+    left = normalized[:index].strip()
+    target = normalized[index + len(marker) :].strip(" .")
+    if target.lower().startswith("the "):
+        target = target[4:].strip()
+    if not left or not target:
+        return None
+    return left, target
+
+
+def _comparison_target(question: str) -> str | None:
+    parts = _comparison_parts(question)
+    return parts[1] if parts is not None else None
 
 
 def _provider_refusal(node: str, attempt: int) -> AgentError:

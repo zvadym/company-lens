@@ -62,6 +62,7 @@ from company_lens.retrieval.adaptive_schemas import (
 )
 
 COMPANY_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
+NETFLIX_ID = uuid.UUID("33333333-3333-3333-3333-333333333333")
 FACT_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 ANNUAL_FACT_IDS = {
     year: uuid.uuid5(uuid.NAMESPACE_DNS, f"company-lens-test-revenue-{year}")
@@ -187,6 +188,28 @@ class AnswerTimeoutModelProvider(FakeModelProvider):
                 )
             )
         return super().generate_text(messages, purpose=purpose)
+
+
+class ParseFailureModelProvider(FakeModelProvider):
+    def generate_structured[OutputT: BaseModel](
+        self,
+        messages: Sequence[ModelMessage],
+        output_type: type[OutputT],
+        *,
+        purpose: ModelPurpose,
+    ) -> StructuredModelResult[OutputT]:
+        if purpose is ModelPurpose.PARSE:
+            self.purposes.append(purpose)
+            self.model_calls.append((purpose, tuple(messages)))
+            raise ModelProviderError(
+                AgentError(
+                    category=AgentErrorCategory.INTERNAL,
+                    severity=AgentErrorSeverity.TERMINAL,
+                    code="openai_unexpected",
+                    message="Unexpected OpenAI provider failure.",
+                )
+            )
+        return super().generate_structured(messages, output_type, purpose=purpose)
 
 
 class FakeResearchTools:
@@ -360,6 +383,43 @@ class AnnualSeriesFinancialTools(FakeResearchTools):
         return FinancialFactQueryResult(
             query=request,
             observations=(*annual, comparative_2023),
+            available_units=("USD",),
+        )
+
+
+class PeerAnnualFinancialTools(FakeResearchTools):
+    def resolve_entities(self, query: str) -> ResolvedQuery:
+        self.calls["resolve"] += 1
+        return ResolvedQuery(
+            query=query,
+            company_ids=(COMPANY_ID, NETFLIX_ID),
+            metrics=("revenue",),
+        )
+
+    def query_financial_facts(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
+        self.calls["financial"] += 1
+        company_id = request.company_ids[0]
+        if company_id == NETFLIX_ID:
+            company_name = "Netflix"
+            ticker = "NFLX"
+            values = (Decimal("100"), Decimal("110"), Decimal("132"), Decimal("165"))
+        else:
+            company_name = "Cloudflare"
+            ticker = "NET"
+            values = (Decimal("64"), Decimal("80"), Decimal("100"), Decimal("125"))
+        return FinancialFactQueryResult(
+            query=request,
+            observations=tuple(
+                _financial_observation(date(year, 12, 31), value).model_copy(
+                    update={
+                        "id": uuid.uuid5(uuid.NAMESPACE_DNS, f"{company_id}-{year}"),
+                        "company_id": company_id,
+                        "company_name": company_name,
+                        "ticker": ticker,
+                    }
+                )
+                for year, value in zip(range(2022, 2026), values, strict=True)
+            ),
             available_units=("USD",),
         )
 
@@ -1255,6 +1315,104 @@ def test_answer_timeout_falls_back_to_deterministic_cited_summary() -> None:
     assert any(error.code == "openai_timeout" for error in result["errors"])
 
 
+def test_answer_timeout_fallback_formats_multi_point_calculations() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Compare revenue growth",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS, AgentCapability.CALCULATIONS),
+    )
+    plan = ExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=(
+            _financial_branch(),
+            CalculationBranch(
+                branch_id="growth",
+                operation="year_over_year_growth",
+                input_refs=("financial",),
+                depends_on=("financial",),
+            ),
+        ),
+    )
+    model = AnswerTimeoutModelProvider(analysis=analysis, plan=plan)
+
+    result = ResearchAgent(
+        runtime=ResearchAgentRuntime(model, AnnualSeriesFinancialTools())
+    ).run(
+        "Compare Cloudflare revenue growth.",
+        session_id="session-answer-timeout-series-fallback",
+        policy=ExecutionPolicy(max_retries_per_node=0),
+    )
+
+    assert result["status"] is AgentRunStatus.PARTIAL
+    assert result["final_answer"] is not None
+    assert "latest value was 25 percent at 2025-12-31" in result["final_answer"]
+    assert "[calculation:growth]" in result["final_answer"]
+    assert "[{'label':" not in result["final_answer"]
+    assert "'observed_at':" not in result["final_answer"]
+    assert result["answer_validation"].valid is True
+
+
+def test_answer_timeout_fallback_groups_peer_facts_by_period() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Compare Cloudflare and Netflix revenue growth",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS, AgentCapability.CALCULATIONS),
+    )
+    cloudflare_facts = FinancialFactsBranch(
+        branch_id="cloudflare_revenue",
+        request=FinancialFactQuery(
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+            period_types=("annual",),
+            limit=20,
+        ),
+    )
+    netflix_facts = FinancialFactsBranch(
+        branch_id="netflix_revenue",
+        request=FinancialFactQuery(
+            company_ids=(NETFLIX_ID,),
+            metrics=("revenue",),
+            period_types=("annual",),
+            limit=20,
+        ),
+    )
+    cloudflare_growth = CalculationBranch(
+        branch_id="cloudflare_growth",
+        operation="year_over_year_growth",
+        input_refs=(cloudflare_facts.branch_id,),
+        depends_on=(cloudflare_facts.branch_id,),
+    )
+    netflix_growth = CalculationBranch(
+        branch_id="netflix_growth",
+        operation="year_over_year_growth",
+        input_refs=(netflix_facts.branch_id,),
+        depends_on=(netflix_facts.branch_id,),
+    )
+    model = AnswerTimeoutModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.CALCULATION,
+            branches=(cloudflare_facts, netflix_facts, cloudflare_growth, netflix_growth),
+        ),
+    )
+
+    result = ResearchAgent(
+        runtime=ResearchAgentRuntime(model, PeerAnnualFinancialTools())
+    ).run(
+        "Compare Cloudflare and Netflix revenue growth.",
+        session_id="session-peer-fallback-table",
+        policy=ExecutionPolicy(max_retries_per_node=0),
+    )
+
+    assert result["status"] is AgentRunStatus.PARTIAL
+    assert result["final_answer"] is not None
+    assert "| Period | Metric | Cloudflare | Netflix |" in result["final_answer"]
+    assert "| 2025-12-31 | revenue | 125 USD " in result["final_answer"]
+    assert " | 165 USD " in result["final_answer"]
+    assert "| 2025-12-31 | Cloudflare | revenue |" not in result["final_answer"]
+    assert result["answer_validation"].valid is True
+
+
 def test_validation_failure_falls_back_to_deterministic_cited_summary() -> None:
     analysis = QuestionAnalysis(
         normalized_question="What was revenue?",
@@ -1390,6 +1548,34 @@ def test_unsupported_question_abstains_without_answer_generation() -> None:
     assert result["status"] is AgentRunStatus.ABSTAINED
     assert result["final_answer"] is None
     assert ModelPurpose.ANSWER not in model.purposes
+    assert result["tool_calls_used"] == 0
+
+
+def test_parse_failure_abstains_with_explanation_and_rewrites() -> None:
+    model = ParseFailureModelProvider(
+        analysis=QuestionAnalysis(
+            normalized_question="unused",
+            route=ResearchRoute.UNSUPPORTED,
+        ),
+        plan=ExecutionPlan(route=ResearchRoute.UNSUPPORTED),
+    )
+    tools = FakeResearchTools()
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, tools)).run(
+        "Plot Cloudflare revenue growth against the Netflix",
+        session_id="session-parse-failure",
+    )
+
+    assert result["status"] is AgentRunStatus.ABSTAINED
+    assert result["final_answer"] is not None
+    assert "could not classify the request" in result["final_answer"]
+    assert "Unexpected OpenAI provider failure." not in result["final_answer"]
+    assert "Plot Cloudflare revenue growth against Netflix revenue growth." in result[
+        "final_answer"
+    ]
+    assert any(error.code == "openai_unexpected" for error in result["errors"])
+    assert ModelPurpose.PLAN not in model.purposes
+    assert tools.calls == {}
     assert result["tool_calls_used"] == 0
 
 
@@ -1573,6 +1759,92 @@ def test_hybrid_chart_can_plot_calculation_against_macro_series() -> None:
         "growth": Decimal("25.00"),
         "macro": Decimal("5.25"),
     }
+
+
+def test_peer_revenue_growth_chart_reconciles_hybrid_analysis_to_calculation_route() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Plot Cloudflare revenue growth against Netflix revenue growth",
+        route=ResearchRoute.HYBRID,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+        reason_codes=("two_company_series", "growth_metric", "chart_requested"),
+    )
+    cloudflare_facts = FinancialFactsBranch(
+        branch_id="cloudflare_revenue",
+        request=FinancialFactQuery(
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+            period_types=("annual",),
+            limit=20,
+        ),
+    )
+    netflix_facts = FinancialFactsBranch(
+        branch_id="netflix_revenue",
+        request=FinancialFactQuery(
+            company_ids=(NETFLIX_ID,),
+            metrics=("revenue",),
+            period_types=("annual",),
+            limit=20,
+        ),
+    )
+    cloudflare_growth = CalculationBranch(
+        branch_id="cloudflare_growth",
+        operation="year_over_year_growth",
+        input_refs=(cloudflare_facts.branch_id,),
+        depends_on=(cloudflare_facts.branch_id,),
+    )
+    netflix_growth = CalculationBranch(
+        branch_id="netflix_growth",
+        operation="year_over_year_growth",
+        input_refs=(netflix_facts.branch_id,),
+        depends_on=(netflix_facts.branch_id,),
+    )
+    chart = ChartBranch(
+        branch_id="chart",
+        chart_type="line",
+        dataset_ref=cloudflare_growth.branch_id,
+        title="Cloudflare revenue growth vs Netflix revenue growth",
+        depends_on=(cloudflare_growth.branch_id, netflix_growth.branch_id),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.HYBRID,
+            branches=(
+                cloudflare_facts,
+                netflix_facts,
+                cloudflare_growth,
+                netflix_growth,
+                chart,
+            ),
+            requires_citations=False,
+        ),
+        texts=("The chart is ready."),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, PeerAnnualFinancialTools())).run(
+        "Plot Cloudflare revenue growth against Netflix revenue growth.",
+        session_id="session-peer-growth-chart",
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["analysis"].route is ResearchRoute.CALCULATION
+    assert "reconciled_to_valid_plan" in result["analysis"].reason_codes
+    assert result["chart_spec"] is not None
+    assert [series.key for series in result["chart_spec"].series] == [
+        "cloudflare_growth",
+        "netflix_growth",
+    ]
+    assert [series.label for series in result["chart_spec"].series] == [
+        "Cloudflare revenue YoY",
+        "Netflix revenue YoY",
+    ]
+    assert len(result["chart_spec"].data) == 3
+    assert result["tool_calls_used"] == 2
 
 
 def test_hybrid_chart_normalizes_missing_comparison_dependency() -> None:

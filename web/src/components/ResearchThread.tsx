@@ -98,11 +98,14 @@ function RunStatusCard() {
   if (!selectedRun || !isTerminal(selectedRun.status)) return null;
 
   const successful = selectedRun.status === "completed" || selectedRun.status === "partial";
+  const statusLabel = selectedRun.status === "abstained"
+    ? selectedRun.result?.answer ? "Could not start" : "Could not answer"
+    : selectedRun.status.replaceAll("_", " ");
   return (
     <section className={`run-outcome is-${selectedRun.status}`} aria-live="polite">
       <div>
         {successful ? <CheckCircle2 size={17} /> : <Ban size={17} />}
-        <strong>{selectedRun.status.replaceAll("_", " ")}</strong>
+        <strong>{statusLabel}</strong>
         {selectedRun.error_message ? <span>{selectedRun.error_message}</span> : null}
       </div>
       <div className="outcome-actions">
