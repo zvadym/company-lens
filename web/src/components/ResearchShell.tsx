@@ -5,11 +5,11 @@ import {
   Clock3,
   FileText,
   Menu,
+  PanelRightClose,
   Plus,
   SearchCode,
 } from "lucide-react";
 
-import { isTerminal } from "@/api/types";
 import { useResearch } from "@/research/context";
 
 import { ResearchThread } from "./ResearchThread";
@@ -27,7 +27,7 @@ function formatTime(value: string): string {
 }
 
 function HistorySidebar() {
-  const { runs, selectedRunId, selectRun, newResearch } = useResearch();
+  const { researches, researchId, selectResearch, newResearch } = useResearch();
   return (
     <aside className="history-sidebar">
       <div className="sidebar-brand">
@@ -37,18 +37,21 @@ function HistorySidebar() {
       <button className="new-research" type="button" onClick={newResearch}>
         <Plus size={15} /> New research
       </button>
-      <div className="history-label"><Clock3 size={12} /> Recent runs</div>
+      <div className="history-label"><Clock3 size={12} /> Recent research</div>
       <nav aria-label="Research history" className="history-list">
-        {runs.length === 0 ? <p className="history-empty">Your research history will appear here.</p> : null}
-        {runs.toReversed().map((run) => (
+        {researches.length === 0 ? <p className="history-empty">Your research history will appear here.</p> : null}
+        {researches.map((research) => (
           <button
             type="button"
-            key={run.run_id}
-            onClick={() => selectRun(run.run_id)}
-            className={run.run_id === selectedRunId ? "is-selected" : ""}
+            key={research.researchId}
+            onClick={() => selectResearch(research.researchId)}
+            className={research.researchId === researchId ? "is-selected" : ""}
           >
-            <span className={`history-status is-${run.status}`} aria-label={run.status} />
-            <span><strong>{run.question}</strong><small>{formatTime(run.queued_at)}</small></span>
+            <span className={`history-status is-${research.status}`} aria-label={research.status} />
+            <span>
+              <strong>{research.title}</strong>
+              <small>{formatTime(research.updatedAt)}</small>
+            </span>
             <ChevronRight size={13} />
           </button>
         ))}
@@ -62,15 +65,17 @@ function HistorySidebar() {
 }
 
 function MobileHistory() {
-  const { runs, selectedRunId, selectRun } = useResearch();
-  if (runs.length === 0) return null;
+  const { researches, researchId, selectResearch } = useResearch();
+  if (researches.length === 0) return null;
   return (
     <label className="mobile-history">
       <Menu size={14} />
-      <span className="sr-only">Select research run</span>
-      <select value={selectedRunId ?? ""} onChange={(event) => selectRun(event.target.value)}>
+      <span className="sr-only">Select research</span>
+      <select value={researchId ?? ""} onChange={(event) => selectResearch(event.target.value)}>
         <option value="" disabled>Research history</option>
-        {runs.toReversed().map((run) => <option key={run.run_id} value={run.run_id}>{run.question}</option>)}
+        {researches.map((research) => (
+          <option key={research.researchId} value={research.researchId}>{research.title}</option>
+        ))}
       </select>
     </label>
   );
@@ -80,6 +85,7 @@ function Inspector() {
   const {
     inspector,
     setInspector,
+    closeInspector,
     events,
     sources,
     selectedRun,
@@ -105,6 +111,14 @@ function Inspector() {
           onClick={() => setInspector("sources")}
           type="button"
         ><FileText size={14} /> Sources <span>{sourceCount}</span></button>
+        <button
+          type="button"
+          className="inspector-close"
+          onClick={closeInspector}
+          aria-label="Hide details panel"
+        >
+          <PanelRightClose size={15} />
+        </button>
       </div>
       {inspector === "trace" ? (
         <TracePanel events={events} connection={connection} />
@@ -116,10 +130,12 @@ function Inspector() {
 }
 
 export function ResearchShell() {
-  const { selectedRun, runs, newResearch } = useResearch();
-  const running = selectedRun ? !isTerminal(selectedRun.status) : false;
+  const { researchId, selectedRun, activeRun, runs, inspectorOpen, newResearch } = useResearch();
+  const running = activeRun !== null;
+  const statusRun = activeRun ?? selectedRun;
+  const shortResearchId = researchId?.slice(0, 12);
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${inspectorOpen ? "" : "is-inspector-closed"}`}>
       <HistorySidebar />
       <main className="research-main">
         <header className="research-header">
@@ -127,11 +143,11 @@ export function ResearchShell() {
           <div className="header-context">
             <BookOpenText size={15} />
             <span>{selectedRun ? "Research session" : "New inquiry"}</span>
-            {selectedRun ? <code>{selectedRun.run_id.slice(0, 8)}</code> : null}
+            {shortResearchId ? <code>{shortResearchId}</code> : null}
           </div>
           <div className="header-status">
             {running ? <Activity size={14} /> : null}
-            <span>{selectedRun?.status.replaceAll("_", " ") ?? `${runs.length} saved runs`}</span>
+            <span>{statusRun?.status.replaceAll("_", " ") ?? `${runs.length} saved runs`}</span>
           </div>
           <button className="header-new" type="button" onClick={newResearch} aria-label="New research">
             <Plus size={15} />
@@ -139,7 +155,7 @@ export function ResearchShell() {
         </header>
         <ResearchThread />
       </main>
-      <Inspector />
+      {inspectorOpen ? <Inspector /> : null}
     </div>
   );
 }

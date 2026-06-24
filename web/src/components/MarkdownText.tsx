@@ -1,3 +1,4 @@
+import { useMessage } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { useCallback, useMemo } from "react";
 import remarkGfm from "remark-gfm";
@@ -12,10 +13,18 @@ import {
 } from "./evidenceCitations";
 
 export default function MarkdownText() {
-  const { selectedRun, sources, focusEvidence } = useResearch();
+  const runId = useMessage((message) => {
+    const custom = message.metadata.custom as { runId?: unknown };
+    return typeof custom.runId === "string" ? custom.runId : null;
+  });
+  const { runs, focusEvidence } = useResearch();
+  const run = runs.find((item) => item.run_id === runId);
   const targets = useMemo(
-    () => buildEvidenceCitationTargets(sources, selectedRun?.result?.citations ?? []),
-    [selectedRun?.result?.citations, sources],
+    () => buildEvidenceCitationTargets(
+      run?.result?.sources ?? [],
+      run?.result?.citations ?? [],
+    ),
+    [run?.result?.citations, run?.result?.sources],
   );
   const preprocess = useCallback(
     (markdown: string) => formatEvidenceCitations(normalizeMarkdownTables(markdown), targets),
@@ -39,7 +48,7 @@ export default function MarkdownText() {
               href="#sources-title"
               onClick={(event) => {
                 event.preventDefault();
-                focusEvidence(target.evidenceId);
+                if (runId) focusEvidence(target.evidenceId, runId);
               }}
               title={`Show source ${target.number}: ${target.title}`}
               aria-label={`Show source ${target.number}: ${target.title}`}

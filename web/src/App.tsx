@@ -7,7 +7,7 @@ export default function App() {
   return (
     <Routes>
       <Route
-        path="/research/:runId"
+        path="/research/:researchId"
         element={(
           <ResearchProvider>
             <ResearchShell />

@@ -35,9 +35,9 @@ function unwrap<T>(data: T | undefined, error: unknown, response: Response): T {
   throw new ApiError(response.status, detail.code, detail.message);
 }
 
-export async function startResearch(question: string, sessionId: string) {
+export async function startResearch(question: string, researchId?: string | null) {
   const { data, error, response } = await api.POST("/api/v1/research", {
-    body: { question, session_id: sessionId },
+    body: { question, session_id: researchId ?? undefined },
   });
   return unwrap(data, error, response);
 }
@@ -49,9 +49,9 @@ export async function getResearch(runId: string) {
   return unwrap(data, error, response);
 }
 
-export async function listResearch(sessionId: string, limit = 50) {
+export async function listResearchRuns(researchId: string, limit = 50) {
   const { data, error, response } = await api.GET("/api/v1/research", {
-    params: { query: { session_id: sessionId, limit } },
+    params: { query: { session_id: researchId, limit } },
   });
   return unwrap(data, error, response);
 }

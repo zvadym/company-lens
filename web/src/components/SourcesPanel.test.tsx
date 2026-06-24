@@ -68,7 +68,7 @@ describe("SourcesPanel", () => {
       <SourcesPanel
         sources={[source]}
         citations={[]}
-        evidenceFocus={{ evidenceId: source.evidence_id, requestId: 1 }}
+        evidenceFocus={{ evidenceId: source.evidence_id, runId: "run-1", requestId: 1 }}
       />,
     );
 
