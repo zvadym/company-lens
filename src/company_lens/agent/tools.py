@@ -275,12 +275,8 @@ def _missing_fred_series(result: FredSeriesResult) -> tuple[str, ...]:
 
 def _ticker_mentioned(query: str, ticker: str) -> bool:
     if len(ticker) == 1:
-        return bool(
-            re.search(rf"(?<![A-Za-z0-9])\${re.escape(ticker)}(?![A-Za-z0-9])", query)
-        )
-    return bool(
-        re.search(rf"(?<![A-Za-z0-9])\$?{re.escape(ticker)}(?![A-Za-z0-9])", query)
-    )
+        return bool(re.search(rf"(?<![A-Za-z0-9])\${re.escape(ticker)}(?![A-Za-z0-9])", query))
+    return bool(re.search(rf"(?<![A-Za-z0-9])\$?{re.escape(ticker)}(?![A-Za-z0-9])", query))
 
 
 def _company_label(name: str) -> str:

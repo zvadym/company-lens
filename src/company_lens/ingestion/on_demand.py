@@ -198,12 +198,16 @@ class OnDemandCompanyDataPreparer:
                 company = _company_for_ticker(session, ticker)
                 if company is None:
                     continue
-                if _indexed_chunk_count(
-                    session,
-                    company.id,
-                    index_name=self._index_name,
-                    index_version=self._index_version,
-                ) > 0 and _financial_fact_count(session, company.id) > 0:
+                if (
+                    _indexed_chunk_count(
+                        session,
+                        company.id,
+                        index_name=self._index_name,
+                        index_version=self._index_version,
+                    )
+                    > 0
+                    and _financial_fact_count(session, company.id) > 0
+                ):
                     ready.append(ticker)
         return tuple(ready)
 
@@ -250,18 +254,21 @@ def _indexed_chunk_count(
     index_name: str,
     index_version: str,
 ) -> int:
-    return session.scalar(
-        select(func.count(DocumentChunk.id))
-        .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
-        .join(SourceDocument, SourceDocument.id == DocumentVersion.document_id)
-        .join(ChunkEmbedding, ChunkEmbedding.chunk_id == DocumentChunk.id)
-        .join(EmbeddingIndex, EmbeddingIndex.id == ChunkEmbedding.embedding_index_id)
-        .where(
-            SourceDocument.company_id == company_id,
-            EmbeddingIndex.name == index_name,
-            EmbeddingIndex.index_version == index_version,
+    return (
+        session.scalar(
+            select(func.count(DocumentChunk.id))
+            .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
+            .join(SourceDocument, SourceDocument.id == DocumentVersion.document_id)
+            .join(ChunkEmbedding, ChunkEmbedding.chunk_id == DocumentChunk.id)
+            .join(EmbeddingIndex, EmbeddingIndex.id == ChunkEmbedding.embedding_index_id)
+            .where(
+                SourceDocument.company_id == company_id,
+                EmbeddingIndex.name == index_name,
+                EmbeddingIndex.index_version == index_version,
+            )
         )
-    ) or 0
+        or 0
+    )
 
 
 def _financial_fact_count(session: Session, company_id: uuid.UUID) -> int:

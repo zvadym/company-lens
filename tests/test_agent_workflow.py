@@ -1335,9 +1335,7 @@ def test_answer_timeout_fallback_formats_multi_point_calculations() -> None:
     )
     model = AnswerTimeoutModelProvider(analysis=analysis, plan=plan)
 
-    result = ResearchAgent(
-        runtime=ResearchAgentRuntime(model, AnnualSeriesFinancialTools())
-    ).run(
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, AnnualSeriesFinancialTools())).run(
         "Compare Cloudflare revenue growth.",
         session_id="session-answer-timeout-series-fallback",
         policy=ExecutionPolicy(max_retries_per_node=0),
@@ -1396,9 +1394,7 @@ def test_answer_timeout_fallback_groups_peer_facts_by_period() -> None:
         ),
     )
 
-    result = ResearchAgent(
-        runtime=ResearchAgentRuntime(model, PeerAnnualFinancialTools())
-    ).run(
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, PeerAnnualFinancialTools())).run(
         "Compare Cloudflare and Netflix revenue growth.",
         session_id="session-peer-fallback-table",
         policy=ExecutionPolicy(max_retries_per_node=0),
@@ -1570,9 +1566,9 @@ def test_parse_failure_abstains_with_explanation_and_rewrites() -> None:
     assert result["final_answer"] is not None
     assert "could not classify the request" in result["final_answer"]
     assert "Unexpected OpenAI provider failure." not in result["final_answer"]
-    assert "Plot Cloudflare revenue growth against Netflix revenue growth." in result[
-        "final_answer"
-    ]
+    assert (
+        "Plot Cloudflare revenue growth against Netflix revenue growth." in result["final_answer"]
+    )
     assert any(error.code == "openai_unexpected" for error in result["errors"])
     assert ModelPurpose.PLAN not in model.purposes
     assert tools.calls == {}

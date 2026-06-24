@@ -41,11 +41,11 @@ def year_over_year_growth_series(
     _require_compatible(observations)
     dated = tuple(item for item in observations if item.observed_at is not None)
     if len(dated) == len(observations):
-        points = _dated_year_over_year_points(dated)
-        if points:
+        dated_points = _dated_year_over_year_points(dated)
+        if dated_points:
             return _result(
                 "year_over_year_growth",
-                tuple(points),
+                tuple(dated_points),
                 observations,
                 "(current / prior_year - 1) * 100",
                 "percent",
@@ -138,9 +138,7 @@ def margin(numerator: NumericObservation, denominator: NumericObservation) -> Ca
         "percent",
         label=numerator.label,
         observed_at=(
-            numerator.observed_at
-            if numerator.observed_at == denominator.observed_at
-            else None
+            numerator.observed_at if numerator.observed_at == denominator.observed_at else None
         ),
     )
 

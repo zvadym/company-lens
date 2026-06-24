@@ -532,7 +532,7 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         return {"status": AgentRunStatus.FAILED, "errors": (missing_error,)}
     started = time.monotonic()
     if _requires_financial_company(analysis) and not resolved.company_ids:
-        error = _agent_error(
+        missing_company_error = _agent_error(
             "plan_request",
             "missing_company",
             "The question requires company financial facts, but no company was resolved.",
@@ -541,7 +541,7 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         )
         return {
             "status": AgentRunStatus.ABSTAINED,
-            "errors": (error,),
+            "errors": (missing_company_error,),
             "trajectory": (
                 _event(
                     "plan_request",
@@ -1565,10 +1565,7 @@ def _fallback_multi_company_financial_fact_table(
         reverse=True,
     ):
         row = grouped[(period_end, row_metric)]
-        values = [
-            _fallback_financial_fact_cell(row.get(company))
-            for company in companies
-        ]
+        values = [_fallback_financial_fact_cell(row.get(company)) for company in companies]
         period = period_end.isoformat() if period_end is not None else "available period"
         lines.append(f"| {period} | {row_metric} | {' | '.join(values)} |")
     return lines
@@ -2010,28 +2007,32 @@ def _normalize_default_chart_window(
                 branch = branch.model_copy(update={"operation": "year_over_year_growth"})
                 applied_default_window = True
         elif isinstance(branch, FinancialFactsBranch) and branch.branch_id in financial_refs:
-            request = branch.request
             if (
                 use_quarterly_default
-                and request.period_start is None
-                and request.period_end is None
-                and not request.fiscal_years
-                and not request.fiscal_periods
+                and branch.request.period_start is None
+                and branch.request.period_end is None
+                and not branch.request.fiscal_years
+                and not branch.request.fiscal_periods
             ):
-                request = request.model_copy(
+                financial_request = branch.request.model_copy(
                     update={
                         "period_types": ("quarter",),
-                        "limit": max(request.limit, DEFAULT_CHART_QUARTERLY_FACT_LIMIT),
+                        "limit": max(branch.request.limit, DEFAULT_CHART_QUARTERLY_FACT_LIMIT),
                     }
                 )
-                branch = branch.model_copy(update={"request": request})
+                branch = branch.model_copy(update={"request": financial_request})
                 applied_default_window = True
-        elif isinstance(branch, MacroSeriesBranch) and branch.branch_id in macro_refs:
-            request = branch.request
-            if request.observation_start is None and request.observation_end is None:
-                request = request.model_copy(update={"limit": DEFAULT_CHART_MACRO_MONTH_LIMIT})
-                branch = branch.model_copy(update={"request": request})
-                applied_default_window = True
+        elif (
+            isinstance(branch, MacroSeriesBranch)
+            and branch.branch_id in macro_refs
+            and branch.request.observation_start is None
+            and branch.request.observation_end is None
+        ):
+            macro_request = branch.request.model_copy(
+                update={"limit": DEFAULT_CHART_MACRO_MONTH_LIMIT}
+            )
+            branch = branch.model_copy(update={"request": macro_request})
+            applied_default_window = True
         normalized.append(branch)
     updates: dict[str, object] = {"branches": tuple(normalized)}
     if applied_default_window:
@@ -2759,9 +2760,7 @@ def _chart_series_points(
     observations = _numeric_series_for_chart(reference, state)
     if observations is not None:
         dated = tuple(
-            item
-            for item in observations
-            if item.observed_at is not None and item.value is not None
+            item for item in observations if item.observed_at is not None and item.value is not None
         )
         if not dated:
             raise ValueError("Chart source has no dated observations.")
@@ -2853,7 +2852,7 @@ def _default_chart_macro_evidence_keys(
     if plan is None or DEFAULT_CHART_WINDOW_REASON not in plan.reason_codes:
         return None
     calculation_dates = tuple(
-        cast(date, point.observed_at)
+        point.observed_at
         for calculation in state.get("calculations", ())
         for point in calculation.result.values
         if point.observed_at is not None

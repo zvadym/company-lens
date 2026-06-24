@@ -181,10 +181,7 @@ class FredQueryService:
             .where(MacroSeries.series_id.in_(normalized))
             .order_by(MacroSeries.series_id)
         ).all()
-        statement = (
-            select(MacroObservation)
-            .where(MacroObservation.series_id.in_(normalized))
-        )
+        statement = select(MacroObservation).where(MacroObservation.series_id.in_(normalized))
         if request.observation_start:
             statement = statement.where(MacroObservation.observed_at >= request.observation_start)
         if request.observation_end:
