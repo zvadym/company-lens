@@ -2265,29 +2265,23 @@ def _reconcile_analysis_with_plan(
 
     represented = _represented_capabilities(plan)
     if (
+        "deterministic_multi_company_growth_chart_plan" in plan.reason_codes
+        and plan.route is not ResearchRoute.UNSUPPORTED
+    ):
+        return _analysis_for_represented_plan(
+            analysis,
+            plan,
+            represented,
+        )
+    if (
         analysis.route is not ResearchRoute.UNSUPPORTED
         and plan.route is not ResearchRoute.UNSUPPORTED
         and set(analysis.required_capabilities).issubset(represented)
     ):
-        ordered_capabilities = tuple(
-            capability for capability in AgentCapability if capability in represented
-        )
-        chart_requested = AgentCapability.CHART in represented
-        if (
-            analysis.route is plan.route
-            and analysis.required_capabilities == ordered_capabilities
-            and analysis.chart_requested is chart_requested
-        ):
-            return analysis
-        return analysis.model_copy(
-            update={
-                "route": plan.route,
-                "required_capabilities": ordered_capabilities,
-                "chart_requested": chart_requested,
-                "reason_codes": tuple(
-                    dict.fromkeys((*analysis.reason_codes, "reconciled_to_valid_plan"))
-                ),
-            }
+        return _analysis_for_represented_plan(
+            analysis,
+            plan,
+            represented,
         )
     if (
         analysis.route in {ResearchRoute.UNSUPPORTED, ResearchRoute.HYBRID}
@@ -2296,6 +2290,14 @@ def _reconcile_analysis_with_plan(
         or AgentCapability.CHART in analysis.required_capabilities
     ):
         return analysis
+    return _analysis_for_represented_plan(analysis, plan, represented)
+
+
+def _analysis_for_represented_plan(
+    analysis: QuestionAnalysis,
+    plan: ExecutionPlan,
+    represented: set[AgentCapability],
+) -> QuestionAnalysis:
     ordered_capabilities = tuple(
         capability for capability in AgentCapability if capability in represented
     )

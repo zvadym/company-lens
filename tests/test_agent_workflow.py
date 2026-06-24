@@ -1111,7 +1111,12 @@ def test_multi_company_chart_fallback_replaces_under_scoped_model_plan() -> None
     analysis = QuestionAnalysis(
         normalized_question="compare these companies on a chart",
         route=ResearchRoute.HYBRID,
-        required_capabilities=(AgentCapability.FINANCIAL_FACTS, AgentCapability.CHART),
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.MACRO_SERIES,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
         chart_requested=True,
         is_follow_up=True,
         reason_codes=("multi_company_comparison", "explicit_chart_request"),
@@ -1188,6 +1193,8 @@ def test_multi_company_chart_fallback_replaces_under_scoped_model_plan() -> None
     )
     reconciled = update["analysis"]
     assert isinstance(reconciled, QuestionAnalysis)
+    assert reconciled.route is ResearchRoute.CALCULATION
+    assert AgentCapability.MACRO_SERIES not in reconciled.required_capabilities
     assert AgentCapability.CALCULATIONS in reconciled.required_capabilities
 
 
