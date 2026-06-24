@@ -37,6 +37,7 @@ from company_lens.agent.schemas import (
     CachedSourceResult,
     CalculationBranch,
     CalculationBranchResult,
+    CalculationOperation,
     ChartBranch,
     CitationReference,
     DocumentRetrievalBranch,
@@ -89,7 +90,7 @@ from company_lens.evidence.schemas import (
     ValidationIssue,
 )
 from company_lens.evidence.validation import AnswerValidator, SemanticSupportJudge
-from company_lens.financials.schemas import FinancialFactObservation
+from company_lens.financials.schemas import FinancialFactObservation, FinancialFactQuery
 from company_lens.macro.schemas import FredSeriesResult
 from company_lens.observability.context import bind_context
 from company_lens.observability.telemetry import (
@@ -608,6 +609,29 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
             retrieval_index_version=runtime.context.retrieval_index_version,
         )
     except ValueError as exc:
+        fallback_plan = _fallback_multi_company_growth_chart_plan(
+            analysis,
+            resolved,
+            memory,
+        )
+        if fallback_plan is not None:
+            reconciled_analysis = _reconcile_analysis_with_plan(analysis, fallback_plan)
+            try:
+                plan = _normalize_and_validate_plan(
+                    fallback_plan,
+                    reconciled_analysis,
+                    resolved,
+                    state["policy"],
+                    retrieval_index_name=runtime.context.retrieval_index_name,
+                    retrieval_index_version=runtime.context.retrieval_index_version,
+                )
+            except ValueError:
+                plan = None
+            if plan is not None:
+                update["execution_plan"] = plan
+                if reconciled_analysis != analysis:
+                    update["analysis"] = reconciled_analysis
+                return update
         validation_error = _agent_error(
             "plan_request",
             "invalid_execution_plan",
@@ -627,6 +651,80 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
 
 def _requires_financial_company(analysis: QuestionAnalysis) -> bool:
     return AgentCapability.FINANCIAL_FACTS in analysis.required_capabilities
+
+
+def _fallback_multi_company_growth_chart_plan(
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+    memory: SessionMemory | None,
+) -> ExecutionPlan | None:
+    if not analysis.chart_requested or len(resolved.company_ids) < 2:
+        return None
+    required = set(analysis.required_capabilities)
+    if not {
+        AgentCapability.FINANCIAL_FACTS,
+        AgentCapability.CALCULATIONS,
+        AgentCapability.CHART,
+    }.issubset(required):
+        return None
+    metric = resolved.metrics[0] if resolved.metrics else "revenue"
+    operation = _previous_growth_operation(memory) or "year_over_year_growth"
+    branches: list[ExecutionBranch] = []
+    calculation_refs: list[str] = []
+    for index, company_id in enumerate(resolved.company_ids, start=1):
+        fact_id = f"company_{index}_{metric}_facts"
+        growth_id = f"company_{index}_{metric}_growth"
+        branches.append(
+            FinancialFactsBranch(
+                branch_id=fact_id,
+                request=FinancialFactQuery(
+                    company_ids=(company_id,),
+                    metrics=(metric,),
+                    period_types=("quarter",),
+                    limit=DEFAULT_CHART_QUARTERLY_FACT_LIMIT,
+                ),
+            )
+        )
+        branches.append(
+            CalculationBranch(
+                branch_id=growth_id,
+                operation=operation,
+                input_refs=(fact_id,),
+                depends_on=(fact_id,),
+            )
+        )
+        calculation_refs.append(growth_id)
+    branches.append(
+        ChartBranch(
+            branch_id="company_growth_chart",
+            chart_type="line",
+            dataset_ref=calculation_refs[0],
+            depends_on=tuple(calculation_refs),
+            title=f"{metric.title()} growth comparison",
+        )
+    )
+    return ExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=tuple(branches),
+        reason_codes=("deterministic_multi_company_growth_chart_plan",),
+    )
+
+
+def _previous_growth_operation(memory: SessionMemory | None) -> CalculationOperation | None:
+    if memory is None or memory.last_execution_plan is None:
+        return None
+    for branch in reversed(memory.last_execution_plan.branches):
+        if (
+            isinstance(branch, CalculationBranch)
+            and branch.operation
+            in {
+                "quarter_over_quarter_growth",
+                "year_over_year_growth",
+                "percentage_change",
+            }
+        ):
+            return branch.operation
+    return None
 
 
 def _hydrate_cached_results(state: AgentState) -> dict[str, object]:
@@ -1186,7 +1284,6 @@ def _generate_answer(
     if error is not None:
         fallback = _deterministic_fallback_answer(state.get("evidence", ()))
         if error.recoverable and fallback is not None:
-            update["status"] = AgentRunStatus.PARTIAL
             update["draft_answer"] = fallback
         else:
             update["status"] = _terminal_model_status(error)
@@ -1377,7 +1474,6 @@ def _citation_fallback_update(
     if fallback is None or fallback == state.get("draft_answer"):
         return None
     return {
-        "status": AgentRunStatus.PARTIAL,
         "draft_answer": fallback,
         "trajectory": (
             _event(
@@ -1864,9 +1960,14 @@ def _updated_session_memory(state: AgentState, cache_limit: int) -> SessionMemor
                 macro_result=macro.result,
             )
             cached[(entry.kind, entry.request_fingerprint)] = entry
+    resolved = state.get("resolved_query")
     entries = tuple(sorted(cached.values(), key=lambda item: item.stored_at)[-cache_limit:])
     return SessionMemory(
-        last_resolved_query=state.get("resolved_query") or previous.last_resolved_query,
+        last_resolved_query=resolved or previous.last_resolved_query,
+        recent_resolved_queries=_updated_recent_resolved_queries(
+            previous.recent_resolved_queries,
+            resolved,
+        ),
         last_execution_plan=plan or previous.last_execution_plan,
         cached_source_results=entries,
         evidence=state.get("evidence", ()) or previous.evidence,
@@ -2379,12 +2480,140 @@ def _merge_follow_up_if_needed(
         and memory is not None
         and memory.last_resolved_query is not None
     ):
-        return _merge_follow_up_resolution(resolved, memory.last_resolved_query)
+        previous = (
+            _recent_company_context(memory)
+            if _should_inherit_recent_companies(resolved, analysis, memory)
+            else memory.last_resolved_query
+        )
+        return _merge_follow_up_resolution(resolved, previous)
     return resolved
 
 
 def _has_company_like_entity(resolved: ResolvedQuery) -> bool:
     return any(entity.kind in {"company", "public_company"} for entity in resolved.entities)
+
+
+def _updated_recent_resolved_queries(
+    previous: tuple[ResolvedQuery, ...],
+    current: ResolvedQuery | None,
+    *,
+    limit: int = 5,
+) -> tuple[ResolvedQuery, ...]:
+    if current is None:
+        return previous[-limit:]
+    if previous and previous[-1] == current:
+        return previous[-limit:]
+    return (*previous, current)[-limit:]
+
+
+def _should_inherit_recent_companies(
+    resolved: ResolvedQuery,
+    analysis: QuestionAnalysis,
+    memory: SessionMemory,
+) -> bool:
+    if _has_company_like_entity(resolved):
+        return False
+    if len(_recent_company_ids(memory)) < 2:
+        return False
+    return _references_multiple_prior_companies(analysis.normalized_question) or (
+        analysis.chart_requested and _analysis_requests_comparison(analysis)
+    )
+
+
+def _references_multiple_prior_companies(question: str) -> bool:
+    normalized = question.casefold()
+    markers = (
+        "these companies",
+        "those companies",
+        "both companies",
+        "the companies",
+        "these two",
+        "ці компан",
+        "цих компан",
+        "обидві компан",
+        "обидва компан",
+        "эти компан",
+        "обе компан",
+    )
+    return any(marker in normalized for marker in markers)
+
+
+def _analysis_requests_comparison(analysis: QuestionAnalysis) -> bool:
+    return any(
+        marker in reason
+        for reason in analysis.reason_codes
+        for marker in ("comparison", "compare", "cross_company")
+    )
+
+
+def _recent_company_context(memory: SessionMemory) -> ResolvedQuery:
+    queries = memory.recent_resolved_queries or (memory.last_resolved_query,)
+    queries = tuple(query for query in queries if query is not None)
+    if not queries:
+        return memory.last_resolved_query
+    base = queries[-1]
+    company_entities = []
+    seen_entities: set[tuple[str, str]] = set()
+    company_ids: list[uuid.UUID] = []
+    seen_company_ids: set[uuid.UUID] = set()
+    for query in queries:
+        for company_id in query.company_ids:
+            if company_id not in seen_company_ids:
+                seen_company_ids.add(company_id)
+                company_ids.append(company_id)
+        for entity in query.entities:
+            if entity.kind not in {"company", "public_company"}:
+                continue
+            key = (entity.kind, entity.canonical_value or entity.mention.casefold())
+            if key in seen_entities:
+                continue
+            seen_entities.add(key)
+            company_entities.append(entity)
+    for company_id in _cached_financial_company_ids(memory):
+        if company_id not in seen_company_ids:
+            seen_company_ids.add(company_id)
+            company_ids.append(company_id)
+    non_company_entities = tuple(
+        entity for entity in base.entities if entity.kind not in {"company", "public_company"}
+    )
+    return base.model_copy(
+        update={
+            "entities": (*company_entities, *non_company_entities),
+            "company_ids": tuple(company_ids),
+        }
+    )
+
+
+def _recent_company_ids(memory: SessionMemory) -> tuple[uuid.UUID, ...]:
+    seen: set[uuid.UUID] = set()
+    company_ids: list[uuid.UUID] = []
+    for query in memory.recent_resolved_queries:
+        for company_id in query.company_ids:
+            if company_id in seen:
+                continue
+            seen.add(company_id)
+            company_ids.append(company_id)
+    for company_id in _cached_financial_company_ids(memory):
+        if company_id in seen:
+            continue
+        seen.add(company_id)
+        company_ids.append(company_id)
+    return tuple(company_ids)
+
+
+def _cached_financial_company_ids(memory: SessionMemory) -> tuple[uuid.UUID, ...]:
+    seen: set[uuid.UUID] = set()
+    company_ids: list[uuid.UUID] = []
+    for item in memory.cached_source_results:
+        result = item.financial_result
+        if result is None:
+            continue
+        for company_id in result.query.company_ids:
+            if company_id in seen:
+                continue
+            seen.add(company_id)
+            company_ids.append(company_id)
+    return tuple(company_ids)
 
 
 def _branch_has_evidence(

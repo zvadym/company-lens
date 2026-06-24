@@ -6,7 +6,7 @@ import uuid
 from collections import defaultdict
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
 from company_lens.db.models import (
@@ -257,6 +257,8 @@ class EntityResolver:
         query: str,
         matched_company_ids: set[uuid.UUID],
     ) -> list[EntityResolution]:
+        if not _has_company_identity_registry(self._session):
+            return []
         identities = self._session.scalars(
             select(CompanyIdentity).order_by(CompanyIdentity.id)
         ).all()
@@ -466,6 +468,10 @@ def _identity_canonical_value(identity: CompanyIdentity) -> str:
     if identity.cik:
         return identity.cik
     return str(identity.id)
+
+
+def _has_company_identity_registry(session: Session) -> bool:
+    return inspect(session.get_bind()).has_table("company_identities")
 
 
 def _strip_trailing_suffixes(

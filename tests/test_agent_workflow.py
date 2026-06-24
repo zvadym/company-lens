@@ -38,8 +38,13 @@ from company_lens.agent.schemas import (
     DocumentRetrievalBranch,
     ModelExecutionBranch,
     ModelExecutionPlan,
+    SessionMemory,
 )
-from company_lens.agent.workflow import _merge_follow_up_resolution
+from company_lens.agent.workflow import (
+    _fallback_multi_company_growth_chart_plan,
+    _merge_follow_up_if_needed,
+    _merge_follow_up_resolution,
+)
 from company_lens.financials.schemas import (
     FinancialFactObservation,
     FinancialFactQuery,
@@ -898,6 +903,152 @@ def test_follow_up_without_company_mention_still_inherits_previous_company() -> 
     assert merged.fiscal_years == (2025,)
 
 
+def test_plural_company_follow_up_inherits_recent_company_set() -> None:
+    cloudflare = ResolvedQuery(
+        query="Compare Cloudflare revenue growth",
+        entities=(
+            EntityResolution(
+                kind="company",
+                mention="cloudflare",
+                status="resolved",
+                canonical_value=str(COMPANY_ID),
+                candidates=(
+                    EntityCandidate(
+                        id=COMPANY_ID,
+                        canonical_value=str(COMPANY_ID),
+                        display_value="Cloudflare",
+                        match_kind="display_name",
+                    ),
+                ),
+            ),
+            EntityResolution(
+                kind="financial_metric",
+                mention="revenue",
+                status="resolved",
+                canonical_value="revenue",
+                candidates=(
+                    EntityCandidate(
+                        canonical_value="revenue",
+                        display_value="revenue",
+                        match_kind="metric_alias",
+                    ),
+                ),
+            ),
+        ),
+        company_ids=(COMPANY_ID,),
+        metrics=("revenue",),
+    )
+    google = ResolvedQuery(
+        query="зроби те саме для google",
+        entities=(
+            EntityResolution(
+                kind="company",
+                mention="google",
+                status="resolved",
+                canonical_value=str(NETFLIX_ID),
+                candidates=(
+                    EntityCandidate(
+                        id=NETFLIX_ID,
+                        canonical_value=str(NETFLIX_ID),
+                        display_value="Alphabet Inc.",
+                        match_kind="identity:alias:brand",
+                    ),
+                ),
+            ),
+        ),
+        company_ids=(NETFLIX_ID,),
+        metrics=("revenue",),
+    )
+    current = ResolvedQuery(query="тепер порівняй ці компанії на графіку")
+    analysis = QuestionAnalysis(
+        normalized_question=(
+            "compare Cloudflare and Alphabet on a chart using their revenue growth "
+            "over the last eight quarters"
+        ),
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+        is_follow_up=True,
+        reason_codes=("comparison_requested", "chart_explicitly_requested"),
+    )
+    memory = SessionMemory(
+        last_resolved_query=google,
+        recent_resolved_queries=(cloudflare, google),
+    )
+
+    merged = _merge_follow_up_if_needed(current, analysis, memory)
+
+    assert merged.company_ids == (COMPANY_ID, NETFLIX_ID)
+    assert [entity.mention for entity in merged.entities if entity.kind == "company"] == [
+        "cloudflare",
+        "google",
+    ]
+    assert merged.metrics == ("revenue",)
+
+
+def test_multi_company_chart_fallback_plan_uses_each_company_series() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="compare Cloudflare and Alphabet revenue growth on a chart",
+        route=ResearchRoute.HYBRID,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+        is_follow_up=True,
+        reason_codes=("cross_company_comparison", "chart_explicitly_requested"),
+    )
+    previous_plan = ExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=(
+            FinancialFactsBranch(
+                branch_id="google_revenue",
+                request=FinancialFactQuery(
+                    company_ids=(NETFLIX_ID,),
+                    metrics=("revenue",),
+                ),
+            ),
+            CalculationBranch(
+                branch_id="google_growth",
+                operation="quarter_over_quarter_growth",
+                input_refs=("google_revenue",),
+                depends_on=("google_revenue",),
+            ),
+        ),
+    )
+    memory = SessionMemory(last_execution_plan=previous_plan)
+    resolved = ResolvedQuery(
+        query="тепер порівняй ці компанії на графіку",
+        company_ids=(COMPANY_ID, NETFLIX_ID),
+        metrics=("revenue",),
+    )
+
+    plan = _fallback_multi_company_growth_chart_plan(analysis, resolved, memory)
+
+    assert plan is not None
+    assert plan.route is ResearchRoute.CALCULATION
+    assert [branch.kind for branch in plan.branches] == [
+        "query_financial_facts",
+        "calculate_metrics",
+        "query_financial_facts",
+        "calculate_metrics",
+        "generate_chart_spec",
+    ]
+    assert all(
+        branch.operation == "quarter_over_quarter_growth"
+        for branch in plan.branches
+        if isinstance(branch, CalculationBranch)
+    )
+    chart = plan.branches[-1]
+    assert isinstance(chart, ChartBranch)
+    assert chart.depends_on == ("company_1_revenue_growth", "company_2_revenue_growth")
+
+
 def test_runtime_overrides_model_selected_retrieval_index() -> None:
     analysis = QuestionAnalysis(
         normalized_question="What risks did Cloudflare report?",
@@ -1370,7 +1521,7 @@ def test_repair_timeout_is_not_retried_by_general_node_policy() -> None:
         policy=ExecutionPolicy(max_retries_per_node=2),
     )
 
-    assert result["status"] is AgentRunStatus.PARTIAL
+    assert result["status"] is AgentRunStatus.COMPLETED
     assert result["answer_validation"].valid is True
     assert result["final_answer"] is not None
     assert "125 USD" in result["final_answer"]
@@ -1404,7 +1555,7 @@ def test_answer_timeout_falls_back_to_deterministic_cited_summary() -> None:
         policy=ExecutionPolicy(max_retries_per_node=1),
     )
 
-    assert result["status"] is AgentRunStatus.PARTIAL
+    assert result["status"] is AgentRunStatus.COMPLETED
     assert result["final_answer"] is not None
     assert "[calculation:growth]" in result["final_answer"]
     assert "\n\n| Period | Company | Metric | Value |" in result["final_answer"]
@@ -1438,7 +1589,7 @@ def test_answer_timeout_fallback_formats_multi_point_calculations() -> None:
         policy=ExecutionPolicy(max_retries_per_node=0),
     )
 
-    assert result["status"] is AgentRunStatus.PARTIAL
+    assert result["status"] is AgentRunStatus.COMPLETED
     assert result["final_answer"] is not None
     assert "latest value was 25 percent at 2025-12-31" in result["final_answer"]
     assert "[calculation:growth]" in result["final_answer"]
@@ -1497,7 +1648,7 @@ def test_answer_timeout_fallback_groups_peer_facts_by_period() -> None:
         policy=ExecutionPolicy(max_retries_per_node=0),
     )
 
-    assert result["status"] is AgentRunStatus.PARTIAL
+    assert result["status"] is AgentRunStatus.COMPLETED
     assert result["final_answer"] is not None
     assert "| Period | Metric | Cloudflare | Netflix |" in result["final_answer"]
     assert "| 2025-12-31 | revenue | 125 USD " in result["final_answer"]
@@ -1528,7 +1679,7 @@ def test_validation_failure_falls_back_to_deterministic_cited_summary() -> None:
         policy=ExecutionPolicy(max_repair_attempts=0),
     )
 
-    assert result["status"] is AgentRunStatus.PARTIAL
+    assert result["status"] is AgentRunStatus.COMPLETED
     assert result["answer_validation"].valid is True
     assert "\n\n| Period | Company | Metric | Value |" in result["final_answer"]
     assert "125 USD" in result["final_answer"]
@@ -1560,7 +1711,7 @@ def test_validation_fallback_avoids_sentence_split_in_punctuated_company_name() 
         policy=ExecutionPolicy(max_repair_attempts=0),
     )
 
-    assert result["status"] is AgentRunStatus.PARTIAL
+    assert result["status"] is AgentRunStatus.COMPLETED
     assert result["answer_validation"].valid is True
     assert "| 2025-12-31 | Elastic NV | revenue | 125 USD" in result["final_answer"]
 
