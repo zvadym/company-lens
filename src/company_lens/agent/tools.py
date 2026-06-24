@@ -4,12 +4,15 @@ import re
 import uuid
 from typing import Protocol
 
+from sqlalchemy import inspect
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from company_lens.agent.schemas import AgentError, AgentErrorCategory, AgentErrorSeverity
 from company_lens.config import Settings
 from company_lens.financials.schemas import FinancialFactQuery, FinancialFactQueryResult
 from company_lens.financials.service import FinancialFactQueryService
+from company_lens.identity import CompanyIdentityRegistry, load_curated_identities
 from company_lens.ingestion.on_demand import (
     CompanyDataPreparationResult,
     OnDemandCompanyDataPreparer,
@@ -78,7 +81,7 @@ class SqlResearchTools:
         self._settings = settings
 
     def resolve_entities(self, query: str) -> ResolvedQuery:
-        resolved = self._call(lambda session: EntityResolver(session=session).resolve(query))
+        resolved = self._resolve_entities(query)
         if resolved.company_ids or any(
             entity.kind == "public_company" for entity in resolved.entities
         ):
@@ -189,6 +192,32 @@ class SqlResearchTools:
                 )
             ) from None
 
+    def _resolve_entities(self, query: str) -> ResolvedQuery:
+        try:
+            with self._session_factory.begin() as session:
+                self._seed_curated_identities(session)
+                return EntityResolver(session=session).resolve(query)
+        except ResearchToolError:
+            raise
+        except (ValueError, TypeError):
+            raise ResearchToolError(
+                AgentError(
+                    category=AgentErrorCategory.VALIDATION,
+                    severity=AgentErrorSeverity.TERMINAL,
+                    code="tool_invalid_request",
+                    message="A research tool rejected its typed request.",
+                )
+            ) from None
+        except Exception:
+            raise ResearchToolError(
+                AgentError(
+                    category=AgentErrorCategory.TOOL,
+                    severity=AgentErrorSeverity.RECOVERABLE,
+                    code="tool_execution_failed",
+                    message="A research data operation failed.",
+                )
+            ) from None
+
     def _call[ResultT](self, operation: SessionOperation[ResultT]) -> ResultT:
         try:
             with self._session_factory() as session:
@@ -222,11 +251,41 @@ class SqlResearchTools:
                 ticker_map = client.fetch_ticker_map()
         except Exception:
             return ()
+        try:
+            with self._session_factory.begin() as session:
+                if _has_identity_registry(session):
+                    registry = CompanyIdentityRegistry(session=session)
+                    registry.hydrate_sec_ticker_map(ticker_map)
+                    resolved = EntityResolver(session=session).resolve(query)
+                    entities = tuple(
+                        entity
+                        for entity in resolved.entities
+                        if entity.kind in {"company", "public_company"}
+                    )
+                    if entities:
+                        return entities
+        except (SQLAlchemyError, ValueError):
+            pass
         return _match_public_companies(query, ticker_map)
+
+    @staticmethod
+    def _seed_curated_identities(session: Session) -> None:
+        if not _has_identity_registry(session):
+            return
+        try:
+            CompanyIdentityRegistry(session=session).seed_curated_identities(
+                load_curated_identities()
+            )
+        except (OSError, SQLAlchemyError, ValueError):
+            return
 
 
 class SessionOperation[ResultT](Protocol):
     def __call__(self, session: Session) -> ResultT: ...
+
+
+def _has_identity_registry(session: Session) -> bool:
+    return inspect(session.get_bind()).has_table("company_identities")
 
 
 def _match_public_companies(

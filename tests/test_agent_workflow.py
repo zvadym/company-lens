@@ -39,6 +39,7 @@ from company_lens.agent.schemas import (
     ModelExecutionBranch,
     ModelExecutionPlan,
 )
+from company_lens.agent.workflow import _merge_follow_up_resolution
 from company_lens.financials.schemas import (
     FinancialFactObservation,
     FinancialFactQuery,
@@ -799,6 +800,102 @@ def test_workflow_prepares_unavailable_public_company_before_planning() -> None:
     assert result["status"] is AgentRunStatus.COMPLETED
     assert tools.calls["prepare"] == 1
     assert tools.calls["resolve"] == 2
+
+
+def test_follow_up_with_new_public_company_does_not_inherit_previous_company() -> None:
+    previous = ResolvedQuery(
+        query="Compare Cloudflare revenue growth",
+        entities=(
+            EntityResolution(
+                kind="company",
+                mention="cloudflare",
+                status="resolved",
+                canonical_value=str(COMPANY_ID),
+                candidates=(
+                    EntityCandidate(
+                        id=COMPANY_ID,
+                        canonical_value=str(COMPANY_ID),
+                        display_value="Cloudflare",
+                        match_kind="display_name",
+                    ),
+                ),
+            ),
+            EntityResolution(
+                kind="financial_metric",
+                mention="revenue",
+                status="resolved",
+                canonical_value="revenue",
+                candidates=(
+                    EntityCandidate(
+                        canonical_value="revenue",
+                        display_value="revenue",
+                        match_kind="metric_alias",
+                    ),
+                ),
+            ),
+        ),
+        company_ids=(COMPANY_ID,),
+        metrics=("revenue",),
+    )
+    current = ResolvedQuery(
+        query="а тепер те саме для google",
+        entities=(
+            EntityResolution(
+                kind="public_company",
+                mention="google",
+                status="unresolved",
+                candidates=(
+                    EntityCandidate(
+                        canonical_value="GOOG",
+                        display_value="Alphabet Inc.",
+                        match_kind="identity:alias:brand",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    merged = _merge_follow_up_resolution(current, previous)
+
+    assert merged.company_ids == ()
+    assert [entity.kind for entity in merged.entities] == [
+        "public_company",
+        "financial_metric",
+    ]
+    assert merged.entities[0].candidates[0].canonical_value == "GOOG"
+    assert merged.metrics == ("revenue",)
+
+
+def test_follow_up_without_company_mention_still_inherits_previous_company() -> None:
+    previous = ResolvedQuery(
+        query="Compare Cloudflare revenue growth",
+        entities=(
+            EntityResolution(
+                kind="company",
+                mention="cloudflare",
+                status="resolved",
+                canonical_value=str(COMPANY_ID),
+                candidates=(
+                    EntityCandidate(
+                        id=COMPANY_ID,
+                        canonical_value=str(COMPANY_ID),
+                        display_value="Cloudflare",
+                        match_kind="display_name",
+                    ),
+                ),
+            ),
+        ),
+        company_ids=(COMPANY_ID,),
+        metrics=("revenue",),
+    )
+    current = ResolvedQuery(query="do the same", fiscal_years=(2025,))
+
+    merged = _merge_follow_up_resolution(current, previous)
+
+    assert merged.company_ids == (COMPANY_ID,)
+    assert [entity.kind for entity in merged.entities] == ["company"]
+    assert merged.metrics == ("revenue",)
+    assert merged.fiscal_years == (2025,)
 
 
 def test_runtime_overrides_model_selected_retrieval_index() -> None:

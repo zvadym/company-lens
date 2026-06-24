@@ -408,13 +408,7 @@ def _resolve_entities(
         resolved = runtime.context.tools.resolve_entities(state["question"])
         analysis = state.get("analysis")
         memory = state.get("session_memory")
-        if (
-            analysis is not None
-            and analysis.is_follow_up
-            and memory is not None
-            and memory.last_resolved_query is not None
-        ):
-            resolved = _merge_follow_up_resolution(resolved, memory.last_resolved_query)
+        resolved = _merge_follow_up_if_needed(resolved, analysis, memory)
     except ResearchToolError as exc:
         error = exc.error.model_copy(update={"node": "resolve_entities"})
         return {
@@ -489,6 +483,11 @@ def _prepare_company_data(
     if result.prepared_tickers:
         with suppress(Exception):
             resolved = runtime.context.tools.resolve_entities(state["question"])
+            resolved = _merge_follow_up_if_needed(
+                resolved,
+                state.get("analysis"),
+                state.get("session_memory"),
+            )
 
     summary = (
         "Company report data is already available."
@@ -2338,14 +2337,27 @@ def _source_request_fingerprint(
 
 
 def _merge_follow_up_resolution(current: ResolvedQuery, previous: ResolvedQuery) -> ResolvedQuery:
+    current_has_company = _has_company_like_entity(current)
     current_kinds = {entity.kind for entity in current.entities}
+    inherited_company_entities = (
+        ()
+        if current_has_company
+        else tuple(
+            entity
+            for entity in previous.entities
+            if entity.kind in {"company", "public_company"}
+        )
+    )
     inherited_entities = tuple(
-        entity for entity in previous.entities if entity.kind not in current_kinds
+        entity
+        for entity in previous.entities
+        if entity.kind not in current_kinds and entity.kind not in {"company", "public_company"}
     )
     return current.model_copy(
         update={
-            "entities": (*current.entities, *inherited_entities),
-            "company_ids": current.company_ids or previous.company_ids,
+            "entities": (*current.entities, *inherited_company_entities, *inherited_entities),
+            "company_ids": current.company_ids
+            or (() if current_has_company else previous.company_ids),
             "accession_numbers": current.accession_numbers or previous.accession_numbers,
             "filing_forms": current.filing_forms or previous.filing_forms,
             "fiscal_years": current.fiscal_years or previous.fiscal_years,
@@ -2354,6 +2366,25 @@ def _merge_follow_up_resolution(current: ResolvedQuery, previous: ResolvedQuery)
             "metrics": current.metrics or previous.metrics,
         }
     )
+
+
+def _merge_follow_up_if_needed(
+    resolved: ResolvedQuery,
+    analysis: QuestionAnalysis | None,
+    memory: SessionMemory | None,
+) -> ResolvedQuery:
+    if (
+        analysis is not None
+        and analysis.is_follow_up
+        and memory is not None
+        and memory.last_resolved_query is not None
+    ):
+        return _merge_follow_up_resolution(resolved, memory.last_resolved_query)
+    return resolved
+
+
+def _has_company_like_entity(resolved: ResolvedQuery) -> bool:
+    return any(entity.kind in {"company", "public_company"} for entity in resolved.entities)
 
 
 def _branch_has_evidence(

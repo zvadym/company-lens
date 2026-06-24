@@ -10,6 +10,7 @@ from company_lens.db.base import Base
 from company_lens.db.models import Company, CompanyIdentity, CompanyIdentityAlias
 from company_lens.identity import CompanyIdentityRegistry, load_curated_identities
 from company_lens.ingestion.sec_client import SecCompany
+from company_lens.retrieval.resolution import EntityResolver
 
 
 def test_curated_google_alias_resolves_to_persisted_alphabet_identity(
@@ -98,6 +99,23 @@ def test_unknown_identity_is_unresolved(session: Session) -> None:
 
     assert resolved.status == "unresolved"
     assert resolved.candidates == ()
+
+
+def test_entity_resolver_exposes_curated_identity_as_public_company_for_on_demand_prepare(
+    session: Session,
+) -> None:
+    CompanyIdentityRegistry(session=session).seed_curated_identities(load_curated_identities())
+    session.commit()
+
+    resolved = EntityResolver(session=session).resolve("а тепер те саме для google revenue")
+
+    public_company = next(entity for entity in resolved.entities if entity.kind == "public_company")
+    assert public_company.mention == "google"
+    assert public_company.status == "unresolved"
+    assert public_company.candidates[0].canonical_value == "GOOG"
+    assert public_company.candidates[0].display_value == "Alphabet Inc."
+    assert resolved.company_ids == ()
+    assert resolved.metrics == ("revenue",)
 
 
 @pytest.fixture
