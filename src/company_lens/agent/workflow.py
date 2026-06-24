@@ -594,11 +594,44 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
     )
     update = _model_node_update("plan_request", attempts, started, error)
     if error is not None:
+        fallback_plan = _fallback_multi_company_growth_chart_plan(
+            analysis,
+            resolved,
+            memory,
+        )
+        if fallback_plan is not None:
+            reconciled_analysis = _reconcile_analysis_with_plan(analysis, fallback_plan)
+            try:
+                plan = _normalize_and_validate_plan(
+                    fallback_plan,
+                    reconciled_analysis,
+                    resolved,
+                    state["policy"],
+                    retrieval_index_name=runtime.context.retrieval_index_name,
+                    retrieval_index_version=runtime.context.retrieval_index_version,
+                )
+            except ValueError:
+                plan = None
+            if plan is not None:
+                update["execution_plan"] = plan
+                if reconciled_analysis != analysis:
+                    update["analysis"] = reconciled_analysis
+                return update
         update["status"] = _terminal_model_status(error)
         return update
     assert output is not None
     try:
         domain_plan = _canonicalize_plan_route(_domain_execution_plan(output))
+        fallback_plan = _fallback_multi_company_growth_chart_plan(
+            analysis,
+            resolved,
+            memory,
+        )
+        if fallback_plan is not None and _needs_multi_company_growth_chart_fallback(
+            domain_plan,
+            resolved,
+        ):
+            domain_plan = fallback_plan
         reconciled_analysis = _reconcile_analysis_with_plan(analysis, domain_plan)
         plan = _normalize_and_validate_plan(
             domain_plan,
@@ -663,12 +696,14 @@ def _fallback_multi_company_growth_chart_plan(
     required = set(analysis.required_capabilities)
     if not {
         AgentCapability.FINANCIAL_FACTS,
-        AgentCapability.CALCULATIONS,
         AgentCapability.CHART,
     }.issubset(required):
         return None
+    previous_operation = _previous_growth_operation(memory)
+    if AgentCapability.CALCULATIONS not in required and previous_operation is None:
+        return None
     metric = resolved.metrics[0] if resolved.metrics else "revenue"
-    operation = _previous_growth_operation(memory) or "year_over_year_growth"
+    operation = previous_operation or "year_over_year_growth"
     branches: list[ExecutionBranch] = []
     calculation_refs: list[str] = []
     for index, company_id in enumerate(resolved.company_ids, start=1):
@@ -708,6 +743,38 @@ def _fallback_multi_company_growth_chart_plan(
         branches=tuple(branches),
         reason_codes=("deterministic_multi_company_growth_chart_plan",),
     )
+
+
+def _needs_multi_company_growth_chart_fallback(
+    plan: ExecutionPlan,
+    resolved: ResolvedQuery,
+) -> bool:
+    if len(resolved.company_ids) < 2:
+        return False
+    chart = next((branch for branch in plan.branches if isinstance(branch, ChartBranch)), None)
+    if chart is None:
+        return True
+    chart_refs = set(_chart_references(chart)) | set(_default_chart_references(plan))
+    branches_by_id = {branch.branch_id: branch for branch in plan.branches}
+    plotted_growth_companies: set[uuid.UUID] = set()
+    for reference in chart_refs:
+        branch = branches_by_id.get(reference)
+        if not isinstance(branch, CalculationBranch):
+            continue
+        if branch.operation not in {
+            "quarter_over_quarter_growth",
+            "year_over_year_growth",
+            "percentage_change",
+        }:
+            continue
+        for input_ref in branch.input_refs:
+            input_branch = branches_by_id.get(input_ref)
+            if (
+                isinstance(input_branch, FinancialFactsBranch)
+                and len(input_branch.request.company_ids) == 1
+            ):
+                plotted_growth_companies.add(input_branch.request.company_ids[0])
+    return not set(resolved.company_ids).issubset(plotted_growth_companies)
 
 
 def _previous_growth_operation(memory: SessionMemory | None) -> CalculationOperation | None:

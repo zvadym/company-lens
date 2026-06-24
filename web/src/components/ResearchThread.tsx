@@ -166,6 +166,11 @@ function AssistantMessage() {
           Text: MarkdownText,
         }}
       />
+      {run?.result?.chart ? (
+        <Suspense fallback={<div className="chart-loading">Preparing chart…</div>}>
+          <ResearchChart chart={run.result.chart} />
+        </Suspense>
+      ) : null}
     </MessagePrimitive.Root>
   );
 }
@@ -292,11 +297,6 @@ export function ResearchThread() {
           <div className="researching-indicator" role="status">
             <span /><span /><span /> {runningLabel}
           </div>
-        ) : null}
-        {selectedRun?.result?.chart ? (
-          <Suspense fallback={<div className="chart-loading">Preparing chart…</div>}>
-            <ResearchChart chart={selectedRun.result.chart} />
-          </Suspense>
         ) : null}
         <RunStatusCard />
         <ThreadPrimitive.ViewportFooter className="thread-footer">

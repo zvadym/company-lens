@@ -154,6 +154,25 @@ def test_year_over_year_growth_series_matches_quarterly_prior_year_periods() -> 
     ]
 
 
+def test_year_over_year_growth_series_matches_retail_calendar_quarters() -> None:
+    inputs = (
+        observation("2024Q1", "18250000000", observed_at=date(2024, 3, 23)),
+        observation("2025Q1", "17919000000", observed_at=date(2025, 3, 22)),
+        observation("2026Q1", "19443000000", observed_at=date(2026, 3, 21)),
+    )
+
+    result = year_over_year_growth_series(inputs)
+
+    assert [point.observed_at for point in result.values] == [
+        date(2025, 3, 22),
+        date(2026, 3, 21),
+    ]
+    assert [point.value.quantize(Decimal("0.01")) for point in result.values] == [
+        Decimal("-1.81"),
+        Decimal("8.50"),
+    ]
+
+
 def test_correlation_is_decimal_aligned_and_warns_against_causation() -> None:
     dates = (date(2025, 1, 1), date(2025, 2, 1), date(2025, 3, 1))
     left = tuple(
