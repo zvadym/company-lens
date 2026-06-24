@@ -158,6 +158,10 @@ class EmbeddingIndexingService:
 
     def _chunks_to_consider(self, request: EmbeddingIndexingRequest) -> list[DocumentChunk]:
         statement = select(DocumentChunk).order_by(DocumentChunk.created_at, DocumentChunk.id)
+        if request.document_version_ids:
+            statement = statement.where(
+                DocumentChunk.document_version_id.in_(request.document_version_ids)
+            )
         if request.limit is not None:
             statement = statement.limit(request.limit)
         return list(self._session.scalars(statement).all())

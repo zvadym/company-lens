@@ -10,6 +10,7 @@ export type EvidenceCitationTarget = {
 };
 
 const citationHrefPrefix = "#evidence-citation-";
+const tableSeparatorPattern = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/;
 
 export function buildEvidenceCitationTargets(
   sources: ResearchSource[],
@@ -67,7 +68,28 @@ export function formatEvidenceCitations(
   return formatted;
 }
 
+export function normalizeMarkdownTables(markdown: string): string {
+  const lines = markdown.split("\n");
+  const normalized: string[] = [];
+
+  for (const [index, line] of lines.entries()) {
+    const nextLine = lines[index + 1] ?? "";
+    const startsTable = isTableRow(line) && tableSeparatorPattern.test(nextLine);
+    const previousLine = normalized.at(-1);
+    if (startsTable && previousLine !== undefined && previousLine.trim() !== "") {
+      normalized.push("");
+    }
+    normalized.push(line);
+  }
+
+  return normalized.join("\n");
+}
+
 export function evidenceIdFromCitationHref(href: string | undefined): string | null {
   if (!href?.startsWith(citationHrefPrefix)) return null;
   return decodeURIComponent(href.slice(citationHrefPrefix.length));
+}
+
+function isTableRow(line: string): boolean {
+  return line.split("|").length >= 3;
 }

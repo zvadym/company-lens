@@ -181,19 +181,24 @@ class FredQueryService:
             .where(MacroSeries.series_id.in_(normalized))
             .order_by(MacroSeries.series_id)
         ).all()
-        statement = (
-            select(MacroObservation)
-            .where(MacroObservation.series_id.in_(normalized))
-            .order_by(MacroObservation.series_id, MacroObservation.observed_at)
-            .limit(request.limit)
-        )
+        statement = select(MacroObservation).where(MacroObservation.series_id.in_(normalized))
         if request.observation_start:
             statement = statement.where(MacroObservation.observed_at >= request.observation_start)
         if request.observation_end:
             statement = statement.where(MacroObservation.observed_at <= request.observation_end)
         if not request.include_missing:
             statement = statement.where(MacroObservation.is_missing.is_(False))
-        rows = self._session.scalars(statement).all()
+        if request.observation_start is None and request.observation_end is None:
+            statement = statement.order_by(
+                MacroObservation.series_id,
+                MacroObservation.observed_at.desc(),
+            )
+        else:
+            statement = statement.order_by(MacroObservation.series_id, MacroObservation.observed_at)
+        rows = sorted(
+            self._session.scalars(statement.limit(request.limit)).all(),
+            key=lambda row: (row.series_id, row.observed_at),
+        )
         warnings: list[str] = []
         missing_series = sorted(set(normalized) - {row.series_id for row in series_rows})
         if missing_series:

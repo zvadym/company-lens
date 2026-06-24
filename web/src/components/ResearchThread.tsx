@@ -27,7 +27,7 @@ const MarkdownText = lazy(() => import("./MarkdownText"));
 const prompts = [
   "Compare Cloudflare revenue growth over the last eight quarters.",
   "What are the most material risks management reported this year?",
-  "Plot revenue growth against the federal funds rate.",
+  "Plot Cloudflare revenue growth against the federal funds rate.",
 ];
 
 function UserMessage() {
@@ -98,11 +98,14 @@ function RunStatusCard() {
   if (!selectedRun || !isTerminal(selectedRun.status)) return null;
 
   const successful = selectedRun.status === "completed" || selectedRun.status === "partial";
+  const statusLabel = selectedRun.status === "abstained"
+    ? selectedRun.result?.answer ? "Could not start" : "Could not answer"
+    : selectedRun.status.replaceAll("_", " ");
   return (
     <section className={`run-outcome is-${selectedRun.status}`} aria-live="polite">
       <div>
         {successful ? <CheckCircle2 size={17} /> : <Ban size={17} />}
-        <strong>{selectedRun.status.replaceAll("_", " ")}</strong>
+        <strong>{statusLabel}</strong>
         {selectedRun.error_message ? <span>{selectedRun.error_message}</span> : null}
       </div>
       <div className="outcome-actions">
@@ -164,7 +167,12 @@ function Composer() {
 }
 
 export function ResearchThread() {
-  const { selectedRun } = useResearch();
+  const { selectedRun, events } = useResearch();
+  const latestNodeEvent = [...events].reverse().find((event) => event.type === "node.status");
+  const runningLabel = latestNodeEvent?.type === "node.status"
+    && latestNodeEvent.data.status === "started"
+    ? latestNodeEvent.data.summary
+    : "Research graph is working";
   return (
     <ThreadPrimitive.Root className="thread-root">
       <ThreadPrimitive.Viewport className="thread-viewport" turnAnchor="top">
@@ -174,7 +182,7 @@ export function ResearchThread() {
         </Suspense>
         {selectedRun && !isTerminal(selectedRun.status) ? (
           <div className="researching-indicator" role="status">
-            <span /><span /><span /> Research graph is working
+            <span /><span /><span /> {runningLabel}
           </div>
         ) : null}
         {selectedRun?.result?.chart ? (

@@ -56,6 +56,7 @@ from company_lens.financials.schemas import (
     FinancialFactQuery,
     FinancialFactQueryResult,
 )
+from company_lens.ingestion.on_demand import CompanyDataPreparationResult
 from company_lens.macro.schemas import FredSeriesQuery, FredSeriesResult
 from company_lens.retrieval.adaptive_schemas import (
     AdaptiveRetrievalRequest,
@@ -126,6 +127,22 @@ class CountingTools:
                 fiscal_years=(2025,),
             )
         return ResolvedQuery(query=query, fiscal_years=(2024,))
+
+    def prepare_companies(
+        self,
+        *,
+        tickers: tuple[str, ...],
+        company_ids: tuple[str, ...],
+        index_name: str,
+        index_version: str,
+    ) -> CompanyDataPreparationResult:
+        self.calls["prepare"] += 1
+        return CompanyDataPreparationResult(
+            status="skipped",
+            requested_tickers=tickers,
+            skipped_tickers=tickers,
+            prepared_tickers=(),
+        )
 
     def retrieve_documents(self, request: AdaptiveRetrievalRequest) -> AdaptiveRetrievalResponse:
         raise AssertionError("Retrieval was not expected.")

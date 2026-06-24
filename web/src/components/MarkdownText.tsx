@@ -8,6 +8,7 @@ import {
   buildEvidenceCitationTargets,
   evidenceIdFromCitationHref,
   formatEvidenceCitations,
+  normalizeMarkdownTables,
 } from "./evidenceCitations";
 
 export default function MarkdownText() {
@@ -17,7 +18,7 @@ export default function MarkdownText() {
     [selectedRun?.result?.citations, sources],
   );
   const preprocess = useCallback(
-    (markdown: string) => formatEvidenceCitations(markdown, targets),
+    (markdown: string) => formatEvidenceCitations(normalizeMarkdownTables(markdown), targets),
     [targets],
   );
 

@@ -17,16 +17,9 @@ import {
 
 import type { ChartSpecification } from "@/api/types";
 
-const colors = ["#c94f2c", "#245c4d", "#7a6fc2", "#b78a1f", "#347a9a"];
+import { chartData, displaySeriesLabel, formatChartValue } from "./researchChartFormatting";
 
-function chartData(chart: ChartSpecification) {
-  return chart.data.map((point) => {
-    const values = Object.fromEntries(
-      Object.entries(point.values).map(([key, value]) => [key, Number(value)]),
-    );
-    return { x: point.x, ...values };
-  });
-}
+const colors = ["#c94f2c", "#245c4d", "#7a6fc2", "#b78a1f", "#347a9a"];
 
 function Series({ chart }: { chart: ChartSpecification }) {
   if (chart.chart_type === "bar") {
@@ -35,6 +28,7 @@ function Series({ chart }: { chart: ChartSpecification }) {
         key={series.key}
         dataKey={series.key}
         fill={colors[index % colors.length]}
+        name={displaySeriesLabel(chart, series, index)}
         radius={[3, 3, 0, 0]}
       />
     ));
@@ -46,6 +40,7 @@ function Series({ chart }: { chart: ChartSpecification }) {
         dataKey={series.key}
         fill={colors[index % colors.length]}
         fillOpacity={0.14}
+        name={displaySeriesLabel(chart, series, index)}
         stroke={colors[index % colors.length]}
         strokeWidth={2}
         type="monotone"
@@ -58,7 +53,7 @@ function Series({ chart }: { chart: ChartSpecification }) {
         key={series.key}
         dataKey={series.key}
         fill={colors[index % colors.length]}
-        name={series.label}
+        name={displaySeriesLabel(chart, series, index)}
       />
     ));
   }
@@ -67,6 +62,7 @@ function Series({ chart }: { chart: ChartSpecification }) {
       key={series.key}
       dataKey={series.key}
       dot={false}
+      name={displaySeriesLabel(chart, series, index)}
       stroke={colors[index % colors.length]}
       strokeWidth={2.25}
       type="monotone"
@@ -80,7 +76,11 @@ export default function ResearchChart({ chart }: { chart: ChartSpecification }) 
     <>
       <CartesianGrid stroke="#d8d2c5" strokeDasharray="2 5" vertical={false} />
       <XAxis dataKey="x" minTickGap={28} tick={{ fill: "#65645f", fontSize: 11 }} />
-      <YAxis tick={{ fill: "#65645f", fontSize: 11 }} width={52} />
+      <YAxis
+        tick={{ fill: "#65645f", fontSize: 11 }}
+        tickFormatter={formatChartValue}
+        width={52}
+      />
       <Tooltip
         contentStyle={{
           background: "#fffdf8",
@@ -89,6 +89,7 @@ export default function ResearchChart({ chart }: { chart: ChartSpecification }) 
           fontFamily: "IBM Plex Sans Variable",
           fontSize: 12,
         }}
+        formatter={formatChartValue}
       />
       <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
       <Series chart={chart} />
@@ -121,8 +122,10 @@ export default function ResearchChart({ chart }: { chart: ChartSpecification }) 
             <thead>
               <tr>
                 <th scope="col">{chart.x_label}</th>
-                {chart.series.map((series) => (
-                  <th key={series.key} scope="col">{series.label} ({series.unit})</th>
+                {chart.series.map((series, index) => (
+                  <th key={series.key} scope="col">
+                    {displaySeriesLabel(chart, series, index)} ({series.unit})
+                  </th>
                 ))}
               </tr>
             </thead>
@@ -131,7 +134,7 @@ export default function ResearchChart({ chart }: { chart: ChartSpecification }) 
                 <tr key={point.x}>
                   <th scope="row">{point.x}</th>
                   {chart.series.map((series) => (
-                    <td key={series.key}>{point.values[series.key]}</td>
+                    <td key={series.key}>{formatChartValue(point.values[series.key])}</td>
                   ))}
                 </tr>
               ))}

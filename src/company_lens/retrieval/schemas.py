@@ -64,6 +64,7 @@ class RetrievalRequest(BaseModel):
 class EmbeddingIndexingRequest(BaseModel):
     index_name: str = "default"
     index_version: str = "local-feature-hashing.v1"
+    document_version_ids: tuple[uuid.UUID, ...] = ()
     limit: int | None = Field(default=None, ge=1)
     batch_size: int = Field(default=100, ge=1, le=1000)
     force: bool = False

@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from company_lens.db.base import Base
@@ -54,6 +54,42 @@ def test_exact_ticker_cik_and_accession_resolve_before_retrieval(session: Sessio
     assert filing.status == "resolved"
     assert resolved.accession_numbers == ("0001477333-26-000001",)
     assert resolved.metrics == ("revenue",)
+
+
+def test_company_legal_suffix_is_stripped_without_persisted_alias(session: Session) -> None:
+    cloudflare = session.scalar(select(Company).where(Company.cik == "0001477333"))
+    assert cloudflare is not None
+    cloudflare.display_name = "Cloudflare, Inc."
+    session.commit()
+
+    resolved = EntityResolver(session=session).resolve("Compare Cloudflare revenue growth")
+
+    companies = [entity for entity in resolved.entities if entity.kind == "company"]
+    assert len(resolved.company_ids) == 1
+    assert companies[0].status == "resolved"
+    assert companies[0].candidates[0].display_value == "Cloudflare, Inc."
+    assert companies[0].candidates[0].match_kind in {
+        "normalized_legal_name",
+        "normalized_display_name",
+    }
+
+
+def test_company_legal_suffix_stripping_preserves_ambiguity(session: Session) -> None:
+    session.add_all(
+        [
+            Company(legal_name="Acme, Inc.", display_name="Acme, Inc.", cik="0000000001"),
+            Company(legal_name="Acme Corp.", display_name="Acme Corp.", cik="0000000002"),
+        ]
+    )
+    session.commit()
+
+    resolved = EntityResolver(session=session).resolve("Compare Acme revenue")
+
+    companies = [entity for entity in resolved.entities if entity.kind == "company"]
+    assert len(companies) == 1
+    assert companies[0].status == "ambiguous"
+    assert len(companies[0].candidates) == 2
+    assert resolved.company_ids == ()
 
 
 def test_ambiguous_company_alias_is_explicit_and_prevents_guessing(session: Session) -> None:

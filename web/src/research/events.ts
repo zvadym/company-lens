@@ -177,6 +177,10 @@ export const researchEventTypes: ResearchEventType[] = [
   "run.terminal",
 ];
 
+export function hasTerminalEvent(events: ResearchEvent[]): boolean {
+  return events.some((event) => event.type === "run.terminal");
+}
+
 export function parseResearchEvent(value: string): ResearchEvent | null {
   try {
     const result = researchEventSchema.safeParse(JSON.parse(value));

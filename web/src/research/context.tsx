@@ -38,6 +38,7 @@ import type {
 import { isTerminal } from "@/api/types";
 
 import {
+  hasTerminalEvent,
   parseResearchEvent,
   type ResearchEvent,
   researchEventTypes,
@@ -142,14 +143,19 @@ function useEventStream(
     connectionState.runId === runId
       ? connectionState.value
       : runId
-        ? stored.some((event) => event.type === "run.terminal")
+        ? hasTerminalEvent(stored)
           ? "closed"
           : "connecting"
         : "idle";
 
   useEffect(() => {
+    if (!runId || !hasTerminalEvent(stored)) return;
+    onTerminal();
+  }, [onTerminal, runId, stored]);
+
+  useEffect(() => {
     if (!runId) return;
-    if (stored.some((event) => event.type === "run.terminal")) {
+    if (hasTerminalEvent(stored)) {
       return;
     }
 

@@ -6,6 +6,7 @@ import {
   buildEvidenceCitationTargets,
   evidenceIdFromCitationHref,
   formatEvidenceCitations,
+  normalizeMarkdownTables,
 } from "./evidenceCitations";
 
 const sources: ResearchSource[] = [
@@ -81,6 +82,36 @@ describe("evidence citations", () => {
     expect(targets.get(duplicateSources[1]!.evidence_id)?.number).toBe(1);
     expect(targets.get(duplicateSources[0]!.evidence_id)?.url).not.toBe(
       targets.get(duplicateSources[1]!.evidence_id)?.url,
+    );
+  });
+
+  it("normalizes GFM tables that directly follow list items", () => {
+    const markdown = [
+      "## Supporting facts",
+      "- revenue facts cover 2024-06-30 through 2026-03-31.",
+      "| Period | Company | Metric | Value |",
+      "|---|---|---|---:|",
+      "| 2026-03-31 | Cloudflare, Inc | revenue | 639.755 million USD [financial_fact:revenue-2025] |",
+    ].join("\n");
+
+    expect(normalizeMarkdownTables(markdown)).toContain(
+      "- revenue facts cover 2024-06-30 through 2026-03-31.\n\n| Period | Company | Metric | Value |",
+    );
+  });
+
+  it("keeps citation links inside normalized table cells", () => {
+    const targets = buildEvidenceCitationTargets(sources, citations);
+    const markdown = normalizeMarkdownTables(
+      [
+        "- supporting facts.",
+        "| Period | Value |",
+        "|---|---:|",
+        "| 2025 | 100 USD [financial_fact:revenue-2025] |",
+      ].join("\n"),
+    );
+
+    expect(formatEvidenceCitations(markdown, targets)).toContain(
+      "| 2025 | 100 USD [1](#evidence-citation-financial_fact%3Arevenue-2025) |",
     );
   });
 });

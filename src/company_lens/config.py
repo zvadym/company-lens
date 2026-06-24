@@ -108,6 +108,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_prefix="COMPANY_LENS_",
         extra="ignore",
+        populate_by_name=True,
     )
 
 

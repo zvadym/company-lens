@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import suppress
+from datetime import date
 from decimal import Decimal, localcontext
 
 from company_lens.analytics.schemas import (
@@ -37,6 +39,17 @@ def year_over_year_growth_series(
     if len(observations) < 2:
         raise ValueError("Year-over-year growth requires at least two observations.")
     _require_compatible(observations)
+    dated = tuple(item for item in observations if item.observed_at is not None)
+    if len(dated) == len(observations):
+        dated_points = _dated_year_over_year_points(dated)
+        if dated_points:
+            return _result(
+                "year_over_year_growth",
+                tuple(dated_points),
+                observations,
+                "(current / prior_year - 1) * 100",
+                "percent",
+            )
     points: list[CalculationPoint] = []
     for previous, current in zip(observations, observations[1:], strict=False):
         if (
@@ -63,6 +76,30 @@ def year_over_year_growth_series(
     )
 
 
+def _dated_year_over_year_points(
+    observations: Sequence[NumericObservation],
+) -> list[CalculationPoint]:
+    by_date = {item.observed_at: item for item in observations if item.observed_at is not None}
+    points: list[CalculationPoint] = []
+    for current in observations:
+        assert current.observed_at is not None
+        with suppress(ValueError):
+            prior_date = current.observed_at.replace(year=current.observed_at.year - 1)
+            previous = by_date.get(prior_date)
+            if previous is None:
+                continue
+            current_value, previous_value = _values((current, previous))
+            _require_nonzero(previous_value, "Previous value")
+            points.append(
+                CalculationPoint(
+                    label=current.label,
+                    observed_at=current.observed_at,
+                    value=_decimal((current_value / previous_value - 1) * PERCENT),
+                )
+            )
+    return points
+
+
 def compound_annual_growth_rate(
     end: NumericObservation,
     start: NumericObservation,
@@ -84,6 +121,8 @@ def compound_annual_growth_rate(
         (start, end),
         "((end / start) ** (1 / years) - 1) * 100",
         "percent",
+        label=end.label,
+        observed_at=end.observed_at,
     )
 
 
@@ -97,6 +136,10 @@ def margin(numerator: NumericObservation, denominator: NumericObservation) -> Ca
         (numerator, denominator),
         "numerator / denominator * 100",
         "percent",
+        label=numerator.label,
+        observed_at=(
+            numerator.observed_at if numerator.observed_at == denominator.observed_at else None
+        ),
     )
 
 
@@ -109,6 +152,8 @@ def absolute_change(current: NumericObservation, previous: NumericObservation) -
         (previous, current),
         "current - previous",
         current.unit,
+        label=current.label,
+        observed_at=current.observed_at,
     )
 
 
@@ -224,6 +269,8 @@ def _percentage_change(
         (previous, current),
         formula,
         "percent",
+        label=current.label,
+        observed_at=current.observed_at,
     )
 
 
@@ -254,9 +301,15 @@ def _scalar(
     formula: str,
     unit: str,
     *,
+    label: str | None = None,
+    observed_at: date | None = None,
     warnings: tuple[str, ...] = (),
 ) -> CalculationResult:
-    point = CalculationPoint(label=operation, value=_decimal(value))
+    point = CalculationPoint(
+        label=label or operation,
+        value=_decimal(value),
+        observed_at=observed_at,
+    )
     return _result(operation, (point,), inputs, formula, unit, warnings=warnings)
 
 
