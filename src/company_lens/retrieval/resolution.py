@@ -61,6 +61,38 @@ METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "employees": ("employees", "headcount", "працівники", "штат"),
 }
 
+LEGAL_SUFFIXES: tuple[tuple[str, ...], ...] = (
+    ("public", "limited", "company"),
+    ("limited", "liability", "company"),
+    ("joint", "stock", "company"),
+    ("corporation",),
+    ("incorporated",),
+    ("company",),
+    ("limited",),
+    ("corp",),
+    ("inc",),
+    ("ltd",),
+    ("llc",),
+    ("plc",),
+    ("lp",),
+    ("llp",),
+    ("nv",),
+    ("n", "v"),
+    ("sa",),
+    ("s", "a"),
+    ("ag",),
+    ("se",),
+    ("spa",),
+    ("s", "p", "a"),
+)
+SECURITY_DESCRIPTOR_SUFFIXES: tuple[tuple[str, ...], ...] = (
+    ("common", "stock"),
+    ("ordinary", "shares"),
+    ("class", "a"),
+    ("class", "b"),
+    ("class", "c"),
+)
+
 
 class EntityResolver:
     """Resolve exact database entities before semantic retrieval is considered."""
@@ -147,6 +179,14 @@ class EntityResolver:
             ):
                 if value:
                     labels[_normalize(value)].append((company.id, kind))
+            for value, kind in (
+                (company.legal_name, "normalized_legal_name"),
+                (company.display_name, "normalized_display_name"),
+            ):
+                if value:
+                    normalized_name = _normalize_company_name(value)
+                    if normalized_name:
+                        labels[normalized_name].append((company.id, kind))
         for alias in self._session.scalars(select(CompanyAlias)).all():
             labels[_normalize(alias.alias)].append((alias.company_id, f"alias:{alias.kind.value}"))
         for ticker in self._session.scalars(select(CompanyTicker)).all():
@@ -296,3 +336,30 @@ def _normalize(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     normalized = re.sub(r"[^\w]+", " ", normalized, flags=re.UNICODE)
     return " ".join(normalized.split())
+
+
+def _normalize_company_name(value: str) -> str:
+    tokens = _normalize(value).split()
+    if not tokens:
+        return ""
+    tokens = _strip_trailing_suffixes(tokens, SECURITY_DESCRIPTOR_SUFFIXES)
+    tokens = _strip_trailing_suffixes(tokens, LEGAL_SUFFIXES)
+    return " ".join(tokens)
+
+
+def _strip_trailing_suffixes(
+    tokens: list[str],
+    suffixes: tuple[tuple[str, ...], ...],
+) -> list[str]:
+    stripped = list(tokens)
+    changed = True
+    while changed and stripped:
+        changed = False
+        for suffix in suffixes:
+            if len(stripped) <= len(suffix):
+                continue
+            if tuple(stripped[-len(suffix) :]) == suffix:
+                del stripped[-len(suffix) :]
+                changed = True
+                break
+    return stripped

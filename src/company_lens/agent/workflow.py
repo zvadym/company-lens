@@ -90,6 +90,7 @@ from company_lens.evidence.schemas import (
 )
 from company_lens.evidence.validation import AnswerValidator, SemanticSupportJudge
 from company_lens.financials.schemas import FinancialFactObservation
+from company_lens.macro.schemas import FredSeriesResult
 from company_lens.observability.context import bind_context
 from company_lens.observability.telemetry import (
     observe_operation,
@@ -102,6 +103,11 @@ from company_lens.retrieval.embeddings import DEFAULT_OPENAI_INDEX_VERSION
 from company_lens.security import prompt_injection_flags, sanitize_untrusted_text
 
 SOURCE_KINDS = {"retrieve_documents", "query_financial_facts", "query_macro_series"}
+DEFAULT_CHART_QUARTERS = 8
+DEFAULT_CHART_QUARTERLY_FACT_LIMIT = 24
+DEFAULT_CHART_MACRO_MONTH_LIMIT = 48
+MIN_LINE_CHART_POINTS = 3
+DEFAULT_CHART_WINDOW_REASON = "default_chart_window_latest_8_quarters"
 
 
 @dataclass(frozen=True)
@@ -523,6 +529,26 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         missing_error = _validation_error("plan_request", "missing_planning_inputs")
         return {"status": AgentRunStatus.FAILED, "errors": (missing_error,)}
     started = time.monotonic()
+    if _requires_financial_company(analysis) and not resolved.company_ids:
+        error = _agent_error(
+            "plan_request",
+            "missing_company",
+            "The question requires company financial facts, but no company was resolved.",
+            category=AgentErrorCategory.VALIDATION,
+            severity=AgentErrorSeverity.TERMINAL,
+        )
+        return {
+            "status": AgentRunStatus.ABSTAINED,
+            "errors": (error,),
+            "trajectory": (
+                _event(
+                    "plan_request",
+                    TrajectoryStatus.COMPLETED,
+                    "Question requires a company, but none was resolved.",
+                    started,
+                ),
+            ),
+        }
     memory = state.get("session_memory")
     previous_plan = memory.last_execution_plan if memory is not None else None
     planning_context = json.dumps(
@@ -545,10 +571,11 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
                 "IDs. Company metrics use query_financial_facts; economic rates and indicators "
                 "use query_macro_series. A requested change or growth requires a calculation route "
                 "with a source branch and calculate_metrics branch. Source branches must be "
-                "independent. Calculations may depend on financial or macro branches; a chart may "
-                "depend on one source or calculation branch. The plan route must describe its "
-                "concrete branches. Mark a branch optional only when the question can still be "
-                "answered without it. Do not include explanations beyond short reason codes. "
+                "independent. Calculations may depend on financial or macro branches. A chart may "
+                "depend on one numeric branch, but comparison charts must depend on every plotted "
+                "source or calculation branch. The plan route must describe its concrete branches. "
+                "Mark a branch optional only when the question can still be answered without it. "
+                "Do not include explanations beyond short reason codes. "
                 "Use English for all structured fields, internal planning labels, reason codes, "
                 "and tool-oriented summaries."
             ),
@@ -579,8 +606,14 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
             retrieval_index_name=runtime.context.retrieval_index_name,
             retrieval_index_version=runtime.context.retrieval_index_version,
         )
-    except ValueError:
-        validation_error = _validation_error("plan_request", "invalid_execution_plan")
+    except ValueError as exc:
+        validation_error = _agent_error(
+            "plan_request",
+            "invalid_execution_plan",
+            f"The research workflow received an invalid execution plan: {exc}",
+            category=AgentErrorCategory.VALIDATION,
+            severity=AgentErrorSeverity.TERMINAL,
+        )
         update["errors"] = (validation_error,)
         update["status"] = AgentRunStatus.FAILED
         update["trajectory"] = (_failed_event("plan_request", started),)
@@ -589,6 +622,10 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
     if reconciled_analysis != analysis:
         update["analysis"] = reconciled_analysis
     return update
+
+
+def _requires_financial_company(analysis: QuestionAnalysis) -> bool:
+    return AgentCapability.FINANCIAL_FACTS in analysis.required_capabilities
 
 
 def _hydrate_cached_results(state: AgentState) -> dict[str, object]:
@@ -617,6 +654,8 @@ def _hydrate_cached_results(state: AgentState) -> dict[str, object]:
                 FinancialBranchResult(branch_id=branch.branch_id, result=cached.financial_result)
             )
         elif isinstance(branch, MacroSeriesBranch) and cached.macro_result is not None:
+            if _macro_cache_is_stale_for_latest_query(cached.macro_result):
+                continue
             macro_results.append(
                 MacroBranchResult(branch_id=branch.branch_id, result=cached.macro_result)
             )
@@ -652,6 +691,24 @@ def _hydrate_cached_results(state: AgentState) -> dict[str, object]:
             ),
         ),
     }
+
+
+def _macro_cache_is_stale_for_latest_query(result: FredSeriesResult) -> bool:
+    query = result.query
+    if query.observation_start is not None or query.observation_end is not None:
+        return False
+    if not result.series or not result.observations:
+        return False
+    latest_observed_by_series: dict[str, date] = {}
+    for observation in result.observations:
+        latest_observed = latest_observed_by_series.get(observation.series_id)
+        if latest_observed is None or observation.observed_at > latest_observed:
+            latest_observed_by_series[observation.series_id] = observation.observed_at
+    for series in result.series:
+        latest_observed = latest_observed_by_series.get(series.series_id)
+        if latest_observed is not None and latest_observed < series.observation_end:
+            return True
+    return False
 
 
 def _dispatch_source_branches(state: AgentState) -> list[Send] | str:
@@ -891,6 +948,7 @@ def _calculate_metrics(state: AgentState) -> dict[str, object]:
     started = time.monotonic()
     try:
         result = _execute_calculation(branch, state)
+        result = _normalize_calculation_result(branch, result, state)
     except (ValueError, TypeError, ArithmeticError):
         error = _agent_error(
             "calculate_metrics",
@@ -971,7 +1029,35 @@ def _generate_chart_spec(state: AgentState) -> dict[str, object]:
         )
         return update
     try:
-        dataset = _chart_dataset(chart.dataset_ref, state)
+        dataset = _chart_dataset_for_branch(chart, state)
+        if (
+            chart.chart_type in {"line", "area"}
+            and len(dataset.series) > 1
+            and len(dataset.points) < MIN_LINE_CHART_POINTS
+        ):
+            error = _agent_error(
+                "generate_chart_spec",
+                "insufficient_chart_points",
+                "A line chart requires at least three aligned data points.",
+                category=AgentErrorCategory.VALIDATION,
+                severity=AgentErrorSeverity.RECOVERABLE,
+            )
+            update.update(
+                {
+                    "status": AgentRunStatus.PARTIAL,
+                    "errors": (error,),
+                    "trajectory": (
+                        _event(
+                            "generate_chart_spec",
+                            TrajectoryStatus.COMPLETED,
+                            "Skipped chart with too few aligned data points.",
+                            started,
+                            details={"point_count": len(dataset.points)},
+                        ),
+                    ),
+                }
+            )
+            return update
         specification = generate_chart_specification(
             dataset,
             chart_type=chart.chart_type,
@@ -1097,7 +1183,12 @@ def _generate_answer(
     )
     update = _model_node_update("generate_answer", attempts, started, error)
     if error is not None:
-        update["status"] = _terminal_model_status(error)
+        fallback = _deterministic_fallback_answer(state.get("evidence", ()))
+        if error.recoverable and fallback is not None:
+            update["status"] = AgentRunStatus.PARTIAL
+            update["draft_answer"] = fallback
+        else:
+            update["status"] = _terminal_model_status(error)
     else:
         update["draft_answer"] = text
     return update
@@ -1194,6 +1285,9 @@ def _repair_or_abstain(
     started = time.monotonic()
     attempts_used = state.get("repair_attempts", 0)
     if attempts_used >= state["policy"].max_repair_attempts:
+        fallback_update = _citation_fallback_update(state, started)
+        if fallback_update is not None:
+            return fallback_update
         exhausted_error = _agent_error(
             "repair_or_abstain",
             "citation_repair_exhausted",
@@ -1261,10 +1355,39 @@ def _repair_or_abstain(
     update = _model_node_update("repair_or_abstain", attempts, started, error)
     update["repair_attempts"] = attempts_used + 1
     if error is not None:
+        fallback_update = _citation_fallback_update(state, started)
+        if fallback_update is not None:
+            return {
+                **fallback_update,
+                "repair_attempts": attempts_used + 1,
+                "errors": update.get("errors", ()),
+            }
         update["status"] = AgentRunStatus.ABSTAINED
     else:
         update["draft_answer"] = text
     return update
+
+
+def _citation_fallback_update(
+    state: AgentState,
+    started: float,
+) -> dict[str, object] | None:
+    fallback = _deterministic_fallback_answer(state.get("evidence", ()))
+    if fallback is None or fallback == state.get("draft_answer"):
+        return None
+    return {
+        "status": AgentRunStatus.PARTIAL,
+        "draft_answer": fallback,
+        "trajectory": (
+            _event(
+                "repair_or_abstain",
+                TrajectoryStatus.COMPLETED,
+                "Used deterministic cited fallback answer.",
+                started,
+                details={"fallback": "deterministic_evidence"},
+            ),
+        ),
+    }
 
 
 def _invalid_claim_previews(
@@ -1308,6 +1431,193 @@ def _compact_evidence_context(
             }
         compact.append(record)
     return tuple(compact)
+
+
+def _deterministic_fallback_answer(
+    evidence: Sequence[EvidenceEnvelope],
+) -> str | None:
+    if not evidence:
+        return None
+    lines = ["## Result"]
+    calculations = tuple(item for item in evidence if item.kind is EvidenceKind.CALCULATION)
+    financial_facts = _fallback_financial_facts(evidence)
+    used_ids: set[str] = set()
+    for item in calculations[:3]:
+        sentence = _fallback_sentence(item)
+        if sentence is not None:
+            lines.append(f"- {sentence} [{item.evidence_id}]")
+            used_ids.add(item.evidence_id)
+    if financial_facts:
+        lines.extend(_fallback_financial_fact_table(financial_facts))
+        used_ids.update(item.evidence_id for item in financial_facts)
+    preferred = sorted(
+        evidence,
+        key=lambda item: (
+            item.kind is not EvidenceKind.CALCULATION,
+            item.kind is not EvidenceKind.FINANCIAL_FACT,
+            item.evidence_id,
+        ),
+    )
+    for item in preferred:
+        if financial_facts and item.kind is EvidenceKind.FINANCIAL_FACT:
+            continue
+        if item.evidence_id in used_ids:
+            continue
+        sentence = _fallback_sentence(item)
+        if sentence is not None:
+            lines.append(f"- {sentence} [{item.evidence_id}]")
+            used_ids.add(item.evidence_id)
+        if len(lines) >= 10:
+            break
+    return "\n".join(lines) if len(lines) > 1 else None
+
+
+def _fallback_financial_facts(
+    evidence: Sequence[EvidenceEnvelope],
+) -> tuple[EvidenceEnvelope, ...]:
+    facts = [item for item in evidence if item.kind is EvidenceKind.FINANCIAL_FACT]
+    deduplicated: dict[tuple[object, ...], EvidenceEnvelope] = {}
+    for item in facts:
+        key = (
+            item.metadata.company_id,
+            item.metadata.company_name,
+            item.metadata.metric,
+            item.metadata.period_end,
+            item.metadata.value,
+            item.metadata.unit,
+        )
+        deduplicated.setdefault(key, item)
+    return tuple(
+        sorted(
+            deduplicated.values(),
+            key=lambda item: (item.metadata.period_end or date.min, item.evidence_id),
+            reverse=True,
+        )[:12]
+    )
+
+
+def _fallback_financial_fact_table(evidence: Sequence[EvidenceEnvelope]) -> list[str]:
+    if not evidence:
+        return []
+    first = min(evidence, key=lambda item: item.metadata.period_end or date.max)
+    latest = max(evidence, key=lambda item: item.metadata.period_end or date.min)
+    metric = latest.metadata.metric or "metric"
+    lines = [
+        "## Supporting facts",
+        (
+            f"- {metric} facts cover {_fallback_period_value(first)} through "
+            f"{_fallback_period_value(latest)}. [{first.evidence_id}] [{latest.evidence_id}]"
+        ),
+        "",
+        "| Period | Company | Metric | Value |",
+        "|---|---|---|---:|",
+    ]
+    for item in evidence:
+        value = _fallback_display_value(item.metadata.value, item.metadata.unit or "")
+        if value is None:
+            continue
+        company = _fallback_company_name(item.metadata.company_name)
+        lines.append(
+            f"| {_fallback_period_value(item)} | {company} | {item.metadata.metric or 'metric'} "
+            f"| {value} [{item.evidence_id}] |"
+        )
+    return lines
+
+
+def _fallback_sentence(item: EvidenceEnvelope) -> str | None:
+    if item.kind is EvidenceKind.CALCULATION:
+        return _fallback_calculation_sentence(item)
+    if item.kind is EvidenceKind.FINANCIAL_FACT:
+        metric = item.metadata.metric or "metric"
+        company = _fallback_company_name(item.metadata.company_name)
+        period = _fallback_period(item)
+        value = _fallback_decimal(item.metadata.value)
+        unit = item.metadata.unit or ""
+        if value is None:
+            return item.summary
+        value_with_unit = _fallback_value_with_unit(value, unit, item.metadata.value)
+        return f"{company} {metric} was {value_with_unit}{period}."
+    if item.kind is EvidenceKind.MACRO_OBSERVATION:
+        period = _fallback_period(item)
+        value = _fallback_decimal(item.metadata.value)
+        unit = item.metadata.unit or ""
+        if value is None:
+            return item.summary
+        value_with_unit = _fallback_value_with_unit(value, unit, item.metadata.value)
+        return f"The macro observation was {value_with_unit}{period}."
+    if item.kind is EvidenceKind.DOCUMENT:
+        return item.summary
+    return None
+
+
+def _fallback_calculation_sentence(item: EvidenceEnvelope) -> str | None:
+    operation = _fallback_operation_label(item.metadata.operation)
+    company = _fallback_company_name(item.metadata.company_name)
+    metric = item.metadata.metric or "metric"
+    value = _fallback_decimal(item.metadata.value)
+    unit = item.metadata.unit or ""
+    period = _fallback_period(item)
+    if value is None:
+        return item.summary
+    value_with_unit = _fallback_value_with_unit(value, unit, item.metadata.value)
+    return f"{company} {metric} {operation} was {value_with_unit}{period}."
+
+
+def _fallback_company_name(company_name: str | None) -> str:
+    if company_name is None:
+        return "The company"
+    return company_name.replace(".", "")
+
+
+def _fallback_operation_label(operation: str | None) -> str:
+    return (operation or "calculation").replace("_", " ")
+
+
+def _fallback_value_with_unit(
+    value: str,
+    unit: str,
+    raw_value: Decimal | None = None,
+) -> str:
+    return _fallback_display_value(raw_value, unit) or f"{value} {unit}".strip()
+
+
+def _fallback_display_value(value: Decimal | None, unit: str) -> str | None:
+    if value is None:
+        return None
+    normalized_unit = unit.strip()
+    if normalized_unit.casefold() == "usd" and abs(value) >= Decimal("1000000"):
+        millions = value / Decimal("1000000")
+        return f"{_fallback_decimal_places(millions, Decimal('0.001'))} million USD"
+    if normalized_unit.casefold() == "percent":
+        return f"{_fallback_decimal_places(value, Decimal('0.01'))} percent"
+    return f"{_fallback_decimal(value)} {normalized_unit}".strip()
+
+
+def _fallback_decimal_places(value: Decimal, quantum: Decimal) -> str:
+    rounded = value.quantize(quantum)
+    return format(rounded.normalize(), "f")
+
+
+def _fallback_period(item: EvidenceEnvelope) -> str:
+    if item.metadata.period_end is not None:
+        return f" at {item.metadata.period_end.isoformat()}"
+    if item.metadata.fiscal_year is not None:
+        return f" in fiscal {item.metadata.fiscal_year}"
+    return ""
+
+
+def _fallback_period_value(item: EvidenceEnvelope) -> str:
+    if item.metadata.period_end is not None:
+        return item.metadata.period_end.isoformat()
+    if item.metadata.fiscal_year is not None:
+        return f"fiscal {item.metadata.fiscal_year}"
+    return "available period"
+
+
+def _fallback_decimal(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    return format(value.normalize(), "f")
 
 
 def _route_after_repair(
@@ -1447,8 +1757,13 @@ def _normalize_and_validate_plan(
                 update={"company_ids": resolved.company_ids}
             )
             branch = branch.model_copy(update={"request": financial_request})
+        if isinstance(branch, CalculationBranch) and set(branch.depends_on) != set(
+            branch.input_refs
+        ):
+            branch = branch.model_copy(update={"depends_on": branch.input_refs})
         normalized.append(branch)
     plan = plan.model_copy(update={"branches": tuple(normalized)})
+    plan = _normalize_default_chart_window(plan, analysis, resolved)
     if len([item for item in plan.branches if isinstance(item, ChartBranch)]) > 1:
         raise ValueError("Only one chart branch is supported.")
     source = _source_branches(plan)
@@ -1464,6 +1779,17 @@ def _normalize_and_validate_plan(
         if branch.kind in SOURCE_KINDS and branch.depends_on:
             raise ValueError("Source branches must be independent.")
     by_id = {item.branch_id: item for item in plan.branches}
+    normalized_chart = _normalize_chart_branch(plan)
+    if normalized_chart is not None:
+        plan = plan.model_copy(
+            update={
+                "branches": tuple(
+                    normalized_chart if branch.branch_id == normalized_chart.branch_id else branch
+                    for branch in plan.branches
+                )
+            }
+        )
+        by_id = {item.branch_id: item for item in plan.branches}
     for branch in plan.branches:
         if isinstance(branch, CalculationBranch):
             if set(branch.depends_on) != set(branch.input_refs):
@@ -1474,18 +1800,140 @@ def _normalize_and_validate_plan(
                     raise ValueError("Calculations require numeric source branches.")
                 _validate_single_series_request(source_branch)
         if isinstance(branch, ChartBranch):
-            if branch.depends_on != (branch.dataset_ref,):
-                raise ValueError("Chart dependency must equal its dataset reference.")
-            if not isinstance(
-                by_id[branch.dataset_ref],
-                (FinancialFactsBranch, MacroSeriesBranch, CalculationBranch),
-            ):
-                raise ValueError("Chart requires a numeric dataset reference.")
+            chart_refs = _chart_references(branch)
+            for reference in chart_refs:
+                if not isinstance(
+                    by_id[reference],
+                    (FinancialFactsBranch, MacroSeriesBranch, CalculationBranch),
+                ):
+                    raise ValueError("Chart requires numeric dataset references.")
     _validate_route_shape(plan)
     represented = _represented_capabilities(plan)
     if not set(analysis.required_capabilities).issubset(represented):
         raise ValueError("Execution plan does not implement all required capabilities.")
     return plan
+
+
+def _normalize_default_chart_window(
+    plan: ExecutionPlan,
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+) -> ExecutionPlan:
+    if not analysis.chart_requested or resolved.dates:
+        return plan
+    chart = next((item for item in plan.branches if isinstance(item, ChartBranch)), None)
+    if chart is None:
+        return plan
+    plotted_refs = set(_chart_references(chart)) | set(_default_chart_references(plan))
+    growth_calculations = {
+        branch.branch_id: branch
+        for branch in plan.branches
+        if isinstance(branch, CalculationBranch)
+        and branch.branch_id in plotted_refs
+        and branch.operation
+        in {"quarter_over_quarter_growth", "year_over_year_growth", "percentage_change"}
+    }
+    if not growth_calculations:
+        return plan
+    financial_refs = {
+        reference
+        for calculation in growth_calculations.values()
+        for reference in calculation.input_refs
+    }
+    macro_refs = {
+        branch.branch_id
+        for branch in plan.branches
+        if isinstance(branch, MacroSeriesBranch) and branch.branch_id in plotted_refs
+    }
+    use_quarterly_default = not _explicit_annual_growth_requested(analysis.normalized_question)
+    force_yoy = use_quarterly_default and not _explicit_quarter_growth_requested(
+        analysis.normalized_question
+    )
+    normalized: list[ExecutionBranch] = []
+    applied_default_window = False
+    for branch in plan.branches:
+        if isinstance(branch, CalculationBranch) and branch.branch_id in growth_calculations:
+            if force_yoy and branch.operation != "year_over_year_growth":
+                branch = branch.model_copy(update={"operation": "year_over_year_growth"})
+                applied_default_window = True
+        elif isinstance(branch, FinancialFactsBranch) and branch.branch_id in financial_refs:
+            request = branch.request
+            if (
+                use_quarterly_default
+                and request.period_start is None
+                and request.period_end is None
+                and not request.fiscal_years
+                and not request.fiscal_periods
+            ):
+                request = request.model_copy(
+                    update={
+                        "period_types": ("quarter",),
+                        "limit": max(request.limit, DEFAULT_CHART_QUARTERLY_FACT_LIMIT),
+                    }
+                )
+                branch = branch.model_copy(update={"request": request})
+                applied_default_window = True
+        elif isinstance(branch, MacroSeriesBranch) and branch.branch_id in macro_refs:
+            request = branch.request
+            if request.observation_start is None and request.observation_end is None:
+                request = request.model_copy(update={"limit": DEFAULT_CHART_MACRO_MONTH_LIMIT})
+                branch = branch.model_copy(update={"request": request})
+                applied_default_window = True
+        normalized.append(branch)
+    updates: dict[str, object] = {"branches": tuple(normalized)}
+    if applied_default_window:
+        updates["reason_codes"] = tuple(
+            dict.fromkeys((*plan.reason_codes, DEFAULT_CHART_WINDOW_REASON))
+        )
+    return plan.model_copy(update=updates)
+
+
+def _explicit_quarter_growth_requested(question: str) -> bool:
+    normalized = question.casefold()
+    return any(
+        token in normalized for token in ("quarter-over-quarter", "quarter over quarter", "qoq")
+    )
+
+
+def _explicit_annual_growth_requested(question: str) -> bool:
+    normalized = question.casefold()
+    return any(token in normalized for token in ("annual", "yearly", "fiscal year"))
+
+
+def _normalize_chart_branch(plan: ExecutionPlan) -> ChartBranch | None:
+    chart = next((item for item in plan.branches if isinstance(item, ChartBranch)), None)
+    if chart is None:
+        return None
+    plotted_refs = _default_chart_references(plan)
+    current_refs = _chart_references(chart)
+    if len(plotted_refs) <= 1 or set(plotted_refs).issubset(current_refs):
+        return chart
+    if not set(current_refs).issubset(plotted_refs):
+        return chart
+    ordered_refs = tuple(dict.fromkeys((*current_refs, *plotted_refs)))
+    return chart.model_copy(
+        update={
+            "dataset_ref": ordered_refs[0],
+            "depends_on": ordered_refs,
+        }
+    )
+
+
+def _default_chart_references(plan: ExecutionPlan) -> tuple[str, ...]:
+    calculation_inputs = {
+        reference
+        for branch in plan.branches
+        if isinstance(branch, CalculationBranch)
+        for reference in branch.input_refs
+    }
+    refs = [branch.branch_id for branch in plan.branches if isinstance(branch, CalculationBranch)]
+    for branch in plan.branches:
+        if (
+            isinstance(branch, (FinancialFactsBranch, MacroSeriesBranch))
+            and branch.branch_id not in calculation_inputs
+        ):
+            refs.append(branch.branch_id)
+    return tuple(dict.fromkeys(refs))
 
 
 def _reconcile_analysis_with_plan(
@@ -1598,15 +2046,16 @@ def _domain_execution_branch(item: ModelExecutionBranch) -> ExecutionBranch:
             window=item.window,
             base=Decimal(str(item.base)),
         )
-    if item.chart_type is None or item.dataset_ref is None or item.title is None:
-        raise ValueError("Chart branch requires chart fields.")
+    dataset_ref = item.dataset_ref or (item.depends_on[0] if item.depends_on else None)
+    if dataset_ref is None:
+        raise ValueError("Chart branch requires a dataset reference or dependency.")
     return ChartBranch(
         branch_id=item.branch_id,
         depends_on=item.depends_on,
         optional=item.optional,
-        chart_type=item.chart_type,
-        dataset_ref=item.dataset_ref,
-        title=item.title,
+        chart_type=item.chart_type or "line",
+        dataset_ref=dataset_ref,
+        title=item.title or "Research chart",
         x_label=item.x_label,
     )
 
@@ -1819,6 +2268,22 @@ def _execute_calculation(branch: CalculationBranch, state: AgentState) -> Calcul
     return correlation(series[0], series[1])
 
 
+def _normalize_calculation_result(
+    branch: CalculationBranch,
+    result: CalculationResult,
+    state: AgentState,
+) -> CalculationResult:
+    plan = state.get("execution_plan")
+    if (
+        plan is None
+        or DEFAULT_CHART_WINDOW_REASON not in plan.reason_codes
+        or branch.operation != "year_over_year_growth"
+        or len(result.values) <= DEFAULT_CHART_QUARTERS
+    ):
+        return result
+    return result.model_copy(update={"values": result.values[-DEFAULT_CHART_QUARTERS:]})
+
+
 def _numeric_series(
     branch_id: str,
     state: AgentState,
@@ -1916,14 +2381,13 @@ def _select_financial_observations(
     comparable = tuple(item for item in ordered if item.period_type in {"quarter", "year_to_date"})
     if len(comparable) < 2:
         raise ValueError("Year-over-year growth requires two comparable observations.")
-    current = comparable[-1]
-    previous = next(
-        (item for item in reversed(comparable[:-1]) if _same_reporting_period(item, current)),
-        None,
+    has_matching_pair = any(
+        any(_same_reporting_period(previous, current) for previous in comparable[:index])
+        for index, current in enumerate(comparable)
     )
-    if previous is None:
+    if not has_matching_pair:
         raise ValueError("Year-over-year growth requires matching reporting periods.")
-    return previous, current
+    return comparable
 
 
 def _financial_filing_key(item: FinancialFactObservation) -> tuple[date, str, str]:
@@ -1964,6 +2428,17 @@ def _latest(observations: Sequence[NumericObservation]) -> NumericObservation:
     if len(observations) != 1:
         raise ValueError("Scalar calculation input must contain exactly one observation.")
     return observations[0]
+
+
+def _chart_references(branch: ChartBranch) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(branch.depends_on or (branch.dataset_ref,)))
+
+
+def _chart_dataset_for_branch(branch: ChartBranch, state: AgentState) -> ValidatedChartDataset:
+    references = _chart_references(branch)
+    if len(references) == 1:
+        return _chart_dataset(references[0], state)
+    return _multi_series_chart_dataset(references, state)
 
 
 def _chart_dataset(reference: str, state: AgentState) -> ValidatedChartDataset:
@@ -2014,6 +2489,135 @@ def _chart_dataset(reference: str, state: AgentState) -> ValidatedChartDataset:
     )
 
 
+def _multi_series_chart_dataset(
+    references: Sequence[str],
+    state: AgentState,
+) -> ValidatedChartDataset:
+    series_data = tuple(_chart_series_points(reference, state) for reference in references)
+    if not series_data:
+        raise ValueError("Chart requires at least one dataset reference.")
+    common_dates = set(series_data[0][1])
+    for _, points in series_data[1:]:
+        common_dates &= set(points)
+    point_limit = _chart_point_limit(state)
+    if not common_dates:
+        return _aligned_multi_series_chart_dataset(series_data, point_limit=point_limit)
+    ordered_dates = tuple(sorted(common_dates))
+    if point_limit is not None:
+        ordered_dates = ordered_dates[-point_limit:]
+    return ValidatedChartDataset(
+        series=tuple(series for series, _ in series_data),
+        points=tuple(
+            ChartPoint(
+                x=observed_at,
+                values={series.key: points[observed_at][0] for series, points in series_data},
+                source_urls=tuple(
+                    dict.fromkeys(
+                        source_url
+                        for _, points in series_data
+                        for source_url in points[observed_at][1]
+                    )
+                ),
+            )
+            for observed_at in ordered_dates
+        ),
+    )
+
+
+def _aligned_multi_series_chart_dataset(
+    series_data: Sequence[tuple[ChartSeries, dict[date, tuple[Decimal, tuple[str, ...]]]]],
+    *,
+    point_limit: int | None = None,
+) -> ValidatedChartDataset:
+    primary_series, primary_points = series_data[0]
+    primary_dates = tuple(sorted(primary_points))
+    if point_limit is not None:
+        primary_dates = primary_dates[-point_limit:]
+    chart_points: list[ChartPoint] = []
+    for observed_at in primary_dates:
+        values = {primary_series.key: primary_points[observed_at][0]}
+        source_urls = list(primary_points[observed_at][1])
+        for series, points in series_data[1:]:
+            matched_at = _latest_observation_at_or_before(tuple(points), observed_at)
+            if matched_at is None:
+                break
+            values[series.key] = points[matched_at][0]
+            source_urls.extend(points[matched_at][1])
+        else:
+            chart_points.append(
+                ChartPoint(
+                    x=observed_at,
+                    values=values,
+                    source_urls=tuple(dict.fromkeys(source_urls)),
+                )
+            )
+    if not chart_points:
+        raise ValueError("Chart series do not share alignable observation dates.")
+    return ValidatedChartDataset(
+        series=tuple(series for series, _ in series_data),
+        points=tuple(chart_points),
+    )
+
+
+def _chart_point_limit(state: AgentState) -> int | None:
+    plan = state.get("execution_plan")
+    if plan is not None and DEFAULT_CHART_WINDOW_REASON in plan.reason_codes:
+        return DEFAULT_CHART_QUARTERS
+    return None
+
+
+def _latest_observation_at_or_before(
+    dates: Sequence[date],
+    target: date,
+) -> date | None:
+    candidates = [observed_at for observed_at in dates if observed_at <= target]
+    return max(candidates) if candidates else None
+
+
+def _chart_series_points(
+    reference: str,
+    state: AgentState,
+) -> tuple[ChartSeries, dict[date, tuple[Decimal, tuple[str, ...]]]]:
+    observations = _numeric_series_for_chart(reference, state)
+    if observations is not None:
+        dated = tuple(
+            item
+            for item in observations
+            if item.observed_at is not None and item.value is not None
+        )
+        if not dated:
+            raise ValueError("Chart source has no dated observations.")
+        units = {item.unit for item in dated}
+        if len(units) != 1:
+            raise ValueError("Chart source contains incompatible units.")
+        return (
+            ChartSeries(key=reference, label=dated[0].label, unit=units.pop()),
+            {
+                cast(date, item.observed_at): (cast(Decimal, item.value), (item.source_url,))
+                for item in dated
+            },
+        )
+    calculation = next(
+        (item for item in state.get("calculations", ()) if item.branch_id == reference),
+        None,
+    )
+    if calculation is None:
+        raise ValueError("Chart dataset reference is missing.")
+    if any(point.observed_at is None for point in calculation.result.values):
+        raise ValueError("Scalar calculations without dates cannot be charted.")
+    return (
+        ChartSeries(
+            key=reference,
+            label=calculation.result.operation,
+            unit=calculation.result.unit,
+        ),
+        {
+            cast(date, point.observed_at): (point.value, calculation.result.sources)
+            for point in calculation.result.values
+        },
+    )
+
+
 def _numeric_series_for_chart(
     reference: str, state: AgentState
 ) -> tuple[NumericObservation, ...] | None:
@@ -2022,6 +2626,39 @@ def _numeric_series_for_chart(
     if any(item.branch_id == reference for item in state.get("macro_results", ())):
         return _numeric_series(reference, state)
     return None
+
+
+def _default_chart_macro_evidence_keys(
+    state: AgentState,
+) -> set[tuple[str, str, date]] | None:
+    plan = state.get("execution_plan")
+    if plan is None or DEFAULT_CHART_WINDOW_REASON not in plan.reason_codes:
+        return None
+    calculation_dates = tuple(
+        cast(date, point.observed_at)
+        for calculation in state.get("calculations", ())
+        for point in calculation.result.values
+        if point.observed_at is not None
+    )
+    if not calculation_dates:
+        return None
+    allowed: set[tuple[str, str, date]] = set()
+    for macro_branch in state.get("macro_results", ()):
+        observations_by_series: dict[str, tuple[date, ...]] = {}
+        for observation in macro_branch.result.observations:
+            if observation.is_missing or observation.value is None:
+                continue
+            observations_by_series.setdefault(observation.series_id, ())
+            observations_by_series[observation.series_id] = (
+                *observations_by_series[observation.series_id],
+                observation.observed_at,
+            )
+        for series_id, observed_dates in observations_by_series.items():
+            for calculation_date in calculation_dates:
+                matched_at = _latest_observation_at_or_before(observed_dates, calculation_date)
+                if matched_at is not None:
+                    allowed.add((macro_branch.branch_id, series_id, matched_at))
+    return allowed
 
 
 def _evidence_from_state(state: AgentState) -> tuple[EvidenceEnvelope, ...]:
@@ -2077,9 +2714,13 @@ def _evidence_from_state(state: AgentState) -> tuple[EvidenceEnvelope, ...]:
                     payload=fact.model_dump(mode="json"),
                 )
             )
+    default_chart_macro_keys = _default_chart_macro_evidence_keys(state)
     for macro_branch in state.get("macro_results", ()):
         for observation in macro_branch.result.observations:
             if observation.is_missing or observation.value is None:
+                continue
+            macro_key = (macro_branch.branch_id, observation.series_id, observation.observed_at)
+            if default_chart_macro_keys is not None and macro_key not in default_chart_macro_keys:
                 continue
             evidence.append(
                 EvidenceEnvelope(

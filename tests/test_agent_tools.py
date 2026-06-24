@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -9,7 +11,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from company_lens.agent.schemas import AgentErrorCategory, AgentErrorSeverity
 from company_lens.agent.tools import ResearchToolError, SqlResearchTools
 from company_lens.config import Settings
+from company_lens.db.base import Base
 from company_lens.ingestion.sec_client import SecCompany
+from company_lens.macro.schemas import FredObservation, FredSeriesMetadata, FredSeriesQuery
 from company_lens.retrieval.adaptive_schemas import ResolvedQuery
 
 
@@ -102,3 +106,71 @@ def test_sql_research_tools_discovers_public_company_from_sec_ticker_map(
     assert entity.kind == "public_company"
     assert entity.status == "unresolved"
     assert entity.candidates[0].canonical_value == "NFLX"
+
+
+def test_sql_research_tools_ingests_missing_fred_series_on_demand(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeFredClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def __enter__(self) -> FakeFredClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def fetch_series(self, series_id: str) -> FredSeriesMetadata:
+            assert series_id == "FEDFUNDS"
+            return FredSeriesMetadata(
+                series_id="FEDFUNDS",
+                title="Federal Funds Effective Rate",
+                frequency="Monthly",
+                frequency_short="M",
+                units="Percent",
+                units_short="%",
+                seasonal_adjustment="Not Seasonally Adjusted",
+                seasonal_adjustment_short="NSA",
+                observation_start=date(2025, 1, 1),
+                observation_end=date(2025, 1, 1),
+                source_url="https://fred.stlouisfed.org/series/FEDFUNDS",
+            )
+
+        def fetch_observations(
+            self,
+            metadata: FredSeriesMetadata,
+            *,
+            observation_start: date | None = None,
+            observation_end: date | None = None,
+        ) -> tuple[FredObservation, ...]:
+            assert metadata.series_id == "FEDFUNDS"
+            assert observation_start is None
+            assert observation_end is None
+            return (
+                FredObservation(
+                    series_id="FEDFUNDS",
+                    observed_at=date(2025, 1, 1),
+                    realtime_start=date(2025, 2, 1),
+                    realtime_end=date(2025, 2, 1),
+                    value=Decimal("4.33"),
+                    raw_value="4.33",
+                    is_missing=False,
+                    unit="%",
+                    frequency="M",
+                    source_url="https://fred.stlouisfed.org/series/FEDFUNDS",
+                ),
+            )
+
+    monkeypatch.setattr("company_lens.agent.tools.FredClient", FakeFredClient)
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    tools = SqlResearchTools(
+        session_factory=sessionmaker(bind=engine),
+        settings=Settings(fred_api_key="test-key"),
+    )
+
+    result = tools.query_macro_series(FredSeriesQuery(series_ids=("FEDFUNDS",)))
+
+    assert result.warnings == ()
+    assert [item.value for item in result.observations] == [Decimal("4.330000000000")]

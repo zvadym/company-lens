@@ -47,13 +47,22 @@ def observation(
 
 
 def test_deterministic_growth_change_cagr_and_margin() -> None:
-    previous = observation("previous", "80")
-    current = observation("current", "100")
+    previous = observation("previous", "80", observed_at=date(2024, 12, 31))
+    current = observation("current", "100", observed_at=date(2025, 3, 31))
 
-    assert quarter_over_quarter_growth(current, previous).values[0].value == Decimal("25.00")
-    assert year_over_year_growth(current, previous).values[0].value == Decimal("25.00")
-    assert percentage_change(current, previous).values[0].value == Decimal("25.00")
-    assert absolute_change(current, previous).values[0].value == Decimal("20")
+    qoq = quarter_over_quarter_growth(current, previous)
+    yoy = year_over_year_growth(current, previous)
+    change = percentage_change(current, previous)
+    absolute = absolute_change(current, previous)
+
+    assert qoq.values[0].value == Decimal("25.00")
+    assert qoq.values[0].observed_at == date(2025, 3, 31)
+    assert yoy.values[0].value == Decimal("25.00")
+    assert yoy.values[0].observed_at == date(2025, 3, 31)
+    assert change.values[0].value == Decimal("25.00")
+    assert change.values[0].observed_at == date(2025, 3, 31)
+    assert absolute.values[0].value == Decimal("20")
+    assert absolute.values[0].observed_at == date(2025, 3, 31)
     assert margin(observation("profit", "25"), current).values[0].value == Decimal("25.00")
     assert compound_annual_growth_rate(
         observation("end", "121"), observation("start", "100"), years=Decimal("2")
@@ -112,6 +121,37 @@ def test_year_over_year_growth_series_returns_every_dated_pair() -> None:
         Decimal("29.8"),
     ]
     assert result.inputs == inputs
+
+
+def test_year_over_year_growth_series_matches_quarterly_prior_year_periods() -> None:
+    inputs = tuple(
+        observation(
+            f"{year}Q{quarter}",
+            value,
+            observed_at=period_end,
+        )
+        for year, quarter, period_end, value in (
+            (2024, 1, date(2024, 3, 31), "100"),
+            (2024, 2, date(2024, 6, 30), "120"),
+            (2024, 3, date(2024, 9, 30), "140"),
+            (2025, 1, date(2025, 3, 31), "125"),
+            (2025, 2, date(2025, 6, 30), "150"),
+            (2025, 3, date(2025, 9, 30), "175"),
+        )
+    )
+
+    result = year_over_year_growth_series(inputs)
+
+    assert [point.observed_at for point in result.values] == [
+        date(2025, 3, 31),
+        date(2025, 6, 30),
+        date(2025, 9, 30),
+    ]
+    assert [point.value for point in result.values] == [
+        Decimal("25.00"),
+        Decimal("25.00"),
+        Decimal("25.00"),
+    ]
 
 
 def test_correlation_is_decimal_aligned_and_warns_against_causation() -> None:

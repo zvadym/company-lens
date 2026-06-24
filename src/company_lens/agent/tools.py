@@ -16,8 +16,9 @@ from company_lens.ingestion.on_demand import (
 )
 from company_lens.ingestion.sec_client import SecCompany
 from company_lens.ingestion.sec_service import build_sec_client_from_settings
+from company_lens.macro.client import FredClient
 from company_lens.macro.schemas import FredSeriesQuery, FredSeriesResult
-from company_lens.macro.service import FredQueryService
+from company_lens.macro.service import FredIngestionService, FredQueryService
 from company_lens.retrieval.adaptive import AdaptiveRetrievalService
 from company_lens.retrieval.adaptive_schemas import (
     AdaptiveRetrievalRequest,
@@ -135,7 +136,58 @@ class SqlResearchTools:
         return self._call(lambda session: FinancialFactQueryService(session=session).query(request))
 
     def query_macro_series(self, request: FredSeriesQuery) -> FredSeriesResult:
-        return self._call(lambda session: FredQueryService(session=session).query(request))
+        try:
+            with self._session_factory() as session:
+                result = FredQueryService(session=session).query(request)
+                missing_series = _missing_fred_series(result)
+                if (
+                    not missing_series
+                    or self._settings is None
+                    or self._settings.fred_api_key is None
+                ):
+                    return result
+                try:
+                    with FredClient(
+                        api_key=self._settings.fred_api_key.get_secret_value(),
+                        base_url=self._settings.fred_base_url,
+                        timeout_seconds=self._settings.fred_request_timeout_seconds,
+                        retry_attempts=self._settings.fred_retry_attempts,
+                    ) as client:
+                        FredIngestionService(session=session, client=client).ingest(
+                            missing_series,
+                            observation_start=request.observation_start,
+                            observation_end=request.observation_end,
+                        )
+                    return FredQueryService(session=session).query(request)
+                except Exception:
+                    return result.model_copy(
+                        update={
+                            "warnings": (
+                                *result.warnings,
+                                "on_demand_fred_ingestion_failed:" + ",".join(missing_series),
+                            )
+                        }
+                    )
+        except ResearchToolError:
+            raise
+        except (ValueError, TypeError):
+            raise ResearchToolError(
+                AgentError(
+                    category=AgentErrorCategory.VALIDATION,
+                    severity=AgentErrorSeverity.TERMINAL,
+                    code="tool_invalid_request",
+                    message="A research tool rejected its typed request.",
+                )
+            ) from None
+        except Exception:
+            raise ResearchToolError(
+                AgentError(
+                    category=AgentErrorCategory.TOOL,
+                    severity=AgentErrorSeverity.RECOVERABLE,
+                    code="tool_execution_failed",
+                    message="A research data operation failed.",
+                )
+            ) from None
 
     def _call[ResultT](self, operation: SessionOperation[ResultT]) -> ResultT:
         try:
@@ -206,6 +258,19 @@ def _match_public_companies(
         )
         for mention, company, match_kind in matches[:5]
     )
+
+
+def _missing_fred_series(result: FredSeriesResult) -> tuple[str, ...]:
+    missing: list[str] = []
+    for warning in result.warnings:
+        if not warning.startswith("series_not_cached:"):
+            continue
+        missing.extend(
+            series_id.strip().upper()
+            for series_id in warning.removeprefix("series_not_cached:").split(",")
+            if series_id.strip()
+        )
+    return tuple(dict.fromkeys(missing))
 
 
 def _ticker_mentioned(query: str, ticker: str) -> bool:

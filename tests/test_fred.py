@@ -120,6 +120,20 @@ def test_query_can_explicitly_include_missing_values(
     assert result.observations[1].raw_value == "."
 
 
+def test_query_without_date_range_limits_latest_observations(
+    session: Session,
+    fred_client: FredClient,
+) -> None:
+    FredIngestionService(session=session, client=fred_client).ingest(("FEDFUNDS",))
+
+    result = FredQueryService(session=session).query(
+        FredSeriesQuery(series_ids=("FEDFUNDS",), limit=1)
+    )
+
+    assert [item.observed_at for item in result.observations] == [date(2025, 3, 1)]
+    assert [item.value for item in result.observations] == [Decimal("4.330000000000")]
+
+
 def test_typed_tool_exposes_cached_fred_contract(session: Session) -> None:
     pytest.importorskip("langchain_core")
     tool = build_langchain_fred_tool(FredQueryService(session=session))

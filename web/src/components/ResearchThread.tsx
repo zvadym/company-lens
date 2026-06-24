@@ -27,7 +27,7 @@ const MarkdownText = lazy(() => import("./MarkdownText"));
 const prompts = [
   "Compare Cloudflare revenue growth over the last eight quarters.",
   "What are the most material risks management reported this year?",
-  "Plot revenue growth against the federal funds rate.",
+  "Plot Cloudflare revenue growth against the federal funds rate.",
 ];
 
 function UserMessage() {

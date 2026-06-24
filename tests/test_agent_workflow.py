@@ -119,6 +119,35 @@ class FakeModelProvider:
         )
 
 
+class RawPlanModelProvider(FakeModelProvider):
+    def __init__(
+        self,
+        *,
+        analysis: QuestionAnalysis,
+        raw_plan: ModelExecutionPlan,
+        texts: Sequence[str] = (),
+    ) -> None:
+        super().__init__(analysis=analysis, plan=ExecutionPlan(route=raw_plan.route), texts=texts)
+        self.raw_plan = raw_plan
+
+    def generate_structured[OutputT: BaseModel](
+        self,
+        messages: Sequence[ModelMessage],
+        output_type: type[OutputT],
+        *,
+        purpose: ModelPurpose,
+    ) -> StructuredModelResult[OutputT]:
+        if output_type is not ModelExecutionPlan:
+            return super().generate_structured(messages, output_type, purpose=purpose)
+        self.purposes.append(purpose)
+        self.model_calls.append((purpose, tuple(messages)))
+        return StructuredModelResult[OutputT](
+            model="fake-planning",
+            response_id=f"response-{purpose}",
+            output=cast(OutputT, self.raw_plan),
+        )
+
+
 class RepairTimeoutModelProvider(FakeModelProvider):
     def generate_text(
         self,
@@ -128,6 +157,27 @@ class RepairTimeoutModelProvider(FakeModelProvider):
     ) -> TextModelResult:
         if purpose is ModelPurpose.REPAIR:
             self.purposes.append(purpose)
+            raise ModelProviderError(
+                AgentError(
+                    category=AgentErrorCategory.PROVIDER_TIMEOUT,
+                    severity=AgentErrorSeverity.RECOVERABLE,
+                    code="openai_timeout",
+                    message="OpenAI request timed out.",
+                )
+            )
+        return super().generate_text(messages, purpose=purpose)
+
+
+class AnswerTimeoutModelProvider(FakeModelProvider):
+    def generate_text(
+        self,
+        messages: Sequence[ModelMessage],
+        *,
+        purpose: ModelPurpose,
+    ) -> TextModelResult:
+        if purpose is ModelPurpose.ANSWER:
+            self.purposes.append(purpose)
+            self.model_calls.append((purpose, tuple(messages)))
             raise ModelProviderError(
                 AgentError(
                     category=AgentErrorCategory.PROVIDER_TIMEOUT,
@@ -232,6 +282,34 @@ class FakeResearchTools:
             self.barrier.wait(timeout=2)
 
 
+class AnnualMacroTools(FakeResearchTools):
+    def query_macro_series(self, request: FredSeriesQuery) -> FredSeriesResult:
+        self.calls["macro"] += 1
+        return FredSeriesResult(
+            query=request,
+            series=(),
+            observations=tuple(
+                FredObservation(
+                    series_id="FEDFUNDS",
+                    observed_at=date(year, 12, 31),
+                    realtime_start=date(year, 12, 31),
+                    realtime_end=date(year, 12, 31),
+                    value=value,
+                    raw_value=str(value),
+                    is_missing=False,
+                    unit="percent",
+                    frequency="Annual",
+                    source_url=f"https://fred.example/FEDFUNDS/{year}",
+                )
+                for year, value in (
+                    (2023, Decimal("5.25")),
+                    (2024, Decimal("5.00")),
+                    (2025, Decimal("4.50")),
+                )
+            ),
+        )
+
+
 class MixedPeriodFinancialTools(FakeResearchTools):
     def query_financial_facts(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
         self.calls["financial"] += 1
@@ -286,6 +364,38 @@ class AnnualSeriesFinancialTools(FakeResearchTools):
         )
 
 
+class AnnualFinancialAndMacroTools(AnnualMacroTools, AnnualSeriesFinancialTools):
+    pass
+
+
+class AnnualFinancialAndMonthlyMacroTools(AnnualSeriesFinancialTools):
+    def query_macro_series(self, request: FredSeriesQuery) -> FredSeriesResult:
+        self.calls["macro"] += 1
+        return FredSeriesResult(
+            query=request,
+            series=(),
+            observations=tuple(
+                FredObservation(
+                    series_id="FEDFUNDS",
+                    observed_at=date(year, 12, 1),
+                    realtime_start=date(year, 12, 1),
+                    realtime_end=date(year, 12, 1),
+                    value=value,
+                    raw_value=str(value),
+                    is_missing=False,
+                    unit="percent",
+                    frequency="Monthly",
+                    source_url=f"https://fred.example/FEDFUNDS/{year}",
+                )
+                for year, value in (
+                    (2023, Decimal("5.25")),
+                    (2024, Decimal("5.00")),
+                    (2025, Decimal("4.50")),
+                )
+            ),
+        )
+
+
 class FlakyFinancialTools(FakeResearchTools):
     def query_financial_facts(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
         self.calls["financial"] += 1
@@ -300,6 +410,20 @@ class FlakyFinancialTools(FakeResearchTools):
             )
         self.calls["financial"] -= 1
         return super().query_financial_facts(request)
+
+
+class PunctuatedCompanyFinancialTools(FakeResearchTools):
+    def query_financial_facts(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
+        self.calls["financial"] += 1
+        return FinancialFactQueryResult(
+            query=request,
+            observations=(
+                _financial_observation(date(2025, 12, 31), Decimal("125")).model_copy(
+                    update={"company_name": "Elastic N.V.", "ticker": "ESTC"}
+                ),
+            ),
+            available_units=("USD",),
+        )
 
 
 class BrokenMacroTools(FakeResearchTools):
@@ -998,6 +1122,41 @@ def test_plan_reconciliation_does_not_drop_explicit_chart_requirement() -> None:
     assert any(error.code == "invalid_execution_plan" for error in result["errors"])
 
 
+def test_financial_chart_without_company_abstains_before_planning() -> None:
+    class NoCompanyTools(FakeResearchTools):
+        def resolve_entities(self, query: str) -> ResolvedQuery:
+            self.calls["resolve"] += 1
+            return ResolvedQuery(query=query, metrics=("revenue",))
+
+    analysis = QuestionAnalysis(
+        normalized_question="Plot revenue growth against the federal funds rate",
+        route=ResearchRoute.HYBRID,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.MACRO_SERIES,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.HYBRID, branches=(_financial_branch(),)),
+    )
+    tools = NoCompanyTools()
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, tools)).run(
+        "Plot revenue growth against the federal funds rate.",
+        session_id="session-missing-company",
+    )
+
+    assert result["status"] is AgentRunStatus.ABSTAINED
+    assert any(error.code == "missing_company" for error in result["errors"])
+    assert ModelPurpose.PLAN not in model.purposes
+    assert tools.calls["financial"] == 0
+    assert tools.calls["macro"] == 0
+
+
 def test_invalid_citation_is_repaired_once() -> None:
     analysis = QuestionAnalysis(
         normalized_question="What was revenue?",
@@ -1054,9 +1213,105 @@ def test_repair_timeout_is_not_retried_by_general_node_policy() -> None:
         policy=ExecutionPolicy(max_retries_per_node=2),
     )
 
-    assert result["status"] is AgentRunStatus.ABSTAINED
+    assert result["status"] is AgentRunStatus.PARTIAL
+    assert result["answer_validation"].valid is True
+    assert result["final_answer"] is not None
+    assert "125 USD" in result["final_answer"]
     assert model.purposes.count(ModelPurpose.REPAIR) == 1
     assert any(error.code == "openai_timeout" for error in result["errors"])
+
+
+def test_answer_timeout_falls_back_to_deterministic_cited_summary() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Compare revenue growth",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS, AgentCapability.CALCULATIONS),
+    )
+    plan = ExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=(
+            _financial_branch(),
+            CalculationBranch(
+                branch_id="growth",
+                operation="percentage_change",
+                input_refs=("financial",),
+                depends_on=("financial",),
+            ),
+        ),
+    )
+    model = AnswerTimeoutModelProvider(analysis=analysis, plan=plan)
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, FakeResearchTools())).run(
+        "Compare Cloudflare revenue growth.",
+        session_id="session-answer-timeout-fallback",
+        policy=ExecutionPolicy(max_retries_per_node=1),
+    )
+
+    assert result["status"] is AgentRunStatus.PARTIAL
+    assert result["final_answer"] is not None
+    assert "[calculation:growth]" in result["final_answer"]
+    assert "\n\n| Period | Company | Metric | Value |" in result["final_answer"]
+    assert result["answer_validation"].valid is True
+    assert any(error.code == "openai_timeout" for error in result["errors"])
+
+
+def test_validation_failure_falls_back_to_deterministic_cited_summary() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="What was revenue?",
+        route=ResearchRoute.STRUCTURED_ONLY,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS,),
+    )
+    plan = ExecutionPlan(
+        route=ResearchRoute.STRUCTURED_ONLY,
+        branches=(_financial_branch(),),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=plan,
+        texts=(f"Cloudflare revenue was 124.6 USD [financial_fact:{FACT_ID}].",),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, FakeResearchTools())).run(
+        "What was Cloudflare revenue?",
+        session_id="session-validation-fallback",
+        policy=ExecutionPolicy(max_repair_attempts=0),
+    )
+
+    assert result["status"] is AgentRunStatus.PARTIAL
+    assert result["answer_validation"].valid is True
+    assert "\n\n| Period | Company | Metric | Value |" in result["final_answer"]
+    assert "125 USD" in result["final_answer"]
+    assert "124.6" not in result["final_answer"]
+    assert "[financial_fact:" in result["final_answer"]
+
+
+def test_validation_fallback_avoids_sentence_split_in_punctuated_company_name() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="What was revenue?",
+        route=ResearchRoute.STRUCTURED_ONLY,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS,),
+    )
+    plan = ExecutionPlan(
+        route=ResearchRoute.STRUCTURED_ONLY,
+        branches=(_financial_branch(),),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=plan,
+        texts=(f"Elastic N.V. revenue was 124.6 USD [financial_fact:{FACT_ID}].",),
+    )
+
+    result = ResearchAgent(
+        runtime=ResearchAgentRuntime(model, PunctuatedCompanyFinancialTools())
+    ).run(
+        "What was Elastic revenue?",
+        session_id="session-punctuated-company-validation-fallback",
+        policy=ExecutionPolicy(max_repair_attempts=0),
+    )
+
+    assert result["status"] is AgentRunStatus.PARTIAL
+    assert result["answer_validation"].valid is True
+    assert "| 2025-12-31 | Elastic NV | revenue | 125 USD" in result["final_answer"]
 
 
 def test_recoverable_tool_failure_retries_within_global_call_budget() -> None:
@@ -1206,6 +1461,353 @@ def test_dated_growth_calculation_can_generate_chart() -> None:
     assert result["status"] is AgentRunStatus.COMPLETED
     assert result["chart_spec"] is not None
     assert result["chart_spec"].data[0].x == date(2025, 12, 31)
+
+
+def test_chart_branch_defaults_missing_model_chart_fields() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Chart revenue growth",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+    )
+    facts_request = FinancialFactQuery(
+        company_ids=(COMPANY_ID,),
+        metrics=("revenue",),
+        fiscal_years=(2024, 2025),
+    )
+    raw_plan = ModelExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=(
+            ModelExecutionBranch(
+                kind="query_financial_facts",
+                branch_id="financial",
+                financial_request=facts_request,
+            ),
+            ModelExecutionBranch(
+                kind="calculate_metrics",
+                branch_id="growth",
+                operation="year_over_year_growth",
+                input_refs=("financial",),
+                depends_on=("financial",),
+            ),
+            ModelExecutionBranch(
+                kind="generate_chart_spec",
+                branch_id="chart",
+                depends_on=("growth",),
+            ),
+        ),
+    )
+    model = RawPlanModelProvider(
+        analysis=analysis,
+        raw_plan=raw_plan,
+        texts=("Revenue growth was 25 percent [calculation:growth].",),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, FakeResearchTools())).run(
+        "Chart revenue growth", session_id="session-chart-defaults"
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["chart_spec"] is not None
+    assert result["chart_spec"].series[0].key == "growth"
+
+
+def test_hybrid_chart_can_plot_calculation_against_macro_series() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Plot Cloudflare revenue growth against the federal funds rate",
+        route=ResearchRoute.HYBRID,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.MACRO_SERIES,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+    )
+    facts = FinancialFactsBranch(
+        branch_id="financial",
+        request=FinancialFactQuery(
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+            period_types=("annual",),
+            limit=20,
+        ),
+    )
+    macro = _macro_branch()
+    growth = CalculationBranch(
+        branch_id="growth",
+        operation="year_over_year_growth",
+        input_refs=(facts.branch_id,),
+        depends_on=(facts.branch_id,),
+    )
+    chart = ChartBranch(
+        branch_id="chart",
+        chart_type="line",
+        dataset_ref="growth",
+        title="Revenue growth vs federal funds rate",
+        depends_on=("growth", macro.branch_id),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.HYBRID,
+            branches=(facts, macro, growth, chart),
+            requires_citations=False,
+        ),
+        texts=("Revenue growth and the federal funds rate are plotted together."),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, AnnualFinancialAndMacroTools())).run(
+        "Plot Cloudflare revenue growth against the federal funds rate.",
+        session_id="session-hybrid-multi-series-chart",
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["chart_spec"] is not None
+    assert [series.key for series in result["chart_spec"].series] == ["growth", "macro"]
+    assert result["chart_spec"].data[0].values == {
+        "growth": Decimal("25.00"),
+        "macro": Decimal("5.25"),
+    }
+
+
+def test_hybrid_chart_normalizes_missing_comparison_dependency() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Plot Cloudflare revenue growth against the federal funds rate",
+        route=ResearchRoute.HYBRID,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.MACRO_SERIES,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+    )
+    facts = FinancialFactsBranch(
+        branch_id="financial",
+        request=FinancialFactQuery(
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+            period_types=("annual",),
+            limit=20,
+        ),
+    )
+    macro = _macro_branch()
+    growth = CalculationBranch(
+        branch_id="growth",
+        operation="year_over_year_growth",
+        input_refs=(facts.branch_id,),
+        depends_on=(facts.branch_id, macro.branch_id),
+    )
+    chart = ChartBranch(
+        branch_id="chart",
+        chart_type="line",
+        dataset_ref="growth",
+        title="Revenue growth vs federal funds rate",
+        depends_on=("growth",),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.HYBRID,
+            branches=(facts, macro, growth, chart),
+            requires_citations=False,
+        ),
+        texts=("Revenue growth and the federal funds rate are plotted together."),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, AnnualFinancialAndMacroTools())).run(
+        "Plot Cloudflare revenue growth against the federal funds rate.",
+        session_id="session-hybrid-normalized-chart",
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["chart_spec"] is not None
+    assert [series.key for series in result["chart_spec"].series] == ["growth", "macro"]
+
+
+def test_hybrid_chart_aligns_monthly_macro_to_financial_period_dates() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Plot Cloudflare revenue growth against the federal funds rate",
+        route=ResearchRoute.HYBRID,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.MACRO_SERIES,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+    )
+    facts = FinancialFactsBranch(
+        branch_id="financial",
+        request=FinancialFactQuery(
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+            period_types=("annual",),
+            limit=20,
+        ),
+    )
+    macro = _macro_branch()
+    growth = CalculationBranch(
+        branch_id="growth",
+        operation="year_over_year_growth",
+        input_refs=(facts.branch_id,),
+        depends_on=(facts.branch_id,),
+    )
+    chart = ChartBranch(
+        branch_id="chart",
+        chart_type="line",
+        dataset_ref="growth",
+        title="Revenue growth vs federal funds rate",
+        depends_on=("growth", macro.branch_id),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.HYBRID,
+            branches=(facts, macro, growth, chart),
+            requires_citations=False,
+        ),
+        texts=("Revenue growth and the federal funds rate are plotted together."),
+    )
+
+    result = ResearchAgent(
+        runtime=ResearchAgentRuntime(model, AnnualFinancialAndMonthlyMacroTools())
+    ).run(
+        "Plot Cloudflare revenue growth against the federal funds rate.",
+        session_id="session-hybrid-monthly-macro-chart",
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["chart_spec"] is not None
+    assert result["chart_spec"].data[0].x == date(2023, 12, 31)
+    assert result["chart_spec"].data[0].values == {
+        "growth": Decimal("25.00"),
+        "macro": Decimal("5.25"),
+    }
+
+
+def test_default_chart_window_plots_quarterly_yoy_growth_series_against_macro() -> None:
+    class QuarterlyFinancialAndMacroTools(MonthlyMacroTools):
+        def query_financial_facts(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
+            self.calls["financial"] += 1
+            return FinancialFactQueryResult(
+                query=request,
+                observations=tuple(
+                    _financial_observation(period_end, value).model_copy(
+                        update={"period_type": "quarter", "fiscal_period": fiscal_period}
+                    )
+                    for period_end, fiscal_period, value in (
+                        (date(2024, 3, 31), "Q1", Decimal("100")),
+                        (date(2024, 6, 30), "Q2", Decimal("120")),
+                        (date(2024, 9, 30), "Q3", Decimal("140")),
+                        (date(2025, 3, 31), "Q1", Decimal("125")),
+                        (date(2025, 6, 30), "Q2", Decimal("150")),
+                        (date(2025, 9, 30), "Q3", Decimal("175")),
+                    )
+                ),
+                available_units=("USD",),
+            )
+
+        def query_macro_series(self, request: FredSeriesQuery) -> FredSeriesResult:
+            self.calls["macro"] += 1
+            return FredSeriesResult(
+                query=request,
+                series=(),
+                observations=tuple(
+                    FredObservation(
+                        series_id="FEDFUNDS",
+                        observed_at=observed_at,
+                        realtime_start=observed_at,
+                        realtime_end=observed_at,
+                        value=value,
+                        raw_value=str(value),
+                        is_missing=False,
+                        unit="percent",
+                        frequency="Monthly",
+                        source_url=f"https://fred.example/FEDFUNDS/{observed_at.isoformat()}",
+                    )
+                    for observed_at, value in (
+                        (date(2025, 3, 1), Decimal("3")),
+                        (date(2025, 6, 1), Decimal("4")),
+                        (date(2025, 9, 1), Decimal("5")),
+                    )
+                ),
+            )
+
+    analysis = QuestionAnalysis(
+        normalized_question="Plot Cloudflare revenue growth against the federal funds rate",
+        route=ResearchRoute.HYBRID,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.MACRO_SERIES,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+    )
+    facts = FinancialFactsBranch(
+        branch_id="financial",
+        request=FinancialFactQuery(
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+            period_types=("quarter",),
+            limit=8,
+        ),
+    )
+    macro = _macro_branch()
+    growth = CalculationBranch(
+        branch_id="growth",
+        operation="quarter_over_quarter_growth",
+        input_refs=(facts.branch_id,),
+        depends_on=(facts.branch_id,),
+    )
+    chart = ChartBranch(
+        branch_id="chart",
+        chart_type="line",
+        dataset_ref="growth",
+        title="Revenue growth vs federal funds rate",
+        depends_on=("growth", macro.branch_id),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.HYBRID,
+            branches=(facts, macro, growth, chart),
+            requires_citations=False,
+        ),
+        texts=("Revenue growth and the federal funds rate are plotted together."),
+    )
+
+    result = ResearchAgent(
+        runtime=ResearchAgentRuntime(model, QuarterlyFinancialAndMacroTools())
+    ).run(
+        "Plot Cloudflare revenue growth against the federal funds rate.",
+        session_id="session-hybrid-default-window-chart",
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["chart_spec"] is not None
+    assert [series.key for series in result["chart_spec"].series] == ["growth", "macro"]
+    assert [point.x for point in result["chart_spec"].data] == [
+        date(2025, 3, 31),
+        date(2025, 6, 30),
+        date(2025, 9, 30),
+    ]
+    assert [point.values["growth"] for point in result["chart_spec"].data] == [
+        Decimal("25.00"),
+        Decimal("25.00"),
+        Decimal("25.00"),
+    ]
+    assert [point.values["macro"] for point in result["chart_spec"].data] == [
+        Decimal("3"),
+        Decimal("4"),
+        Decimal("5"),
+    ]
 
 
 def _financial_branch() -> FinancialFactsBranch:
