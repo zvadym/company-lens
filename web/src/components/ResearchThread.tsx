@@ -2,6 +2,7 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  useMessage,
 } from "@assistant-ui/react";
 import {
   ArrowDown,
@@ -10,16 +11,20 @@ import {
   BookOpen,
   CheckCircle2,
   Copy,
+  FileText,
   RotateCcw,
+  SearchCode,
   Sparkles,
   Square,
   ThumbsDown,
   ThumbsUp,
 } from "lucide-react";
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
-import { isTerminal } from "@/api/types";
+import { isTerminal, type ResearchRun } from "@/api/types";
 import { useResearch } from "@/research/context";
+
+import { groupEvidenceSources } from "./sourcePresentation";
 
 const ResearchChart = lazy(() => import("./ResearchChart"));
 const MarkdownText = lazy(() => import("./MarkdownText"));
@@ -29,6 +34,62 @@ const prompts = [
   "What are the most material risks management reported this year?",
   "Plot Cloudflare revenue growth against the federal funds rate.",
 ];
+
+function useNow(enabled: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!enabled) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [enabled]);
+
+  return now;
+}
+
+function formatRunStartedAt(run: ResearchRun | undefined): string {
+  if (!run) return "Research response";
+  const startedAt = run.started_at ?? run.queued_at;
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(startedAt));
+}
+
+function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 1) return "<1s";
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainingSeconds.toString().padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}h ${remainingMinutes.toString().padStart(2, "0")}m`;
+}
+
+function runElapsedMs(run: ResearchRun, now: number): number {
+  const startedAt = new Date(run.started_at ?? run.queued_at).getTime();
+  const finishedAt = run.completed_at ? new Date(run.completed_at).getTime() : now;
+  return finishedAt - startedAt;
+}
+
+function extractMessageText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (part && typeof part === "object" && "text" in part) {
+        const text = (part as { text?: unknown }).text;
+        return typeof text === "string" ? text : "";
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
 
 function UserMessage() {
   return (
@@ -40,18 +101,65 @@ function UserMessage() {
 }
 
 function AssistantMessage() {
+  const runId = useMessage((message) => {
+    const custom = message.metadata.custom as { runId?: unknown };
+    return typeof custom.runId === "string" ? custom.runId : null;
+  });
+  const messageText = useMessage((message) => extractMessageText(message.content));
+  const { runs, inspector, inspectorOpen, selectedRunId, toggleInspector } = useResearch();
+  const run = runs.find((item) => item.run_id === runId);
+  const running = run ? !isTerminal(run.status) : false;
+  const now = useNow(running);
+  const answerText = messageText || run?.result?.answer?.trim() || "";
+  const elapsed = run ? formatElapsed(runElapsedMs(run, now)) : null;
+  const citations = run?.result?.citations ?? [];
+  const sourceCount = groupEvidenceSources(run?.result?.sources ?? [], citations).length;
+  const traceActive = inspectorOpen && selectedRunId === runId && inspector === "trace";
+  const sourcesActive = inspectorOpen && selectedRunId === runId && inspector === "sources";
   return (
     <MessagePrimitive.Root className="message message-assistant">
       <div className="message-heading">
-        <span>CompanyLens synthesis</span>
-        <button
-          type="button"
-          className="icon-button quiet"
-          onClick={() => void navigator.clipboard.writeText(window.getSelection()?.toString() ?? "")}
-          aria-label="Copy selected answer text"
-        >
-          <Copy size={14} />
-        </button>
+        <div className="message-meta">
+          {run ? (
+            <time dateTime={run.started_at ?? run.queued_at}>{formatRunStartedAt(run)}</time>
+          ) : (
+            <span>Research response</span>
+          )}
+          {elapsed ? <span>{running ? `${elapsed} elapsed` : elapsed}</span> : null}
+        </div>
+        <div className="message-actions">
+          {runId ? (
+            <>
+              <button
+                type="button"
+                className={traceActive ? "is-active" : ""}
+                onClick={() => toggleInspector("trace", runId)}
+                aria-label={traceActive ? "Hide methodology" : "Show methodology"}
+              >
+                <SearchCode size={13} /> Trace
+              </button>
+              <button
+                type="button"
+                className={sourcesActive ? "is-active" : ""}
+                onClick={() => toggleInspector("sources", runId)}
+                aria-label={sourcesActive ? "Hide sources" : "Show sources"}
+              >
+                <FileText size={13} /> Sources <span>{sourceCount}</span>
+              </button>
+            </>
+          ) : null}
+          <button
+            type="button"
+            className="icon-button quiet"
+            onClick={() => {
+              if (answerText) void navigator.clipboard.writeText(answerText);
+            }}
+            aria-label="Copy answer text"
+            disabled={!answerText}
+          >
+            <Copy size={14} />
+          </button>
+        </div>
       </div>
       <MessagePrimitive.Parts
         components={{

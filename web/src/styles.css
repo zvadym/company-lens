@@ -51,6 +51,9 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visi
     var(--paper);
   background-size: 100% 28px;
 }
+.app-shell.is-inspector-closed {
+  grid-template-columns: clamp(240px, 16vw, 280px) minmax(500px, 1fr);
+}
 
 .history-sidebar {
   position: relative;
@@ -203,10 +206,18 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visi
 .message-label, .message-heading { color: var(--oxide-dark); font-family: "IBM Plex Mono", monospace; font-size: 9px; letter-spacing: .12em; text-transform: uppercase; }
 .message-user > div:last-child { max-width: 670px; margin-top: 12px; font-family: "Newsreader Variable", serif; font-size: 28px; line-height: 1.2; letter-spacing: -.018em; }
 .message-assistant { padding-top: 34px; padding-bottom: 22px; }
-.message-heading { display: flex; align-items: center; justify-content: space-between; color: var(--forest); }
+.message-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; color: var(--forest); }
+.message-meta { display: flex; min-width: 0; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.message-meta time, .message-meta span { white-space: nowrap; }
+.message-meta span:not(:first-child)::before { content: ""; display: inline-block; width: 3px; height: 3px; margin-right: 10px; vertical-align: middle; background: currentColor; border-radius: 999px; opacity: .55; }
+.message-actions { display: flex; flex-shrink: 0; gap: 6px; align-items: center; }
+.message-actions button:not(.icon-button) { display: inline-flex; gap: 5px; align-items: center; min-height: 28px; padding: 5px 7px; color: var(--muted); background: transparent; border: 1px solid var(--line); font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
+.message-actions button:not(.icon-button):hover, .message-actions button.is-active { color: var(--ink); background: var(--paper-light); border-color: var(--forest); }
+.message-actions button span { color: var(--forest); font-family: "IBM Plex Mono", monospace; }
 .icon-button { display: inline-grid; width: 28px; height: 28px; place-items: center; color: var(--muted); background: transparent; border: 1px solid var(--line); }
 .icon-button.quiet { opacity: .55; }
-.icon-button:hover { opacity: 1; color: var(--ink); background: var(--paper-light); }
+.icon-button:hover:not(:disabled) { opacity: 1; color: var(--ink); background: var(--paper-light); }
+.icon-button:disabled { cursor: default; opacity: .28; }
 .answer-markdown { margin-top: 17px; color: #252a26; font-family: "Newsreader Variable", serif; font-size: 17px; line-height: 1.72; }
 .answer-markdown h1, .answer-markdown h2, .answer-markdown h3 { margin: 1.5em 0 .55em; color: var(--ink); font-family: "IBM Plex Sans Variable", sans-serif; line-height: 1.18; letter-spacing: -.025em; }
 .answer-markdown h2 { font-size: 20px; }
@@ -257,11 +268,12 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visi
 .outcome-actions button:hover, .outcome-actions button.is-active { background: var(--paper-light); border-color: var(--forest); }
 
 .inspector { min-width: 0; min-height: 0; overflow: hidden; background: #ece6da; }
-.inspector-tabs { display: grid; grid-template-columns: 1fr 1fr; height: 53px; border-bottom: 1px solid var(--line); }
+.inspector-tabs { display: grid; grid-template-columns: 1fr 1fr 46px; height: 53px; border-bottom: 1px solid var(--line); }
 .inspector-tabs button { display: flex; gap: 8px; align-items: center; justify-content: center; color: var(--muted); background: transparent; border: 0; border-right: 1px solid var(--line); font-size: clamp(10px, .6vw, 12px); font-weight: 620; letter-spacing: .07em; text-transform: uppercase; }
 .inspector-tabs button:last-child { border-right: 0; }
 .inspector-tabs button.is-active { color: var(--ink); background: var(--paper-light); box-shadow: inset 0 -2px var(--oxide); }
 .inspector-tabs button span { display: grid; min-width: 20px; height: 20px; place-items: center; color: var(--paper-light); background: var(--forest); border-radius: 50%; font-size: 9px; }
+.inspector-tabs .inspector-close { color: var(--ink); background: var(--paper-light); }
 .inspector-section { height: calc(100vh - 53px); overflow-y: auto; padding: clamp(22px, 1.6vw, 32px) clamp(20px, 1.5vw, 28px) 48px; }
 .inspector-heading { display: flex; align-items: flex-start; justify-content: space-between; }
 .eyebrow { color: var(--oxide-dark); font-family: "IBM Plex Mono", monospace; font-size: clamp(8px, .48vw, 10px); letter-spacing: .13em; text-transform: uppercase; }
@@ -329,10 +341,12 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visi
 
 @media (max-width: 1220px) {
   .app-shell { grid-template-columns: 220px minmax(420px, 1fr) 350px; }
+  .app-shell.is-inspector-closed { grid-template-columns: 220px minmax(420px, 1fr); }
 }
 
 @media (max-width: 1000px) {
   .app-shell { grid-template-columns: minmax(440px, 1fr) 360px; }
+  .app-shell.is-inspector-closed { grid-template-columns: minmax(440px, 1fr); }
   .history-sidebar { display: none; }
   .mobile-history { display: flex; gap: 6px; align-items: center; min-width: 0; }
   .mobile-history select { max-width: 220px; color: var(--ink); background: transparent; border: 0; font-size: 10px; }
@@ -355,6 +369,8 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visi
   .thread-footer { padding-inline: 12px; }
   .message { padding-inline: 22px; }
   .message-user > div:last-child { font-size: 24px; }
+  .message-heading { align-items: flex-start; flex-direction: column; }
+  .message-actions { flex-wrap: wrap; }
   .run-outcome, .research-chart { margin-inline: 16px; }
 }
 

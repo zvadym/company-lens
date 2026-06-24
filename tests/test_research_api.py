@@ -190,12 +190,15 @@ def test_session_run_history_returns_latest_runs_in_chronological_order(api) -> 
     client, _, _ = api
     run_ids: list[str] = []
     for question in ("First", "Second", "Third"):
-        started = client.post(
+        response = client.post(
             "/api/v1/research",
             json={"question": question, "session_id": "history-session"},
-        ).json()
+        )
+        assert response.status_code == 202
+        started = response.json()
         run_ids.append(started["run_id"])
-        client.delete(f"/api/v1/research/{started['run_id']}")
+        cancelled = client.delete(f"/api/v1/research/{started['run_id']}")
+        assert cancelled.json()["status"] == "cancelled"
 
     history = client.get(
         "/api/v1/research",

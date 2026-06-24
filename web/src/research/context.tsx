@@ -18,14 +18,14 @@ import {
   useMemo,
   useState,
 } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 
 import {
   cancelResearch,
   getResearch,
   getSources,
   listCompanies,
-  listResearch,
+  listResearchRuns,
   startResearch,
   submitFeedback,
 } from "@/api/client";
@@ -43,13 +43,21 @@ import {
   type ResearchEvent,
   researchEventTypes,
 } from "./events";
-import { getSessionId, loadTrace, storeTrace } from "./storage";
+import {
+  loadResearchIndex,
+  loadTrace,
+  researchTitleFromQuestion,
+  storeTrace,
+  type StoredResearch,
+  upsertResearchIndex,
+} from "./storage";
 import { selectRunsForThread } from "./threadRuns";
 
 type ConnectionState = "idle" | "connecting" | "live" | "reconnecting" | "closed";
 
 export type EvidenceFocus = {
   evidenceId: string;
+  runId: string;
   requestId: number;
 };
 
@@ -63,23 +71,29 @@ type ResearchMessage = {
 };
 
 type ResearchContextValue = {
-  sessionId: string;
+  researchId: string | null;
+  researches: StoredResearch[];
   runs: ResearchRun[];
   selectedRun: ResearchRun | null;
   selectedRunId: string | null;
+  activeRun: ResearchRun | null;
   events: ResearchEvent[];
   sources: ResearchSource[];
   companies: Company[];
   connection: ConnectionState;
   isLoading: boolean;
   inspector: "trace" | "sources";
+  inspectorOpen: boolean;
   setInspector: (value: "trace" | "sources") => void;
+  closeInspector: () => void;
+  toggleInspector: (value: "trace" | "sources", runId: string) => void;
   evidenceFocus: EvidenceFocus | null;
-  focusEvidence: (evidenceId: string) => void;
+  focusEvidence: (evidenceId: string, runId: string) => void;
   start: (question: string) => Promise<void>;
   cancel: () => Promise<void>;
   retry: () => Promise<void>;
   feedback: (rating: FeedbackRating) => Promise<void>;
+  selectResearch: (researchId: string) => void;
   selectRun: (runId: string) => void;
   newResearch: () => void;
 };
@@ -87,11 +101,14 @@ type ResearchContextValue = {
 const ResearchContext = createContext<ResearchContextValue | null>(null);
 
 const queryKeys = {
-  history: (sessionId: string) => ["research", "history", sessionId] as const,
+  history: (researchId: string) => ["research", "history", researchId] as const,
   run: (runId: string) => ["research", "run", runId] as const,
   sources: (runId: string) => ["research", "sources", runId] as const,
   companies: ["companies"] as const,
 };
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function textFromMessage(message: AppendMessage): string {
   return message.content
@@ -192,26 +209,89 @@ function useEventStream(
   return { events, connection };
 }
 
-function mergeSelectedRun(runs: ResearchRun[], selected: ResearchRun | undefined): ResearchRun[] {
+function mergeSelectedRun(
+  runs: ResearchRun[],
+  selected: ResearchRun | undefined,
+  researchId: string | null,
+): ResearchRun[] {
   if (!selected || runs.some((run) => run.run_id === selected.run_id)) return runs;
+  if (researchId && selected.session_id !== researchId) return runs;
   return [...runs, selected].toSorted((left, right) =>
     left.queued_at.localeCompare(right.queued_at),
   );
 }
 
+function latestRunTimestamp(run: ResearchRun): string {
+  return run.completed_at ?? run.started_at ?? run.queued_at;
+}
+
+function activeRunFor(runs: ResearchRun[]): ResearchRun | null {
+  return runs.find((run) => !isTerminal(run.status)) ?? null;
+}
+
+function latestRunFor(runs: ResearchRun[]): ResearchRun | null {
+  return runs.at(-1) ?? null;
+}
+
+function upsertResearchFromRuns(
+  researchId: string,
+  runs: ResearchRun[],
+): StoredResearch[] | null {
+  if (runs.length === 0) return null;
+  const ordered = [...runs].toSorted((left, right) => left.queued_at.localeCompare(right.queued_at));
+  const first = ordered[0]!;
+  const latest = ordered[ordered.length - 1]!;
+  const active = activeRunFor(ordered);
+  return upsertResearchIndex({
+    researchId,
+    title: researchTitleFromQuestion(first.question),
+    lastRunId: latest.run_id,
+    lastQuestion: latest.question,
+    status: active?.status ?? latest.status,
+    createdAt: first.queued_at,
+    updatedAt: latestRunTimestamp(latest),
+  });
+}
+
 export function ResearchProvider({ children }: { children: ReactNode }) {
-  const [sessionId] = useState(() => getSessionId());
   const navigate = useNavigate();
-  const params = useParams<{ runId?: string }>();
-  const selectedRunId = params.runId === "new" ? null : params.runId ?? null;
+  const params = useParams<{ researchId?: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const routeResearchId = params.researchId ?? null;
+  const legacyRunId =
+    routeResearchId && routeResearchId !== "new" && UUID_PATTERN.test(routeResearchId)
+      ? routeResearchId
+      : null;
+  const researchId = routeResearchId === "new" || legacyRunId ? null : routeResearchId;
+  const requestedRunId = searchParams.get("run");
   const queryClient = useQueryClient();
+  const [researches, setResearches] = useState<StoredResearch[]>(() => loadResearchIndex());
   const [inspector, setInspector] = useState<"trace" | "sources">("trace");
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [evidenceFocus, setEvidenceFocus] = useState<EvidenceFocus | null>(null);
 
   const historyQuery = useQuery({
-    queryKey: queryKeys.history(sessionId),
-    queryFn: () => listResearch(sessionId),
+    queryKey: queryKeys.history(researchId ?? "none"),
+    queryFn: () => listResearchRuns(researchId!),
+    enabled: researchId !== null,
   });
+
+  const legacyRunQuery = useQuery({
+    queryKey: queryKeys.run(legacyRunId ?? "none"),
+    queryFn: () => getResearch(legacyRunId!),
+    enabled: legacyRunId !== null,
+  });
+
+  const historyRuns = useMemo(
+    () => [...(historyQuery.data?.items ?? [])].toSorted((left, right) =>
+      left.queued_at.localeCompare(right.queued_at),
+    ),
+    [historyQuery.data?.items],
+  );
+  const activeRun = activeRunFor(historyRuns);
+  const latestRun = latestRunFor(historyRuns);
+  const selectedRunId = requestedRunId ?? activeRun?.run_id ?? latestRun?.run_id ?? legacyRunId;
+
   const runQuery = useQuery({
     queryKey: queryKeys.run(selectedRunId ?? "none"),
     queryFn: () => getResearch(selectedRunId!),
@@ -234,12 +314,15 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
 
   const refreshRun = useCallback(() => {
     if (!selectedRunId) return;
-    void Promise.all([
+    const refreshes = [
       queryClient.invalidateQueries({ queryKey: queryKeys.run(selectedRunId) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.sources(selectedRunId) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.history(sessionId) }),
-    ]);
-  }, [queryClient, selectedRunId, sessionId]);
+    ];
+    if (researchId) {
+      refreshes.push(queryClient.invalidateQueries({ queryKey: queryKeys.history(researchId) }));
+    }
+    void Promise.all(refreshes);
+  }, [queryClient, researchId, selectedRunId]);
 
   const { events, connection } = useEventStream(selectedRunId, refreshRun);
   const streamedAnswer = useMemo(
@@ -253,10 +336,13 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
   );
 
   const runs = useMemo(
-    () => mergeSelectedRun(historyQuery.data?.items ?? [], runQuery.data),
-    [historyQuery.data?.items, runQuery.data],
+    () => mergeSelectedRun(historyRuns, runQuery.data, researchId),
+    [historyRuns, researchId, runQuery.data],
   );
   const selectedRun = runQuery.data ?? runs.find((run) => run.run_id === selectedRunId) ?? null;
+  const currentActiveRun = activeRun ?? (
+    selectedRun && !isTerminal(selectedRun.status) ? selectedRun : null
+  );
   const threadRuns = useMemo(
     () => selectRunsForThread(runs, selectedRunId),
     [runs, selectedRunId],
@@ -286,7 +372,45 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
     return result;
   }, [selectedRunId, streamedAnswer, threadRuns]);
 
-  const startMutation = useMutation({ mutationFn: (question: string) => startResearch(question, sessionId) });
+  useEffect(() => {
+    const run = legacyRunQuery.data;
+    if (!legacyRunId || !run) return;
+    let cancelled = false;
+    const nextResearches = upsertResearchIndex({
+      researchId: run.session_id,
+      title: researchTitleFromQuestion(run.question),
+      lastRunId: run.run_id,
+      lastQuestion: run.question,
+      status: run.status,
+      createdAt: run.queued_at,
+      updatedAt: latestRunTimestamp(run),
+    });
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setResearches(nextResearches);
+      void navigate(`/research/${run.session_id}?run=${run.run_id}`, { replace: true });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [legacyRunId, legacyRunQuery.data, navigate]);
+
+  useEffect(() => {
+    if (!researchId) return;
+    const nextResearches = upsertResearchFromRuns(researchId, runs);
+    if (!nextResearches) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setResearches(nextResearches);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [researchId, runs]);
+
+  const startMutation = useMutation({
+    mutationFn: (question: string) => startResearch(question, researchId),
+  });
   const cancelMutation = useMutation({ mutationFn: cancelResearch });
   const feedbackMutation = useMutation({
     mutationFn: ({ runId, rating }: { runId: string; rating: FeedbackRating }) =>
@@ -297,14 +421,24 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
     const clean = question.trim();
     if (!clean) return;
     const accepted = await startMutation.mutateAsync(clean);
-    await queryClient.invalidateQueries({ queryKey: queryKeys.history(sessionId) });
-    void navigate(`/research/${accepted.run_id}`);
+    setResearches(upsertResearchIndex({
+      researchId: accepted.session_id,
+      title: researchTitleFromQuestion(clean),
+      lastRunId: accepted.run_id,
+      lastQuestion: clean,
+      status: accepted.status,
+      updatedAt: new Date().toISOString(),
+    }));
+    await queryClient.invalidateQueries({ queryKey: queryKeys.history(accepted.session_id) });
+    void navigate(`/research/${accepted.session_id}?run=${accepted.run_id}`);
     setInspector("trace");
+    setInspectorOpen(false);
   };
 
   const cancel = async () => {
-    if (!selectedRunId) return;
-    await cancelMutation.mutateAsync(selectedRunId);
+    const cancellableRunId = currentActiveRun?.run_id ?? selectedRunId;
+    if (!cancellableRunId) return;
+    await cancelMutation.mutateAsync(cancellableRunId);
     refreshRun();
   };
 
@@ -317,19 +451,37 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
     await feedbackMutation.mutateAsync({ runId: selectedRunId, rating });
   };
 
-  const focusEvidence = useCallback((evidenceId: string) => {
+  const inspectRun = useCallback((runId: string) => {
+    if (!researchId) return;
+    setSearchParams({ run: runId });
+  }, [researchId, setSearchParams]);
+
+  const toggleInspector = useCallback((value: "trace" | "sources", runId: string) => {
+    if (inspectorOpen && inspector === value && selectedRunId === runId) {
+      setInspectorOpen(false);
+      return;
+    }
+    inspectRun(runId);
+    setInspector(value);
+    setInspectorOpen(true);
+  }, [inspectRun, inspector, inspectorOpen, selectedRunId]);
+
+  const focusEvidence = useCallback((evidenceId: string, runId: string) => {
+    inspectRun(runId);
     setInspector("sources");
+    setInspectorOpen(true);
     setEvidenceFocus((current) => ({
       evidenceId,
+      runId,
       requestId: (current?.requestId ?? 0) + 1,
     }));
-  }, []);
+  }, [inspectRun]);
 
   const runtime = useExternalStoreRuntime<ResearchMessage>({
     messages,
-    isLoading: historyQuery.isLoading || runQuery.isLoading,
-    isRunning: selectedRun ? !isTerminal(selectedRun.status) : false,
-    isSendDisabled: selectedRun ? !isTerminal(selectedRun.status) : false,
+    isLoading: historyQuery.isLoading || runQuery.isLoading || legacyRunQuery.isLoading,
+    isRunning: currentActiveRun !== null,
+    isSendDisabled: currentActiveRun !== null,
     convertMessage: toThreadMessage,
     onNew: async (message) => start(textFromMessage(message)),
     onCancel: cancel,
@@ -337,29 +489,44 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
   });
 
   const value: ResearchContextValue = {
-    sessionId,
+    researchId,
+    researches,
     runs,
     selectedRun,
     selectedRunId,
+    activeRun: currentActiveRun,
     events,
     sources: sourcesQuery.data?.sources ?? selectedRun?.result?.sources ?? [],
     companies: companiesQuery.data?.items ?? [],
     connection,
-    isLoading: historyQuery.isLoading || runQuery.isLoading,
+    isLoading: historyQuery.isLoading || runQuery.isLoading || legacyRunQuery.isLoading,
     inspector,
-    setInspector,
-    evidenceFocus,
+    inspectorOpen,
+    setInspector: (value) => {
+      setInspector(value);
+      setInspectorOpen(true);
+    },
+    closeInspector: () => setInspectorOpen(false),
+    toggleInspector,
+    evidenceFocus: evidenceFocus?.runId === selectedRunId ? evidenceFocus : null,
     focusEvidence,
     start,
     cancel,
     retry,
     feedback,
+    selectResearch: (nextResearchId) => {
+      setEvidenceFocus(null);
+      setInspector("trace");
+      setInspectorOpen(false);
+      void navigate(`/research/${nextResearchId}`);
+    },
     selectRun: (runId) => {
       setEvidenceFocus(null);
-      void navigate(`/research/${runId}`);
+      inspectRun(runId);
     },
     newResearch: () => {
       setInspector("trace");
+      setInspectorOpen(false);
       setEvidenceFocus(null);
       void navigate("/research/new");
     },
