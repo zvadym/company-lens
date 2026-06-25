@@ -578,7 +578,7 @@ def _resolve_extracted_follow_up_companies(
     resolved: ResolvedQuery,
     analysis: QuestionAnalysis | None,
 ) -> ResolvedQuery:
-    if not _should_extract_follow_up_company_mentions(resolved, analysis):
+    if not _should_extract_follow_up_company_mentions(resolved, analysis, state["question"]):
         return resolved
     messages = (
         ModelMessage(
@@ -626,13 +626,17 @@ def _resolve_extracted_follow_up_companies(
 def _should_extract_follow_up_company_mentions(
     resolved: ResolvedQuery,
     analysis: QuestionAnalysis | None,
+    question: str,
 ) -> bool:
     return (
         analysis is not None
         and analysis.is_follow_up
         and AgentCapability.FINANCIAL_FACTS in analysis.required_capabilities
         and not _has_company_like_entity(resolved)
-        and _question_may_name_new_company_target(analysis.normalized_question)
+        and (
+            _question_may_name_new_company_target(question)
+            or _question_may_name_new_company_target(analysis.normalized_question)
+        )
     )
 
 
@@ -768,7 +772,8 @@ def _prepare_company_data(
                 ),
             ),
         }
-    if result.prepared_tickers:
+    resolved_tickers = tuple(dict.fromkeys((*result.prepared_tickers, *result.skipped_tickers)))
+    if resolved_tickers:
         with suppress(Exception):
             resolved = runtime.context.tools.resolve_entities(state["question"])
             resolved = _resolve_extracted_follow_up_companies(
@@ -780,7 +785,7 @@ def _prepare_company_data(
             if not resolved.company_ids:
                 resolved = _merge_prepared_ticker_resolutions(
                     resolved,
-                    _resolve_prepared_tickers(runtime.context.tools, result.prepared_tickers),
+                    _resolve_prepared_tickers(runtime.context.tools, resolved_tickers),
                 )
             resolved = _merge_follow_up_if_needed(
                 resolved,

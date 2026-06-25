@@ -13,7 +13,11 @@ from company_lens.agent.schemas import AgentError, AgentErrorCategory, AgentErro
 from company_lens.config import Settings
 from company_lens.financials.schemas import FinancialFactQuery, FinancialFactQueryResult
 from company_lens.financials.service import FinancialFactQueryService
-from company_lens.identity import CompanyIdentityRegistry, load_curated_identities
+from company_lens.identity import (
+    CompanyIdentityRegistry,
+    CompanyIdentityResolution,
+    load_curated_identities,
+)
 from company_lens.ingestion.on_demand import (
     CompanyDataPreparationResult,
     OnDemandCompanyDataPreparer,
@@ -27,6 +31,7 @@ from company_lens.retrieval.adaptive import AdaptiveRetrievalService
 from company_lens.retrieval.adaptive_schemas import (
     AdaptiveRetrievalRequest,
     AdaptiveRetrievalResponse,
+    EntityCandidate,
     EntityResolution,
     ResolvedQuery,
 )
@@ -116,14 +121,10 @@ class SqlResearchTools:
             with self._session_factory.begin() as session:
                 if _has_identity_registry(session):
                     registry = CompanyIdentityRegistry(session=session)
-                    registry.hydrate_sec_ticker_map(ticker_map)
                     for mention in cleaned:
-                        resolved = EntityResolver(session=session).resolve(mention)
-                        registry_entities.extend(
-                            entity
-                            for entity in resolved.entities
-                            if entity.kind in {"company", "public_company"}
-                        )
+                        entity = _identity_resolution_entity(registry.resolve_mention(mention))
+                        if entity is not None:
+                            registry_entities.append(entity)
         except (SQLAlchemyError, ValueError):
             registry_entities = []
         return _dedupe_public_company_entities(
@@ -395,6 +396,41 @@ def _match_extracted_public_company_mentions(
                 )
             )
     return _dedupe_public_company_entities(tuple(matches))
+
+
+def _identity_resolution_entity(
+    resolution: CompanyIdentityResolution,
+) -> EntityResolution | None:
+    if not resolution.candidates:
+        return None
+    candidates = tuple(
+        EntityCandidate(
+            id=candidate.company_id,
+            canonical_value=(
+                str(candidate.company_id)
+                if candidate.company_id is not None
+                else candidate.primary_ticker or candidate.cik or candidate.legal_name
+            ),
+            display_value=candidate.display_name,
+            match_kind=f"identity:{candidate.match_kind}",
+        )
+        for candidate in resolution.candidates
+    )
+    local_candidates = tuple(candidate for candidate in candidates if candidate.id is not None)
+    if len(candidates) == 1 and local_candidates:
+        return EntityResolution(
+            kind="company",
+            mention=resolution.mention,
+            status="resolved",
+            canonical_value=candidates[0].canonical_value,
+            candidates=candidates,
+        )
+    return EntityResolution(
+        kind="public_company",
+        mention=resolution.mention,
+        status="ambiguous" if len(candidates) > 1 else "unresolved",
+        candidates=candidates,
+    )
 
 
 def _extracted_mention_matches_label(mention: str, label: str) -> bool:

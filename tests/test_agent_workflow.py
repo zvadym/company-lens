@@ -50,6 +50,7 @@ from company_lens.agent.workflow import (
     _merge_follow_up_if_needed,
     _merge_follow_up_resolution,
     _plan_request,
+    _prepare_company_data,
     _resolve_entities,
     build_research_graph,
     create_initial_agent_state,
@@ -1026,7 +1027,7 @@ def test_resolve_entities_extracts_follow_up_public_company_target() -> None:
             )
 
     analysis = QuestionAnalysis(
-        normalized_question="now do the same for Zoom",
+        normalized_question="Compare Zoom revenue growth over the last eight quarters.",
         route=ResearchRoute.CALCULATION,
         required_capabilities=(
             AgentCapability.FINANCIAL_FACTS,
@@ -1288,6 +1289,123 @@ def test_prepared_follow_up_company_resolves_company_id_from_extracted_ticker() 
     assert result["resolved_query"].company_ids == (ZOOM_ID,)
     assert tools.calls["prepare"] == 1
     assert tools.calls["financial"] == 2
+
+
+def test_ready_follow_up_ticker_resolves_company_id_from_skipped_prepare() -> None:
+    class ReadyZoomTools(FakeResearchTools):
+        def resolve_entities(self, query: str) -> ResolvedQuery:
+            self.calls["resolve"] += 1
+            if query == "ZM":
+                return ResolvedQuery(
+                    query=query,
+                    entities=(
+                        EntityResolution(
+                            kind="company",
+                            mention="zm",
+                            status="resolved",
+                            canonical_value=str(ZOOM_ID),
+                            candidates=(
+                                EntityCandidate(
+                                    id=ZOOM_ID,
+                                    canonical_value=str(ZOOM_ID),
+                                    display_value="Zoom Communications, Inc.",
+                                    match_kind="ticker",
+                                ),
+                            ),
+                        ),
+                    ),
+                    company_ids=(ZOOM_ID,),
+                    metrics=("revenue",),
+                )
+            return ResolvedQuery(query=query, metrics=("revenue",))
+
+        def resolve_public_company_mentions(
+            self,
+            mentions: Sequence[str],
+        ) -> tuple[EntityResolution, ...]:
+            self.calls["resolve_public_company_mentions"] += 1
+            assert mentions == ("Zoom",)
+            return (
+                public_company_resolution(
+                    mention="Zoom",
+                    ticker="ZM",
+                    display_name="Zoom Communications, Inc.",
+                    match_kind="sec_company_extracted",
+                ),
+            )
+
+        def prepare_companies(
+            self,
+            *,
+            tickers: tuple[str, ...],
+            company_ids: tuple[str, ...],
+            index_name: str,
+            index_version: str,
+        ) -> CompanyDataPreparationResult:
+            self.calls["prepare"] += 1
+            assert tickers == ("ZM",)
+            assert company_ids == ()
+            return CompanyDataPreparationResult(
+                status="skipped",
+                requested_tickers=tickers,
+                skipped_tickers=tickers,
+                prepared_tickers=(),
+            )
+
+    analysis = QuestionAnalysis(
+        normalized_question="Compare Zoom revenue growth over the last eight quarters.",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+        is_follow_up=True,
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.CALCULATION),
+        company_extraction=CompanyMentionExtraction(
+            mentions=("Zoom",),
+            new_company_target=True,
+            reason_codes=("explicit_company_target",),
+        ),
+    )
+    tools = ReadyZoomTools()
+    state = create_initial_agent_state(
+        "а тепер те саме для Zoom",
+        session_id="session-follow-up-ready-zoom",
+    )
+    state["analysis"] = analysis
+    state["resolved_query"] = ResolvedQuery(
+        query="а тепер те саме для Zoom",
+        entities=(
+            public_company_resolution(
+                mention="Zoom",
+                ticker="ZM",
+                display_name="Zoom Communications, Inc.",
+                match_kind="sec_company_extracted",
+            ),
+        ),
+        metrics=("revenue",),
+    )
+    state["session_memory"] = SessionMemory(
+        last_resolved_query=ResolvedQuery(
+            query="Compare Cloudflare revenue growth",
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+        )
+    )
+
+    update = _prepare_company_data(state, Runtime(context=ResearchAgentRuntime(model, tools)))
+
+    resolved = cast(ResolvedQuery, update["resolved_query"])
+    frame = cast(ResearchFrame, update["research_frame"])
+    assert resolved.company_ids == (ZOOM_ID,)
+    assert frame.company_targets[0].company_id == ZOOM_ID
+    assert frame.company_targets[0].source == "current_question"
+    assert not frame.inherited_from_previous
+    assert tools.calls["prepare"] == 1
+    assert tools.calls["resolve_public_company_mentions"] == 1
 
 
 def test_plan_request_abstains_before_planning_when_follow_up_financial_data_missing() -> None:

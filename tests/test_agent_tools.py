@@ -12,6 +12,7 @@ from company_lens.agent.schemas import AgentErrorCategory, AgentErrorSeverity
 from company_lens.agent.tools import ResearchToolError, SqlResearchTools
 from company_lens.config import Settings
 from company_lens.db.base import Base
+from company_lens.identity import CompanyIdentityRegistry, load_curated_identities
 from company_lens.ingestion.sec_client import SecCompany
 from company_lens.macro.schemas import FredObservation, FredSeriesMetadata, FredSeriesQuery
 from company_lens.retrieval.adaptive_schemas import ResolvedQuery
@@ -150,6 +151,50 @@ def test_sql_research_tools_resolves_extracted_public_company_brand_from_sec_map
     assert len(entities) == 1
     assert entities[0].mention == "Zoom"
     assert entities[0].candidates[0].canonical_value == "ZM"
+
+
+def test_sql_research_tools_resolves_extracted_mention_without_sec_map_hydration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSecClient:
+        def __enter__(self) -> FakeSecClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def fetch_ticker_map(self) -> dict[str, SecCompany]:
+            return {}
+
+    def fail_hydration(
+        self: CompanyIdentityRegistry,
+        ticker_map: dict[str, SecCompany],
+    ) -> None:
+        raise AssertionError("resolve_public_company_mentions should not hydrate the SEC map")
+
+    monkeypatch.setattr(
+        "company_lens.agent.tools.build_sec_client_from_settings",
+        lambda settings: FakeSecClient(),
+    )
+    monkeypatch.setattr(CompanyIdentityRegistry, "hydrate_sec_ticker_map", fail_hydration)
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    with factory.begin() as session:
+        CompanyIdentityRegistry(session=session).seed_curated_identities(
+            load_curated_identities()
+        )
+    tools = SqlResearchTools(
+        session_factory=factory,
+        settings=Settings(sec_user_agent="company-lens-test contact@example.com"),
+    )
+
+    entities = tools.resolve_public_company_mentions(("Google",))
+
+    assert len(entities) == 1
+    assert entities[0].mention == "Google"
+    assert entities[0].kind == "public_company"
+    assert entities[0].candidates[0].canonical_value == "GOOG"
 
 
 def test_sql_research_tools_ingests_missing_fred_series_on_demand(
