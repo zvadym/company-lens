@@ -13,6 +13,7 @@ StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
 
 class ModelPurpose(enum.StrEnum):
     PARSE = "parse"
+    ENTITY_EXTRACTION = "entity_extraction"
     PLAN = "plan"
     ANSWER = "answer"
     VALIDATE = "validate"

@@ -37,6 +37,7 @@ from company_lens.agent.model import ModelProviderError
 from company_lens.agent.schemas import (
     CalculationBranch,
     ChartBranch,
+    CompanyMentionExtraction,
     DocumentRetrievalBranch,
     ModelExecutionBranch,
     ModelExecutionPlan,
@@ -48,6 +49,7 @@ from company_lens.agent.workflow import (
     _merge_follow_up_if_needed,
     _merge_follow_up_resolution,
     _plan_request,
+    _resolve_entities,
     build_research_graph,
     create_initial_agent_state,
 )
@@ -72,6 +74,7 @@ from company_lens.retrieval.adaptive_schemas import (
     RetrievalPlan,
     RetrievalTrace,
 )
+from company_lens.retrieval.resolution import public_company_resolution
 
 COMPANY_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 NETFLIX_ID = uuid.UUID("33333333-3333-3333-3333-333333333333")
@@ -89,10 +92,12 @@ class FakeModelProvider:
         *,
         analysis: QuestionAnalysis,
         plan: ExecutionPlan,
+        company_extraction: CompanyMentionExtraction | None = None,
         texts: Sequence[str] = (),
     ) -> None:
         self.analysis = analysis
         self.plan = plan
+        self.company_extraction = company_extraction or CompanyMentionExtraction()
         self.texts = list(texts)
         self.purposes: list[ModelPurpose] = []
         self.model_calls: list[tuple[ModelPurpose, tuple[ModelMessage, ...]]] = []
@@ -108,6 +113,8 @@ class FakeModelProvider:
         self.model_calls.append((purpose, tuple(messages)))
         if output_type is QuestionAnalysis:
             output: BaseModel = self.analysis
+        elif output_type is CompanyMentionExtraction:
+            output = self.company_extraction
         elif output_type is ModelExecutionPlan:
             output = _model_execution_plan(self.plan)
         else:
@@ -257,6 +264,13 @@ class FakeResearchTools:
     def resolve_entities(self, query: str) -> ResolvedQuery:
         self.calls["resolve"] += 1
         return ResolvedQuery(query=query, company_ids=(COMPANY_ID,), metrics=("revenue",))
+
+    def resolve_public_company_mentions(
+        self,
+        mentions: Sequence[str],
+    ) -> tuple[EntityResolution, ...]:
+        self.calls["resolve_public_company_mentions"] += 1
+        return ()
 
     def prepare_companies(
         self,
@@ -987,6 +1001,118 @@ def test_follow_up_with_new_public_company_does_not_inherit_previous_company() -
     assert merged.metrics == ("revenue",)
 
 
+def test_resolve_entities_extracts_follow_up_public_company_target() -> None:
+    class CompanylessTools(FakeResearchTools):
+        def resolve_entities(self, query: str) -> ResolvedQuery:
+            self.calls["resolve"] += 1
+            return ResolvedQuery(query=query, metrics=("revenue",))
+
+        def resolve_public_company_mentions(
+            self,
+            mentions: Sequence[str],
+        ) -> tuple[EntityResolution, ...]:
+            self.calls["resolve_public_company_mentions"] += 1
+            assert mentions == ("Zoom",)
+            return (
+                public_company_resolution(
+                    mention="Zoom",
+                    ticker="ZM",
+                    display_name="Zoom Communications Inc.",
+                    match_kind="sec_company_extracted",
+                ),
+            )
+
+    analysis = QuestionAnalysis(
+        normalized_question="now do the same for Zoom",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+        is_follow_up=True,
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.CALCULATION),
+        company_extraction=CompanyMentionExtraction(
+            mentions=("Zoom",),
+            new_company_target=True,
+            reason_codes=("explicit_company_target",),
+        ),
+    )
+    tools = CompanylessTools()
+    state = create_initial_agent_state(
+        "а тепер те саме для Zoom",
+        session_id="session-follow-up-zoom",
+    )
+    state["analysis"] = analysis
+    state["session_memory"] = SessionMemory(
+        last_resolved_query=ResolvedQuery(
+            query="Compare Cloudflare revenue growth",
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+        )
+    )
+
+    update = _resolve_entities(state, Runtime(context=ResearchAgentRuntime(model, tools)))
+
+    resolved = cast(ResolvedQuery, update["resolved_query"])
+    public_company = next(entity for entity in resolved.entities if entity.kind == "public_company")
+    assert resolved.company_ids == ()
+    assert public_company.mention == "Zoom"
+    assert public_company.candidates[0].canonical_value == "ZM"
+    assert tools.calls["resolve_public_company_mentions"] == 1
+    assert ModelPurpose.ENTITY_EXTRACTION in model.purposes
+
+
+def test_resolve_entities_does_not_inherit_previous_company_for_unknown_extracted_target() -> None:
+    class CompanylessTools(FakeResearchTools):
+        def resolve_entities(self, query: str) -> ResolvedQuery:
+            self.calls["resolve"] += 1
+            return ResolvedQuery(query=query, metrics=("revenue",))
+
+    analysis = QuestionAnalysis(
+        normalized_question="now do the same for Globex",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+        is_follow_up=True,
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.CALCULATION),
+        company_extraction=CompanyMentionExtraction(
+            mentions=("Globex",),
+            new_company_target=True,
+            reason_codes=("explicit_company_target",),
+        ),
+    )
+    tools = CompanylessTools()
+    state = create_initial_agent_state(
+        "а тепер те саме для Globex",
+        session_id="session-follow-up-unknown-company",
+    )
+    state["analysis"] = analysis
+    state["session_memory"] = SessionMemory(
+        last_resolved_query=ResolvedQuery(
+            query="Compare Cloudflare revenue growth",
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+        )
+    )
+
+    update = _resolve_entities(state, Runtime(context=ResearchAgentRuntime(model, tools)))
+
+    resolved = cast(ResolvedQuery, update["resolved_query"])
+    public_company = next(entity for entity in resolved.entities if entity.kind == "public_company")
+    assert resolved.company_ids == ()
+    assert public_company.mention == "Globex"
+    assert public_company.candidates == ()
+    assert tools.calls["resolve_public_company_mentions"] == 1
+
+
 def test_follow_up_without_company_mention_still_inherits_previous_company() -> None:
     previous = ResolvedQuery(
         query="Compare Cloudflare revenue growth",
@@ -1252,9 +1378,7 @@ def test_add_series_follow_up_plan_accepts_previous_and_new_company_ids() -> Non
         recent_resolved_queries=(cloudflare, previous_chart),
     )
     merged = _merge_follow_up_if_needed(apple, analysis, memory)
-    branches: list[
-        FinancialFactsBranch | CalculationBranch | ChartBranch
-    ] = []
+    branches: list[FinancialFactsBranch | CalculationBranch | ChartBranch] = []
     growth_refs: list[str] = []
     for index, company_id in enumerate(merged.company_ids, start=1):
         facts_id = f"company_{index}_revenue"
@@ -1596,9 +1720,7 @@ def test_multi_company_chart_fallback_plan_handles_planner_provider_failure() ->
     )
 
     assert result["status"] is AgentRunStatus.COMPLETED
-    assert "deterministic_multi_company_growth_chart_plan" in result[
-        "execution_plan"
-    ].reason_codes
+    assert "deterministic_multi_company_growth_chart_plan" in result["execution_plan"].reason_codes
     assert result["chart_spec"] is not None
     assert len(result["chart_spec"].series) == 2
     assert any(error.code == "openai_unexpected" for error in result["errors"])

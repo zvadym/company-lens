@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Sequence
 from typing import Protocol
 
 from sqlalchemy import inspect
@@ -37,6 +38,11 @@ class ResearchTools(Protocol):
     """Provider-neutral data port used by research graph nodes."""
 
     def resolve_entities(self, query: str) -> ResolvedQuery: ...
+
+    def resolve_public_company_mentions(
+        self,
+        mentions: Sequence[str],
+    ) -> tuple[EntityResolution, ...]: ...
 
     def prepare_companies(
         self,
@@ -90,6 +96,39 @@ class SqlResearchTools:
         if not public_entities:
             return resolved
         return resolved.model_copy(update={"entities": (*resolved.entities, *public_entities)})
+
+    def resolve_public_company_mentions(
+        self,
+        mentions: Sequence[str],
+    ) -> tuple[EntityResolution, ...]:
+        cleaned = tuple(
+            dict.fromkeys(" ".join(mention.split()) for mention in mentions if mention.strip())
+        )
+        if not cleaned or self._settings is None or not self._settings.sec_user_agent:
+            return ()
+        try:
+            with build_sec_client_from_settings(self._settings) as client:
+                ticker_map = client.fetch_ticker_map()
+        except Exception:
+            return ()
+        registry_entities: list[EntityResolution] = []
+        try:
+            with self._session_factory.begin() as session:
+                if _has_identity_registry(session):
+                    registry = CompanyIdentityRegistry(session=session)
+                    registry.hydrate_sec_ticker_map(ticker_map)
+                    for mention in cleaned:
+                        resolved = EntityResolver(session=session).resolve(mention)
+                        registry_entities.extend(
+                            entity
+                            for entity in resolved.entities
+                            if entity.kind in {"company", "public_company"}
+                        )
+        except (SQLAlchemyError, ValueError):
+            registry_entities = []
+        return _dedupe_public_company_entities(
+            (*registry_entities, *_match_extracted_public_company_mentions(cleaned, ticker_map))
+        )
 
     def prepare_companies(
         self,
@@ -317,6 +356,71 @@ def _match_public_companies(
         )
         for mention, company, match_kind in matches[:5]
     )
+
+
+def _match_extracted_public_company_mentions(
+    mentions: Sequence[str],
+    ticker_map: dict[str, SecCompany],
+) -> tuple[EntityResolution, ...]:
+    matches: list[EntityResolution] = []
+    for mention in mentions:
+        normalized_mention = _normalize(mention)
+        if not normalized_mention:
+            continue
+        exact_ticker = ticker_map.get(mention.strip().upper())
+        if exact_ticker is not None:
+            matches.append(
+                public_company_resolution(
+                    mention=mention,
+                    ticker=exact_ticker.ticker,
+                    display_name=exact_ticker.name,
+                    match_kind="sec_ticker_extracted",
+                )
+            )
+            continue
+        candidates: list[SecCompany] = []
+        for company in ticker_map.values():
+            label = _company_label(company.name)
+            if _extracted_mention_matches_label(normalized_mention, label):
+                candidates.append(company)
+        unique_candidates = {candidate.ticker.upper(): candidate for candidate in candidates}
+        if len(unique_candidates) == 1:
+            company = next(iter(unique_candidates.values()))
+            matches.append(
+                public_company_resolution(
+                    mention=mention,
+                    ticker=company.ticker,
+                    display_name=company.name,
+                    match_kind="sec_company_extracted",
+                )
+            )
+    return _dedupe_public_company_entities(tuple(matches))
+
+
+def _extracted_mention_matches_label(mention: str, label: str) -> bool:
+    if not label or len(mention) < 2:
+        return False
+    if mention == label:
+        return True
+    if len(mention) >= 4 and label.startswith(f"{mention} "):
+        return True
+    label_tokens = label.split()
+    mention_tokens = mention.split()
+    return len(mention_tokens) > 1 and label_tokens[: len(mention_tokens)] == mention_tokens
+
+
+def _dedupe_public_company_entities(
+    entities: Sequence[EntityResolution],
+) -> tuple[EntityResolution, ...]:
+    unique: dict[tuple[str, str], EntityResolution] = {}
+    for entity in entities:
+        key = (
+            entity.kind,
+            entity.canonical_value
+            or (entity.candidates[0].canonical_value if entity.candidates else entity.mention),
+        )
+        unique.setdefault(key, entity)
+    return tuple(unique.values())
 
 
 def _missing_fred_series(result: FredSeriesResult) -> tuple[str, ...]:

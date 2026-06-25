@@ -108,6 +108,50 @@ def test_sql_research_tools_discovers_public_company_from_sec_ticker_map(
     assert entity.candidates[0].canonical_value == "NFLX"
 
 
+def test_sql_research_tools_resolves_extracted_public_company_brand_from_sec_map(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class EmptyResolver:
+        def __init__(self, *, session: Session) -> None:
+            pass
+
+        def resolve(self, query: str) -> ResolvedQuery:
+            return ResolvedQuery(query=query)
+
+    class FakeSecClient:
+        def __enter__(self) -> FakeSecClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def fetch_ticker_map(self) -> dict[str, SecCompany]:
+            return {
+                "ZM": SecCompany(
+                    ticker="ZM",
+                    cik="0001585521",
+                    name="Zoom Communications Inc.",
+                )
+            }
+
+    monkeypatch.setattr("company_lens.agent.tools.EntityResolver", EmptyResolver)
+    monkeypatch.setattr(
+        "company_lens.agent.tools.build_sec_client_from_settings",
+        lambda settings: FakeSecClient(),
+    )
+    factory = sessionmaker(bind=create_engine("sqlite+pysqlite:///:memory:"))
+    tools = SqlResearchTools(
+        session_factory=factory,
+        settings=Settings(sec_user_agent="company-lens-test contact@example.com"),
+    )
+
+    entities = tools.resolve_public_company_mentions(("Zoom",))
+
+    assert len(entities) == 1
+    assert entities[0].mention == "Zoom"
+    assert entities[0].candidates[0].canonical_value == "ZM"
+
+
 def test_sql_research_tools_ingests_missing_fred_series_on_demand(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

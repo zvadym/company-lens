@@ -41,6 +41,7 @@ from company_lens.agent.schemas import (
     CalculationOperation,
     ChartBranch,
     CitationReference,
+    CompanyMentionExtraction,
     DocumentRetrievalBranch,
     EvidenceEnvelope,
     EvidenceKind,
@@ -102,7 +103,7 @@ from company_lens.observability.telemetry import (
     record_retrieval,
     record_validation,
 )
-from company_lens.retrieval.adaptive_schemas import ResolvedQuery
+from company_lens.retrieval.adaptive_schemas import EntityResolution, ResolvedQuery
 from company_lens.retrieval.embeddings import DEFAULT_OPENAI_INDEX_VERSION
 from company_lens.security import prompt_injection_flags, sanitize_untrusted_text
 
@@ -535,16 +536,13 @@ def _asks_about_previous_chart_context(
         )
     ):
         return True
-    return (
-        ("графік" in normalized or "chart" in normalized or "plot" in normalized)
-        and (
-            "період" in normalized
-            or "period" in normalized
-            or "репорт" in normalized
-            or "report" in normalized
-            or "скільки" in normalized
-            or "how many" in normalized
-        )
+    return ("графік" in normalized or "chart" in normalized or "plot" in normalized) and (
+        "період" in normalized
+        or "period" in normalized
+        or "репорт" in normalized
+        or "report" in normalized
+        or "скільки" in normalized
+        or "how many" in normalized
     )
 
 
@@ -569,6 +567,89 @@ def _looks_ukrainian(text: str) -> bool:
     return any(token in normalized for token in ("граф", "період", "скільки", "репорт"))
 
 
+def _resolve_extracted_follow_up_companies(
+    state: AgentState,
+    runtime: Runtime[ResearchAgentRuntime],
+    resolved: ResolvedQuery,
+    analysis: QuestionAnalysis | None,
+) -> ResolvedQuery:
+    if not _should_extract_follow_up_company_mentions(resolved, analysis):
+        return resolved
+    messages = (
+        ModelMessage(
+            role="system",
+            content=(
+                "Extract public-company names or stock tickers explicitly present in the current "
+                "user message. This is not canonical resolution: do not infer aliases, do not use "
+                "prior conversation context, and do not add companies that are only implied. "
+                "Set new_company_target only when the message asks to apply the prior task to a "
+                "new explicitly named company. Use English lowercase_snake_case reason codes."
+            ),
+        ),
+        ModelMessage(
+            role="user",
+            content=(
+                f"Current user message: {state['question']}\n"
+                f"Normalized question: {_normalized_analysis_question(state, analysis)}\n"
+                f"Route: {analysis.route if analysis else 'unknown'}\n"
+                "Return only company mentions from the current user message."
+            ),
+        ),
+    )
+    extraction, _attempts, error = _generate_structured_with_retries(
+        runtime.context.model_provider,
+        messages,
+        CompanyMentionExtraction,
+        purpose=ModelPurpose.ENTITY_EXTRACTION,
+        max_retries=state["policy"].max_retries_per_node,
+        node="resolve_entities",
+    )
+    if error is not None or extraction is None:
+        return resolved
+    if not extraction.new_company_target or not extraction.mentions:
+        return resolved
+    resolved_entities = runtime.context.tools.resolve_public_company_mentions(extraction.mentions)
+    if resolved_entities:
+        return _resolved_query_with_extra_entities(resolved, resolved_entities)
+    unresolved_mentions = tuple(
+        EntityResolution(kind="public_company", mention=mention, status="unresolved")
+        for mention in extraction.mentions
+    )
+    return _resolved_query_with_extra_entities(resolved, unresolved_mentions)
+
+
+def _should_extract_follow_up_company_mentions(
+    resolved: ResolvedQuery,
+    analysis: QuestionAnalysis | None,
+) -> bool:
+    return (
+        analysis is not None
+        and analysis.is_follow_up
+        and AgentCapability.FINANCIAL_FACTS in analysis.required_capabilities
+        and not _has_company_like_entity(resolved)
+    )
+
+
+def _resolved_query_with_extra_entities(
+    resolved: ResolvedQuery,
+    entities: tuple[EntityResolution, ...],
+) -> ResolvedQuery:
+    seen = {(entity.kind, entity.mention.casefold()) for entity in resolved.entities}
+    additions = tuple(
+        entity for entity in entities if (entity.kind, entity.mention.casefold()) not in seen
+    )
+    if not additions:
+        return resolved
+    return resolved.model_copy(update={"entities": (*resolved.entities, *additions)})
+
+
+def _normalized_analysis_question(
+    state: AgentState,
+    analysis: QuestionAnalysis | None,
+) -> str:
+    return analysis.normalized_question if analysis is not None else state["question"]
+
+
 def _resolve_entities(
     state: AgentState, runtime: Runtime[ResearchAgentRuntime]
 ) -> dict[str, object]:
@@ -579,6 +660,12 @@ def _resolve_entities(
         resolved = runtime.context.tools.resolve_entities(state["question"])
         analysis = state.get("analysis")
         memory = state.get("session_memory")
+        resolved = _resolve_extracted_follow_up_companies(
+            state,
+            runtime,
+            resolved,
+            analysis,
+        )
         resolved = _merge_follow_up_if_needed(resolved, analysis, memory)
     except ResearchToolError as exc:
         error = exc.error.model_copy(update={"node": "resolve_entities"})
@@ -972,9 +1059,8 @@ def _requests_period_override(question: str, analysis: QuestionAnalysis) -> bool
         for marker in ("change_period", "period_override", "date_range")
     ):
         return True
-    return (
-        _period_override(question) is not None
-        and any(marker in normalized for marker in ("same", "такий", "такий сам", "цей", "граф"))
+    return _period_override(question) is not None and any(
+        marker in normalized for marker in ("same", "такий", "такий сам", "цей", "граф")
     )
 
 
@@ -1107,15 +1193,11 @@ def _previous_growth_operation(memory: SessionMemory | None) -> CalculationOpera
     if memory is None or memory.last_execution_plan is None:
         return None
     for branch in reversed(memory.last_execution_plan.branches):
-        if (
-            isinstance(branch, CalculationBranch)
-            and branch.operation
-            in {
-                "quarter_over_quarter_growth",
-                "year_over_year_growth",
-                "percentage_change",
-            }
-        ):
+        if isinstance(branch, CalculationBranch) and branch.operation in {
+            "quarter_over_quarter_growth",
+            "year_over_year_growth",
+            "percentage_change",
+        }:
             return branch.operation
     return None
 
@@ -2438,9 +2520,7 @@ def _planning_artifact_context(memory: SessionMemory | None) -> tuple[dict[str, 
                 "start": artifact.period_start.isoformat()
                 if artifact.period_start is not None
                 else None,
-                "end": artifact.period_end.isoformat()
-                if artifact.period_end is not None
-                else None,
+                "end": artifact.period_end.isoformat() if artifact.period_end is not None else None,
                 "point_count": artifact.point_count,
             },
             "source_branch_ids": artifact.source_branch_ids,
@@ -2925,9 +3005,7 @@ def _merge_follow_up_resolution(
         ()
         if current_has_company and not include_previous_companies
         else tuple(
-            entity
-            for entity in previous.entities
-            if entity.kind in {"company", "public_company"}
+            entity for entity in previous.entities if entity.kind in {"company", "public_company"}
         )
     )
     inherited_entities = tuple(

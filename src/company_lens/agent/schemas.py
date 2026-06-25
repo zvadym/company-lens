@@ -129,6 +129,28 @@ class QuestionAnalysis(FrozenModel):
         return self
 
 
+class CompanyMentionExtraction(FrozenModel):
+    mentions: tuple[str, ...] = ()
+    new_company_target: bool = False
+    reason_codes: tuple[str, ...] = ()
+
+    @field_validator("mentions")
+    @classmethod
+    def normalize_mentions(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = tuple(dict.fromkeys(" ".join(item.split()) for item in value if item.strip()))
+        if any(len(item) > 120 for item in cleaned):
+            raise ValueError("mentions must be concise company names or tickers.")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_extraction(self) -> CompanyMentionExtraction:
+        if len(self.reason_codes) != len(set(self.reason_codes)):
+            raise ValueError("reason_codes must be unique.")
+        if any(not _is_reason_code(value) for value in self.reason_codes):
+            raise ValueError("reason_codes must use lowercase snake_case identifiers.")
+        return self
+
+
 class ExecutionPolicy(FrozenModel):
     max_tool_calls: int = Field(default=10, ge=1, le=100)
     max_retries_per_node: int = Field(default=2, ge=0, le=10)
