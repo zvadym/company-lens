@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal, NotRequired, Required, TypedDict
 
@@ -379,11 +379,29 @@ class CachedSourceResult(FrozenModel):
         return self
 
 
+class SessionArtifactContext(FrozenModel):
+    artifact_id: str
+    run_id: uuid.UUID
+    kind: Literal["chart"] = "chart"
+    user_question: str
+    title: str | None = None
+    chart_type: str | None = None
+    series_labels: tuple[str, ...] = ()
+    company_ids: tuple[uuid.UUID, ...] = ()
+    metrics: tuple[str, ...] = ()
+    calculations: tuple[str, ...] = ()
+    period_start: date | None = None
+    period_end: date | None = None
+    point_count: int | None = None
+    source_branch_ids: tuple[str, ...] = ()
+
+
 class SessionMemory(FrozenModel):
     last_resolved_query: ResolvedQuery | None = None
     recent_resolved_queries: tuple[ResolvedQuery, ...] = ()
     last_execution_plan: ExecutionPlan | None = None
     last_chart_spec: ChartSpecification | None = None
+    recent_artifacts: tuple[SessionArtifactContext, ...] = ()
     cached_source_results: tuple[CachedSourceResult, ...] = ()
     evidence: tuple[EvidenceEnvelope, ...] = ()
     updated_at: datetime | None = None

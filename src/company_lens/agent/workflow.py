@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -56,6 +57,7 @@ from company_lens.agent.schemas import (
     QuestionAnalysis,
     ResearchRoute,
     RetrievalBranchResult,
+    SessionArtifactContext,
     SessionMemory,
     SessionMessage,
     TrajectoryEvent,
@@ -78,6 +80,7 @@ from company_lens.analytics.schemas import (
     CalculationResult,
     ChartPoint,
     ChartSeries,
+    ChartSpecification,
     NumericObservation,
     ValidatedChartDataset,
 )
@@ -443,36 +446,73 @@ def _previous_chart_context_answer(
     analysis: QuestionAnalysis | None,
     memory: SessionMemory | None,
 ) -> str | None:
-    if memory is None or memory.last_chart_spec is None:
+    if memory is None:
         return None
     if not _asks_about_previous_chart_context(question, analysis):
         return None
-    chart = memory.last_chart_spec
-    if not chart.data:
+    artifact = _selected_chart_artifact(memory)
+    if artifact is None:
+        return _legacy_previous_chart_context_answer(question, memory.last_chart_spec)
+    if artifact.period_start is None or artifact.period_end is None or artifact.point_count is None:
         return None
-    dates = tuple(point.x for point in chart.data)
-    start = min(dates)
-    end = max(dates)
-    point_count = len(chart.data)
-    series_labels = ", ".join(series.label for series in chart.series)
+    series_labels = ", ".join(artifact.series_labels)
     if _looks_ukrainian(question):
         return (
             "## Період графіка\n\n"
-            f"Останній графік був за період з {start.isoformat()} до {end.isoformat()}.\n\n"
+            "Останній релевантний графік "
+            f"`{artifact.artifact_id}` був за період з "
+            f"{artifact.period_start.isoformat()} до {artifact.period_end.isoformat()}.\n\n"
             "## Кількість звітних періодів\n\n"
-            f"На графіку було {point_count} точок, тобто {point_count} останніх "
+            f"На графіку було {artifact.point_count} точок, тобто {artifact.point_count} останніх "
             "звітних періодів у побудованому наборі даних.\n\n"
             "## Серії\n\n"
             f"Серії на графіку: {series_labels}."
         )
     return (
         "## Chart Period\n\n"
-        f"The latest chart covered {start.isoformat()} through {end.isoformat()}.\n\n"
+        f"The latest relevant chart `{artifact.artifact_id}` covered "
+        f"{artifact.period_start.isoformat()} through {artifact.period_end.isoformat()}.\n\n"
         "## Report Count\n\n"
-        f"The chart had {point_count} points, meaning {point_count} latest reporting "
-        "periods in the plotted dataset.\n\n"
+        f"The chart had {artifact.point_count} points, meaning {artifact.point_count} "
+        "latest reporting periods in the plotted dataset.\n\n"
         "## Series\n\n"
         f"The chart series were: {series_labels}."
+    )
+
+
+def _selected_chart_artifact(memory: SessionMemory) -> SessionArtifactContext | None:
+    return next(
+        (artifact for artifact in reversed(memory.recent_artifacts) if artifact.kind == "chart"),
+        None,
+    )
+
+
+def _legacy_previous_chart_context_answer(
+    question: str,
+    chart: ChartSpecification | None,
+) -> str | None:
+    if chart is None or not chart.data:
+        return None
+    dates = tuple(point.x for point in chart.data)
+    artifact = SessionArtifactContext(
+        artifact_id="chart:latest",
+        run_id=uuid.UUID(int=0),
+        user_question="",
+        title=chart.title,
+        chart_type=chart.chart_type,
+        series_labels=tuple(series.label for series in chart.series),
+        period_start=min(dates),
+        period_end=max(dates),
+        point_count=len(chart.data),
+    )
+    return _previous_chart_context_answer(
+        question,
+        QuestionAnalysis(
+            normalized_question=question,
+            route=ResearchRoute.UNSUPPORTED,
+            reason_codes=("previous_chart",),
+        ),
+        SessionMemory(recent_artifacts=(artifact,)),
     )
 
 
@@ -481,6 +521,8 @@ def _asks_about_previous_chart_context(
     analysis: QuestionAnalysis | None,
 ) -> bool:
     normalized = question.casefold()
+    if _question_requests_chart_rebuild(normalized):
+        return False
     reason_codes = analysis.reason_codes if analysis is not None else ()
     if any(
         marker in reason
@@ -502,6 +544,22 @@ def _asks_about_previous_chart_context(
             or "report" in normalized
             or "скільки" in normalized
             or "how many" in normalized
+        )
+    )
+
+
+def _question_requests_chart_rebuild(normalized_question: str) -> bool:
+    return any(
+        marker in normalized_question
+        for marker in (
+            "побудуй",
+            "побудувати",
+            "намалюй",
+            "покажи",
+            "build",
+            "plot",
+            "chart ",
+            "show ",
         )
     )
 
@@ -665,6 +723,39 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         }
     memory = state.get("session_memory")
     previous_plan = memory.last_execution_plan if memory is not None else None
+    artifact_period_plan = _fallback_recent_artifact_period_plan(
+        state["question"],
+        analysis,
+        resolved,
+        memory,
+    )
+    if artifact_period_plan is not None:
+        reconciled_analysis = _reconcile_analysis_with_plan(analysis, artifact_period_plan)
+        try:
+            plan = _normalize_and_validate_plan(
+                artifact_period_plan,
+                reconciled_analysis,
+                resolved,
+                state["policy"],
+                retrieval_index_name=runtime.context.retrieval_index_name,
+                retrieval_index_version=runtime.context.retrieval_index_version,
+            )
+        except ValueError:
+            plan = None
+        if plan is not None:
+            return {
+                "execution_plan": plan,
+                "analysis": reconciled_analysis,
+                "node_attempts": (NodeAttempt(node="plan_request", attempts=1),),
+                "trajectory": (
+                    _event(
+                        "plan_request",
+                        TrajectoryStatus.COMPLETED,
+                        "Reused a recent artifact with an updated period.",
+                        started,
+                    ),
+                ),
+            }
     planning_context = json.dumps(
         {
             "question": state["question"],
@@ -674,6 +765,7 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
             "previous_plan": (
                 previous_plan.model_dump(mode="json") if previous_plan is not None else None
             ),
+            "recent_artifacts": _planning_artifact_context(memory),
         },
         sort_keys=True,
     )
@@ -689,6 +781,10 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
                 "depend on one numeric branch, but comparison charts must depend on every plotted "
                 "source or calculation branch. The plan route must describe its concrete branches. "
                 "Mark a branch optional only when the question can still be answered without it. "
+                "For follow-up requests, use recent_artifacts to resolve references like same, "
+                "that chart, there, previous, add to it, or a changed period before inventing a "
+                "new task shape. Preserve the referenced artifact's companies, metrics, "
+                "calculation operations, and chart type unless the user explicitly overrides them. "
                 "Do not include explanations beyond short reason codes. "
                 "Use English for all structured fields, internal planning labels, reason codes, "
                 "and tool-oriented summaries."
@@ -796,6 +892,124 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
 
 def _requires_financial_company(analysis: QuestionAnalysis) -> bool:
     return AgentCapability.FINANCIAL_FACTS in analysis.required_capabilities
+
+
+def _fallback_recent_artifact_period_plan(
+    question: str,
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+    memory: SessionMemory | None,
+) -> ExecutionPlan | None:
+    if memory is None or not analysis.is_follow_up or not analysis.chart_requested:
+        return None
+    if not _requests_period_override(question, analysis):
+        return None
+    artifact = _selected_chart_artifact(memory)
+    if artifact is None or not artifact.company_ids:
+        return None
+    company_ids = tuple(
+        company_id for company_id in artifact.company_ids if company_id in set(resolved.company_ids)
+    )
+    if not company_ids:
+        return None
+    metric = (artifact.metrics or resolved.metrics or ("revenue",))[0]
+    operation = _artifact_growth_operation(artifact) or _previous_growth_operation(memory)
+    if operation is None:
+        return None
+    period = _period_override(question)
+    if period is None:
+        return None
+    period_start, period_end = period
+    branches: list[ExecutionBranch] = []
+    growth_refs: list[str] = []
+    for index, company_id in enumerate(company_ids, start=1):
+        facts_id = f"artifact_{index}_{metric}_facts"
+        growth_id = f"artifact_{index}_{metric}_growth"
+        branches.append(
+            FinancialFactsBranch(
+                branch_id=facts_id,
+                request=FinancialFactQuery(
+                    company_ids=(company_id,),
+                    metrics=(metric,),
+                    period_start=period_start,
+                    period_end=period_end,
+                    period_types=("quarter",),
+                    limit=DEFAULT_CHART_QUARTERLY_FACT_LIMIT,
+                ),
+            )
+        )
+        branches.append(
+            CalculationBranch(
+                branch_id=growth_id,
+                operation=operation,
+                input_refs=(facts_id,),
+                depends_on=(facts_id,),
+            )
+        )
+        growth_refs.append(growth_id)
+    chart_type = _artifact_chart_type(artifact)
+    branches.append(
+        ChartBranch(
+            branch_id="artifact_period_chart",
+            chart_type=chart_type,
+            dataset_ref=growth_refs[0],
+            depends_on=tuple(growth_refs),
+            title=artifact.title or f"{metric.title()} growth comparison",
+        )
+    )
+    return ExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=tuple(branches),
+        reason_codes=("deterministic_recent_artifact_period_plan",),
+    )
+
+
+def _requests_period_override(question: str, analysis: QuestionAnalysis) -> bool:
+    normalized = question.casefold()
+    if any(
+        marker in reason
+        for reason in analysis.reason_codes
+        for marker in ("change_period", "period_override", "date_range")
+    ):
+        return True
+    return (
+        _period_override(question) is not None
+        and any(marker in normalized for marker in ("same", "такий", "такий сам", "цей", "граф"))
+    )
+
+
+def _period_override(question: str) -> tuple[date, date] | None:
+    years = [int(match.group(0)) for match in re.finditer(r"\b20\d{2}\b", question)]
+    if not years:
+        return None
+    start_year = min(years)
+    end_year = max(years)
+    return date(start_year, 1, 1), date(end_year, 12, 31)
+
+
+def _artifact_growth_operation(artifact: SessionArtifactContext) -> CalculationOperation | None:
+    for operation in artifact.calculations:
+        if operation in {
+            "quarter_over_quarter_growth",
+            "year_over_year_growth",
+            "percentage_change",
+            "absolute_change",
+            "cagr",
+            "margin",
+            "rolling_average",
+            "normalised_index",
+            "correlation",
+        }:
+            return cast(CalculationOperation, operation)
+    return None
+
+
+def _artifact_chart_type(
+    artifact: SessionArtifactContext,
+) -> Literal["line", "bar", "area", "scatter"]:
+    if artifact.chart_type in {"line", "bar", "area", "scatter"}:
+        return cast(Literal["line", "bar", "area", "scatter"], artifact.chart_type)
+    return "line"
 
 
 def _fallback_multi_company_growth_chart_plan(
@@ -2141,6 +2355,11 @@ def _updated_session_memory(state: AgentState, cache_limit: int) -> SessionMemor
             cached[(entry.kind, entry.request_fingerprint)] = entry
     resolved = state.get("resolved_query")
     entries = tuple(sorted(cached.values(), key=lambda item: item.stored_at)[-cache_limit:])
+    chart = state.get("chart_spec")
+    artifacts = _updated_recent_artifacts(
+        previous.recent_artifacts,
+        _chart_artifact_context(state, chart) if chart is not None else None,
+    )
     return SessionMemory(
         last_resolved_query=resolved or previous.last_resolved_query,
         recent_resolved_queries=_updated_recent_resolved_queries(
@@ -2148,10 +2367,85 @@ def _updated_session_memory(state: AgentState, cache_limit: int) -> SessionMemor
             resolved,
         ),
         last_execution_plan=plan or previous.last_execution_plan,
-        last_chart_spec=state.get("chart_spec") or previous.last_chart_spec,
+        last_chart_spec=chart or previous.last_chart_spec,
+        recent_artifacts=artifacts,
         cached_source_results=entries,
         evidence=state.get("evidence", ()) or previous.evidence,
         updated_at=stored_at,
+    )
+
+
+def _chart_artifact_context(
+    state: AgentState,
+    chart: ChartSpecification,
+) -> SessionArtifactContext | None:
+    if not chart.data:
+        return None
+    plan = state.get("execution_plan")
+    resolved = state.get("resolved_query")
+    dates = tuple(point.x for point in chart.data)
+    return SessionArtifactContext(
+        artifact_id=f"chart:{state['run_id']}",
+        run_id=state["run_id"],
+        user_question=state["question"],
+        title=chart.title,
+        chart_type=chart.chart_type,
+        series_labels=tuple(series.label for series in chart.series),
+        company_ids=resolved.company_ids if resolved is not None else (),
+        metrics=resolved.metrics if resolved is not None else (),
+        calculations=tuple(
+            branch.operation for branch in plan.branches if isinstance(branch, CalculationBranch)
+        )
+        if plan is not None
+        else (),
+        period_start=min(dates),
+        period_end=max(dates),
+        point_count=len(chart.data),
+        source_branch_ids=tuple(branch.branch_id for branch in _source_branches(plan))
+        if plan is not None
+        else (),
+    )
+
+
+def _updated_recent_artifacts(
+    previous: tuple[SessionArtifactContext, ...],
+    current: SessionArtifactContext | None,
+    *,
+    limit: int = 8,
+) -> tuple[SessionArtifactContext, ...]:
+    if current is None:
+        return previous[-limit:]
+    retained = tuple(item for item in previous if item.artifact_id != current.artifact_id)
+    return (*retained, current)[-limit:]
+
+
+def _planning_artifact_context(memory: SessionMemory | None) -> tuple[dict[str, object], ...]:
+    if memory is None:
+        return ()
+    return tuple(
+        {
+            "artifact_id": artifact.artifact_id,
+            "run_id": str(artifact.run_id),
+            "kind": artifact.kind,
+            "user_question": artifact.user_question,
+            "title": artifact.title,
+            "chart_type": artifact.chart_type,
+            "series_labels": artifact.series_labels,
+            "company_ids": tuple(str(company_id) for company_id in artifact.company_ids),
+            "metrics": artifact.metrics,
+            "calculations": artifact.calculations,
+            "period": {
+                "start": artifact.period_start.isoformat()
+                if artifact.period_start is not None
+                else None,
+                "end": artifact.period_end.isoformat()
+                if artifact.period_end is not None
+                else None,
+                "point_count": artifact.point_count,
+            },
+            "source_branch_ids": artifact.source_branch_ids,
+        }
+        for artifact in memory.recent_artifacts
     )
 
 
@@ -2669,13 +2963,15 @@ def _merge_follow_up_if_needed(
         analysis is not None
         and analysis.is_follow_up
         and memory is not None
-        and memory.last_resolved_query is not None
+        and (memory.last_resolved_query is not None or memory.recent_artifacts)
     ):
         previous = (
             _recent_company_context(memory)
             if _should_inherit_recent_companies(resolved, analysis, memory)
             else memory.last_resolved_query
         )
+        if previous is None:
+            return resolved
         return _merge_follow_up_resolution(
             resolved,
             previous,
@@ -2719,7 +3015,10 @@ def _should_inherit_recent_companies(
 ) -> bool:
     if _has_company_like_entity(resolved):
         return _should_add_to_existing_company_set(resolved, analysis, memory)
-    if len(_recent_company_ids(memory)) < 2:
+    recent_company_count = len(_recent_company_ids(memory))
+    if _requests_period_override(analysis.normalized_question, analysis):
+        return recent_company_count >= 1
+    if recent_company_count < 2:
         return False
     return _references_multiple_prior_companies(analysis.normalized_question) or (
         analysis.chart_requested and _analysis_requests_comparison(analysis)
@@ -2792,7 +3091,7 @@ def _recent_company_context(memory: SessionMemory) -> ResolvedQuery:
     queries = memory.recent_resolved_queries or (memory.last_resolved_query,)
     queries = tuple(query for query in queries if query is not None)
     if not queries:
-        return memory.last_resolved_query
+        return _recent_artifact_resolved_context(memory)
     base = queries[-1]
     company_entities = []
     seen_entities: set[tuple[str, str]] = set()
@@ -2815,6 +3114,10 @@ def _recent_company_context(memory: SessionMemory) -> ResolvedQuery:
         if company_id not in seen_company_ids:
             seen_company_ids.add(company_id)
             company_ids.append(company_id)
+    for company_id in _artifact_company_ids(memory):
+        if company_id not in seen_company_ids:
+            seen_company_ids.add(company_id)
+            company_ids.append(company_id)
     non_company_entities = tuple(
         entity for entity in base.entities if entity.kind not in {"company", "public_company"}
     )
@@ -2823,6 +3126,17 @@ def _recent_company_context(memory: SessionMemory) -> ResolvedQuery:
             "entities": (*company_entities, *non_company_entities),
             "company_ids": tuple(company_ids),
         }
+    )
+
+
+def _recent_artifact_resolved_context(memory: SessionMemory) -> ResolvedQuery:
+    artifact = _selected_chart_artifact(memory)
+    if artifact is None:
+        return ResolvedQuery(query="recent artifacts")
+    return ResolvedQuery(
+        query=artifact.user_question or "recent chart artifact",
+        company_ids=artifact.company_ids,
+        metrics=artifact.metrics,
     )
 
 
@@ -2840,6 +3154,23 @@ def _recent_company_ids(memory: SessionMemory) -> tuple[uuid.UUID, ...]:
             continue
         seen.add(company_id)
         company_ids.append(company_id)
+    for company_id in _artifact_company_ids(memory):
+        if company_id in seen:
+            continue
+        seen.add(company_id)
+        company_ids.append(company_id)
+    return tuple(company_ids)
+
+
+def _artifact_company_ids(memory: SessionMemory) -> tuple[uuid.UUID, ...]:
+    seen: set[uuid.UUID] = set()
+    company_ids: list[uuid.UUID] = []
+    for artifact in memory.recent_artifacts:
+        for company_id in artifact.company_ids:
+            if company_id in seen:
+                continue
+            seen.add(company_id)
+            company_ids.append(company_id)
     return tuple(company_ids)
 
 

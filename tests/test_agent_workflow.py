@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from collections import defaultdict
@@ -39,6 +40,7 @@ from company_lens.agent.schemas import (
     DocumentRetrievalBranch,
     ModelExecutionBranch,
     ModelExecutionPlan,
+    SessionArtifactContext,
     SessionMemory,
 )
 from company_lens.agent.workflow import (
@@ -49,7 +51,6 @@ from company_lens.agent.workflow import (
     build_research_graph,
     create_initial_agent_state,
 )
-from company_lens.analytics.schemas import ChartPoint, ChartSeries, ChartSpecification
 from company_lens.financials.schemas import (
     FinancialFactObservation,
     FinancialFactQuery,
@@ -629,34 +630,47 @@ def test_previous_chart_period_question_answers_from_session_memory_without_rag(
             ),
         ),
     )
-    chart = ChartSpecification(
+    older_artifact = SessionArtifactContext(
+        artifact_id="chart:older",
+        run_id=uuid.uuid4(),
+        user_question="Plot Cloudflare revenue growth.",
+        title="Cloudflare revenue growth",
         chart_type="line",
+        series_labels=("Cloudflare, Inc. revenue YoY",),
+        company_ids=(COMPANY_ID,),
+        metrics=("revenue",),
+        calculations=("year_over_year_growth",),
+        period_start=date(2023, 9, 30),
+        period_end=date(2026, 3, 31),
+        point_count=8,
+        source_branch_ids=("cloudflare_revenue",),
+    )
+    latest_artifact = SessionArtifactContext(
+        artifact_id="chart:latest",
+        run_id=uuid.uuid4(),
+        user_question="а тепер додай туди ще і Apple",
         title="Revenue growth comparison",
-        x_label="Date",
-        series=(
-            ChartSeries(key="apple", label="Apple Inc. revenue YoY", unit="percent"),
-            ChartSeries(key="cloudflare", label="Cloudflare, Inc. revenue YoY", unit="percent"),
-            ChartSeries(key="tesla", label="Tesla, Inc. revenue YoY", unit="percent"),
+        chart_type="line",
+        series_labels=(
+            "Apple Inc. revenue YoY",
+            "Cloudflare, Inc. revenue YoY",
+            "Tesla, Inc. revenue YoY",
         ),
-        data=tuple(
-            ChartPoint(
-                x=date(2024, month, 30 if month in {6, 9} else 31),
-                values={
-                    "apple": Decimal("1"),
-                    "cloudflare": Decimal("2"),
-                    "tesla": Decimal("3"),
-                },
-                source_urls=("https://example.com/source",),
-            )
-            for month in (3, 6, 9, 12)
-        ),
-        sources=("https://example.com/source",),
+        company_ids=(APPLE_ID, COMPANY_ID, NETFLIX_ID),
+        metrics=("revenue",),
+        calculations=("year_over_year_growth",),
+        period_start=date(2024, 3, 31),
+        period_end=date(2024, 12, 31),
+        point_count=4,
+        source_branch_ids=("apple_revenue", "cloudflare_revenue", "tesla_revenue"),
     )
     state = create_initial_agent_state(
         "це був графік за який період? скільки там останніх репортів?",
         session_id="session-previous-chart-period",
     )
-    state["session_memory"] = SessionMemory(last_chart_spec=chart)
+    state["session_memory"] = SessionMemory(
+        recent_artifacts=(older_artifact, latest_artifact),
+    )
     tools = FakeResearchTools()
 
     result = build_research_graph().invoke(
@@ -669,6 +683,7 @@ def test_previous_chart_period_question_answers_from_session_memory_without_rag(
     assert result["final_answer"] is not None
     assert "2024-03-31" in result["final_answer"]
     assert "2024-12-31" in result["final_answer"]
+    assert "2026-03-31" not in result["final_answer"]
     assert "4 точок" in result["final_answer"]
     assert "Apple Inc. revenue YoY" in result["final_answer"]
     assert tools.calls["resolve"] == 0
@@ -1301,6 +1316,200 @@ def test_add_series_follow_up_plan_accepts_previous_and_new_company_ids() -> Non
         (NETFLIX_ID,),
         (APPLE_ID,),
     ]
+
+
+def test_planner_receives_recent_artifact_timeline_context() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="build the same chart again",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+        is_follow_up=True,
+        reason_codes=("follow_up", "same_chart"),
+    )
+    facts = FinancialFactsBranch(
+        branch_id="revenue",
+        request=FinancialFactQuery(
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+            fiscal_years=(2023, 2024, 2025),
+        ),
+    )
+    growth = CalculationBranch(
+        branch_id="growth",
+        operation="year_over_year_growth",
+        input_refs=(facts.branch_id,),
+        depends_on=(facts.branch_id,),
+    )
+    chart = ChartBranch(
+        branch_id="chart",
+        chart_type="line",
+        dataset_ref=growth.branch_id,
+        depends_on=(growth.branch_id,),
+        title="Revenue growth",
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.CALCULATION, branches=(facts, growth, chart)),
+    )
+    state = create_initial_agent_state(
+        "побудуй такий графік ще раз",
+        session_id="session-artifact-planner-context",
+    )
+    state["analysis"] = analysis
+    state["resolved_query"] = ResolvedQuery(
+        query="побудуй такий графік ще раз",
+        company_ids=(COMPANY_ID,),
+        metrics=("revenue",),
+    )
+    state["session_memory"] = SessionMemory(
+        recent_artifacts=(
+            SessionArtifactContext(
+                artifact_id="chart:first",
+                run_id=uuid.uuid4(),
+                user_question="Plot Cloudflare revenue growth.",
+                title="Revenue growth",
+                chart_type="line",
+                series_labels=("Cloudflare revenue YoY",),
+                company_ids=(COMPANY_ID,),
+                metrics=("revenue",),
+                calculations=("year_over_year_growth",),
+                period_start=date(2023, 9, 30),
+                period_end=date(2026, 3, 31),
+                point_count=8,
+                source_branch_ids=("revenue",),
+            ),
+            SessionArtifactContext(
+                artifact_id="chart:second",
+                run_id=uuid.uuid4(),
+                user_question="Add Tesla.",
+                title="Peer revenue growth",
+                chart_type="line",
+                series_labels=("Cloudflare revenue YoY", "Tesla revenue YoY"),
+                company_ids=(COMPANY_ID, NETFLIX_ID),
+                metrics=("revenue",),
+                calculations=("year_over_year_growth",),
+                period_start=date(2024, 9, 30),
+                period_end=date(2026, 3, 31),
+                point_count=5,
+                source_branch_ids=("cloudflare_revenue", "tesla_revenue"),
+            ),
+        )
+    )
+
+    update = _plan_request(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, PeerAnnualFinancialTools())),
+    )
+
+    assert "execution_plan" in update
+    plan_messages = next(
+        messages for purpose, messages in model.model_calls if purpose is ModelPurpose.PLAN
+    )
+    context = json.loads(plan_messages[1].content)
+    assert [artifact["artifact_id"] for artifact in context["recent_artifacts"]] == [
+        "chart:first",
+        "chart:second",
+    ]
+    assert context["recent_artifacts"][1]["period"] == {
+        "start": "2024-09-30",
+        "end": "2026-03-31",
+        "point_count": 5,
+    }
+    assert context["recent_artifacts"][1]["series_labels"] == [
+        "Cloudflare revenue YoY",
+        "Tesla revenue YoY",
+    ]
+
+
+def test_period_override_follow_up_reuses_recent_chart_artifact_without_model_plan() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="побудуй такий графік за період 2023-2025",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+        is_follow_up=True,
+        reason_codes=("follow_up", "change_period", "same_chart"),
+    )
+    artifact = SessionArtifactContext(
+        artifact_id="chart:peer_growth",
+        run_id=uuid.uuid4(),
+        user_question="а тепер додай туди ще і Apple",
+        title="Apple vs Cloudflare vs Tesla Revenue Growth",
+        chart_type="line",
+        series_labels=(
+            "Apple Inc. revenue YoY",
+            "Cloudflare, Inc. revenue YoY",
+            "Tesla, Inc. revenue YoY",
+        ),
+        company_ids=(APPLE_ID, COMPANY_ID, NETFLIX_ID),
+        metrics=("revenue",),
+        calculations=("year_over_year_growth",),
+        period_start=date(2024, 12, 28),
+        period_end=date(2026, 3, 31),
+        point_count=5,
+        source_branch_ids=("apple_revenue", "cloudflare_revenue", "tesla_revenue"),
+    )
+    memory = SessionMemory(recent_artifacts=(artifact,))
+    current = ResolvedQuery(
+        query="побудуй такий графік за період 2023-2025",
+        metrics=("revenue",),
+    )
+    merged = _merge_follow_up_if_needed(current, analysis, memory)
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.RAG_ONLY),
+    )
+    state = create_initial_agent_state(
+        "побудуй такий графік за період 2023-2025",
+        session_id="session-artifact-period-override",
+    )
+    state["analysis"] = analysis
+    state["resolved_query"] = merged
+    state["session_memory"] = memory
+
+    update = _plan_request(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, PeerAnnualFinancialTools())),
+    )
+
+    assert model.model_calls == []
+    plan = update["execution_plan"]
+    assert isinstance(plan, ExecutionPlan)
+    assert "deterministic_recent_artifact_period_plan" in plan.reason_codes
+    financial_branches = [
+        branch for branch in plan.branches if isinstance(branch, FinancialFactsBranch)
+    ]
+    assert [branch.request.company_ids for branch in financial_branches] == [
+        (APPLE_ID,),
+        (COMPANY_ID,),
+        (NETFLIX_ID,),
+    ]
+    assert all(branch.request.period_start == date(2023, 1, 1) for branch in financial_branches)
+    assert all(branch.request.period_end == date(2025, 12, 31) for branch in financial_branches)
+    assert [
+        branch.operation for branch in plan.branches if isinstance(branch, CalculationBranch)
+    ] == [
+        "year_over_year_growth",
+        "year_over_year_growth",
+        "year_over_year_growth",
+    ]
+    chart = plan.branches[-1]
+    assert isinstance(chart, ChartBranch)
+    assert chart.title == "Apple vs Cloudflare vs Tesla Revenue Growth"
+    assert chart.depends_on == (
+        "artifact_1_revenue_growth",
+        "artifact_2_revenue_growth",
+        "artifact_3_revenue_growth",
+    )
 
 
 def test_multi_company_chart_fallback_plan_uses_each_company_series() -> None:
