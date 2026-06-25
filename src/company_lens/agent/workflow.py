@@ -741,6 +741,17 @@ def _prepare_company_data(
     if result.prepared_tickers:
         with suppress(Exception):
             resolved = runtime.context.tools.resolve_entities(state["question"])
+            resolved = _resolve_extracted_follow_up_companies(
+                state,
+                runtime,
+                resolved,
+                state.get("analysis"),
+            )
+            if not resolved.company_ids:
+                resolved = _merge_prepared_ticker_resolutions(
+                    resolved,
+                    _resolve_prepared_tickers(runtime.context.tools, result.prepared_tickers),
+                )
             resolved = _merge_follow_up_if_needed(
                 resolved,
                 state.get("analysis"),
@@ -777,6 +788,55 @@ def _prepare_company_data(
             ),
         ),
     }
+
+
+def _resolve_prepared_tickers(
+    tools: ResearchTools,
+    tickers: tuple[str, ...],
+) -> tuple[ResolvedQuery, ...]:
+    return tuple(tools.resolve_entities(ticker) for ticker in tickers)
+
+
+def _merge_prepared_ticker_resolutions(
+    resolved: ResolvedQuery,
+    ticker_resolutions: tuple[ResolvedQuery, ...],
+) -> ResolvedQuery:
+    company_ids: list[uuid.UUID] = list(resolved.company_ids)
+    company_entities: list[EntityResolution] = []
+    seen_company_ids = set(company_ids)
+    seen_entities = {
+        (entity.kind, entity.canonical_value or entity.mention.casefold())
+        for entity in resolved.entities
+        if entity.kind in {"company", "public_company"}
+    }
+    for ticker_resolution in ticker_resolutions:
+        for company_id in ticker_resolution.company_ids:
+            if company_id not in seen_company_ids:
+                seen_company_ids.add(company_id)
+                company_ids.append(company_id)
+        for entity in ticker_resolution.entities:
+            if entity.kind not in {"company", "public_company"}:
+                continue
+            key = (entity.kind, entity.canonical_value or entity.mention.casefold())
+            if key in seen_entities:
+                continue
+            seen_entities.add(key)
+            company_entities.append(entity)
+    if not company_ids and not company_entities:
+        return resolved
+    original_company_entities = tuple(
+        entity for entity in resolved.entities if entity.kind in {"company", "public_company"}
+    )
+    non_company_entities = tuple(
+        entity for entity in resolved.entities if entity.kind not in {"company", "public_company"}
+    )
+    merged_company_entities = tuple(company_entities) or original_company_entities
+    return resolved.model_copy(
+        update={
+            "entities": (*merged_company_entities, *non_company_entities),
+            "company_ids": tuple(company_ids),
+        }
+    )
 
 
 def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> dict[str, object]:
