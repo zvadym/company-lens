@@ -42,6 +42,8 @@ from company_lens.agent.schemas import (
     ChartBranch,
     CitationReference,
     CompanyMentionExtraction,
+    CompanyTarget,
+    CompanyTargetSource,
     DocumentRetrievalBranch,
     EvidenceEnvelope,
     EvidenceKind,
@@ -49,6 +51,8 @@ from company_lens.agent.schemas import (
     ExecutionPlan,
     ExecutionPolicy,
     FinancialBranchResult,
+    FinancialDataReadiness,
+    FinancialDataReadinessStatus,
     FinancialFactsBranch,
     MacroBranchResult,
     MacroSeriesBranch,
@@ -56,6 +60,7 @@ from company_lens.agent.schemas import (
     ModelExecutionPlan,
     NodeAttempt,
     QuestionAnalysis,
+    ResearchFrame,
     ResearchRoute,
     RetrievalBranchResult,
     SessionArtifactContext,
@@ -627,6 +632,24 @@ def _should_extract_follow_up_company_mentions(
         and analysis.is_follow_up
         and AgentCapability.FINANCIAL_FACTS in analysis.required_capabilities
         and not _has_company_like_entity(resolved)
+        and _question_may_name_new_company_target(analysis.normalized_question)
+    )
+
+
+def _question_may_name_new_company_target(question: str) -> bool:
+    normalized = question.casefold()
+    padded = f" {normalized} "
+    return any(
+        marker in padded
+        for marker in (
+            " for ",
+            "same for",
+            "add ",
+            "додай",
+            "для ",
+            "те саме для",
+            "ще і ",
+        )
     )
 
 
@@ -688,8 +711,15 @@ def _resolve_entities(
             "node_attempts": (NodeAttempt(node="resolve_entities", attempts=1),),
             "trajectory": (_failed_event("resolve_entities", started),),
         }
+    frame = _build_research_frame(
+        question=state["question"],
+        analysis=state.get("analysis"),
+        resolved=resolved,
+        memory=state.get("session_memory"),
+    )
     return {
         "resolved_query": resolved,
+        "research_frame": frame,
         "node_attempts": (NodeAttempt(node="resolve_entities", attempts=1),),
         "trajectory": (
             _event(
@@ -757,6 +787,12 @@ def _prepare_company_data(
                 state.get("analysis"),
                 state.get("session_memory"),
             )
+    frame = _build_research_frame(
+        question=state["question"],
+        analysis=state.get("analysis"),
+        resolved=resolved,
+        memory=state.get("session_memory"),
+    )
 
     summary = (
         "Company report data is already available."
@@ -767,6 +803,7 @@ def _prepare_company_data(
     )
     return {
         "resolved_query": resolved,
+        "research_frame": frame,
         "node_attempts": (NodeAttempt(node="prepare_company_data", attempts=1),),
         "trajectory": (
             _event(
@@ -839,6 +876,272 @@ def _merge_prepared_ticker_resolutions(
     )
 
 
+def _build_research_frame(
+    *,
+    question: str,
+    analysis: QuestionAnalysis | None,
+    resolved: ResolvedQuery,
+    memory: SessionMemory | None,
+) -> ResearchFrame | None:
+    if analysis is None:
+        return None
+    return ResearchFrame(
+        question=question,
+        analysis=analysis,
+        resolved_query=resolved,
+        company_targets=_company_targets_from_resolved(
+            resolved,
+            source=_company_target_source(analysis, resolved, memory),
+        ),
+        inherited_from_previous=_inherited_previous_company_target(analysis, resolved, memory),
+        follow_up_operation=_previous_growth_operation(memory) if analysis.is_follow_up else None,
+        follow_up_window=_previous_calculation_window(memory) if analysis.is_follow_up else None,
+    )
+
+
+def _ensure_research_frame(
+    state: AgentState,
+    *,
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+    memory: SessionMemory | None,
+) -> ResearchFrame:
+    frame = state.get("research_frame")
+    if frame is not None and frame.analysis == analysis and frame.resolved_query == resolved:
+        return frame
+    built = _build_research_frame(
+        question=state["question"],
+        analysis=analysis,
+        resolved=resolved,
+        memory=memory,
+    )
+    assert built is not None
+    return built
+
+
+def _company_targets_from_resolved(
+    resolved: ResolvedQuery,
+    *,
+    source: CompanyTargetSource,
+) -> tuple[CompanyTarget, ...]:
+    targets: list[CompanyTarget] = []
+    seen_company_ids: set[uuid.UUID] = set()
+    seen_mentions: set[tuple[str, str]] = set()
+    for entity in resolved.entities:
+        if entity.kind not in {"company", "public_company"}:
+            continue
+        company_id = _entity_company_id(entity)
+        ticker = _entity_public_ticker(entity)
+        display_name = entity.candidates[0].display_value if entity.candidates else None
+        if company_id is not None:
+            seen_company_ids.add(company_id)
+        key = (entity.kind, entity.canonical_value or entity.mention.casefold())
+        if key in seen_mentions:
+            continue
+        seen_mentions.add(key)
+        targets.append(
+            CompanyTarget(
+                mention=entity.mention,
+                company_id=company_id,
+                ticker=ticker,
+                display_name=display_name,
+                status=entity.status,
+                source=source,
+            )
+        )
+    for company_id in resolved.company_ids:
+        if company_id in seen_company_ids:
+            continue
+        targets.append(
+            CompanyTarget(
+                mention=str(company_id),
+                company_id=company_id,
+                status="resolved",
+                source=source,
+            )
+        )
+    return tuple(targets)
+
+
+def _entity_company_id(entity: EntityResolution) -> uuid.UUID | None:
+    if entity.canonical_value is not None:
+        parsed = _uuid_or_none(entity.canonical_value)
+        if parsed is not None:
+            return parsed
+    for candidate in entity.candidates:
+        if candidate.id is not None:
+            return candidate.id
+        parsed = _uuid_or_none(candidate.canonical_value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _entity_public_ticker(entity: EntityResolution) -> str | None:
+    if entity.kind != "public_company" or not entity.candidates:
+        return None
+    value = entity.candidates[0].canonical_value.strip().upper()
+    return None if _uuid_or_none(value) is not None else value
+
+
+def _uuid_or_none(value: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return None
+
+
+def _company_target_source(
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+    memory: SessionMemory | None,
+) -> CompanyTargetSource:
+    if _inherited_previous_company_target(analysis, resolved, memory):
+        return "follow_up_context"
+    return "current_question"
+
+
+def _inherited_previous_company_target(
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+    memory: SessionMemory | None,
+) -> bool:
+    if not analysis.is_follow_up or memory is None or memory.last_resolved_query is None:
+        return False
+    previous_ids = set(memory.last_resolved_query.company_ids)
+    return bool(resolved.company_ids and set(resolved.company_ids).issubset(previous_ids))
+
+
+def _previous_calculation_window(memory: SessionMemory | None) -> int | None:
+    if memory is None or memory.last_execution_plan is None:
+        return None
+    for branch in reversed(memory.last_execution_plan.branches):
+        if isinstance(branch, CalculationBranch) and branch.window is not None:
+            return branch.window
+    return None
+
+
+def _probe_financial_readiness_if_needed(
+    frame: ResearchFrame,
+    tools: ResearchTools,
+) -> ResearchFrame:
+    if frame.financial_readiness or not _should_probe_financial_readiness(frame):
+        return frame
+    readiness: list[FinancialDataReadiness] = []
+    for company_id in frame.resolved_query.company_ids:
+        for metric in frame.resolved_query.metrics:
+            result = tools.query_financial_facts(
+                FinancialFactQuery(
+                    company_ids=(company_id,),
+                    metrics=(metric,),
+                    fiscal_years=frame.resolved_query.fiscal_years,
+                    fiscal_periods=frame.resolved_query.fiscal_periods,
+                    limit=_financial_readiness_limit(frame),
+                )
+            )
+            observation_count = len(result.observations)
+            readiness.append(
+                FinancialDataReadiness(
+                    company_id=company_id,
+                    metric=metric,
+                    status=_financial_readiness_status(frame, observation_count),
+                    observation_count=observation_count,
+                    warnings=result.warnings,
+                )
+            )
+    return frame.model_copy(update={"financial_readiness": tuple(readiness)})
+
+
+def _should_probe_financial_readiness(frame: ResearchFrame) -> bool:
+    return (
+        frame.analysis.is_follow_up
+        and AgentCapability.FINANCIAL_FACTS in frame.analysis.required_capabilities
+        and bool(frame.resolved_query.company_ids)
+        and bool(frame.resolved_query.metrics)
+        and not frame.inherited_from_previous
+        and any(target.source == "current_question" for target in frame.company_targets)
+    )
+
+
+def _financial_readiness_limit(frame: ResearchFrame) -> int:
+    minimum = _minimum_observations_for_operation(frame.follow_up_operation)
+    return max(minimum, frame.follow_up_window or minimum)
+
+
+def _minimum_observations_for_operation(operation: CalculationOperation | None) -> int:
+    if operation in {
+        "quarter_over_quarter_growth",
+        "year_over_year_growth",
+        "absolute_change",
+        "percentage_change",
+    }:
+        return 2
+    return 1
+
+
+def _financial_readiness_status(
+    frame: ResearchFrame,
+    observation_count: int,
+) -> FinancialDataReadinessStatus:
+    if observation_count == 0:
+        return "missing"
+    if observation_count < _minimum_observations_for_operation(frame.follow_up_operation):
+        return "partial"
+    return "available"
+
+
+def _missing_required_financial_readiness(
+    frame: ResearchFrame,
+) -> tuple[FinancialDataReadiness, ...]:
+    if not _should_probe_financial_readiness(frame):
+        return ()
+    return tuple(item for item in frame.financial_readiness if item.status == "missing")
+
+
+def _financial_readiness_error(
+    missing: tuple[FinancialDataReadiness, ...],
+) -> AgentError:
+    metrics = ",".join(tuple(dict.fromkeys(item.metric for item in missing)))
+    return _agent_error(
+        "plan_request",
+        "financial_data_missing",
+        f"Required structured financial facts were unavailable for: {metrics}.",
+        category=AgentErrorCategory.TOOL,
+        severity=AgentErrorSeverity.TERMINAL,
+    )
+
+
+def _financial_readiness_answer(
+    frame: ResearchFrame,
+    missing: tuple[FinancialDataReadiness, ...],
+) -> str:
+    company = _readiness_company_label(frame)
+    metrics = ", ".join(tuple(dict.fromkeys(item.metric for item in missing)))
+    if _looks_ukrainian(frame.question):
+        return (
+            f"Не можу виконати цей запит для {company}: після підготовки даних не знайшов "
+            f"структурованих фінансових фактів для метрик: {metrics}. "
+            "Тому план з розрахунком не запускався, щоб не повертати результат по "
+            "попередній компанії."
+        )
+    return (
+        f"I cannot complete this request for {company}: after preparing company data, "
+        f"structured financial facts were unavailable for: {metrics}. "
+        "The calculation plan was not run so the previous company would not be reused."
+    )
+
+
+def _readiness_company_label(frame: ResearchFrame) -> str:
+    for target in frame.company_targets:
+        if target.display_name:
+            return target.display_name
+        if target.ticker:
+            return target.ticker
+        if target.mention:
+            return target.mention
+    return "the resolved company"
+
+
 def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> dict[str, object]:
     if state["status"] is not AgentRunStatus.RUNNING:
         return _skipped("plan_request")
@@ -869,6 +1172,39 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
             ),
         }
     memory = state.get("session_memory")
+    try:
+        frame = _ensure_research_frame(
+            state,
+            analysis=analysis,
+            resolved=resolved,
+            memory=memory,
+        )
+        frame = _probe_financial_readiness_if_needed(frame, runtime.context.tools)
+    except ResearchToolError as exc:
+        tool_error = exc.error.model_copy(update={"node": "plan_request"})
+        return {
+            "status": AgentRunStatus.FAILED,
+            "errors": (tool_error,),
+            "trajectory": (_failed_event("plan_request", started),),
+        }
+    missing_readiness = _missing_required_financial_readiness(frame)
+    if missing_readiness:
+        readiness_error = _financial_readiness_error(missing_readiness)
+        return {
+            "status": AgentRunStatus.ABSTAINED,
+            "errors": (readiness_error,),
+            "draft_answer": _financial_readiness_answer(frame, missing_readiness),
+            "research_frame": frame,
+            "trajectory": (
+                _event(
+                    "plan_request",
+                    TrajectoryStatus.COMPLETED,
+                    "Required structured financial facts were unavailable before planning.",
+                    started,
+                    details={"missing_readiness": len(missing_readiness)},
+                ),
+            ),
+        }
     previous_plan = memory.last_execution_plan if memory is not None else None
     artifact_period_plan = _fallback_recent_artifact_period_plan(
         state["question"],
@@ -893,6 +1229,7 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
             return {
                 "execution_plan": plan,
                 "analysis": reconciled_analysis,
+                "research_frame": frame,
                 "node_attempts": (NodeAttempt(node="plan_request", attempts=1),),
                 "trajectory": (
                     _event(
@@ -908,6 +1245,7 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
             "question": state["question"],
             "analysis": analysis.model_dump(mode="json"),
             "resolved_query": resolved.model_dump(mode="json"),
+            "research_frame": frame.model_dump(mode="json"),
             "policy": state["policy"].model_dump(mode="json"),
             "previous_plan": (
                 previous_plan.model_dump(mode="json") if previous_plan is not None else None
@@ -969,6 +1307,7 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
                 plan = None
             if plan is not None:
                 update["execution_plan"] = plan
+                update["research_frame"] = frame
                 if reconciled_analysis != analysis:
                     update["analysis"] = reconciled_analysis
                 return update
@@ -1017,6 +1356,7 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
                 plan = None
             if plan is not None:
                 update["execution_plan"] = plan
+                update["research_frame"] = frame
                 if reconciled_analysis != analysis:
                     update["analysis"] = reconciled_analysis
                 return update
@@ -1032,6 +1372,7 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         update["trajectory"] = (_failed_event("plan_request", started),)
         return update
     update["execution_plan"] = plan
+    update["research_frame"] = frame
     if reconciled_analysis != analysis:
         update["analysis"] = reconciled_analysis
     return update

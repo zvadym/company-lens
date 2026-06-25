@@ -41,6 +41,7 @@ from company_lens.agent.schemas import (
     DocumentRetrievalBranch,
     ModelExecutionBranch,
     ModelExecutionPlan,
+    ResearchFrame,
     SessionArtifactContext,
     SessionMemory,
 )
@@ -80,6 +81,7 @@ COMPANY_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 NETFLIX_ID = uuid.UUID("33333333-3333-3333-3333-333333333333")
 APPLE_ID = uuid.UUID("44444444-4444-4444-4444-444444444444")
 ZOOM_ID = uuid.UUID("55555555-5555-5555-5555-555555555555")
+NOKIA_ID = uuid.UUID("66666666-6666-6666-6666-666666666666")
 FACT_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 ANNUAL_FACT_IDS = {
     year: uuid.uuid5(uuid.NAMESPACE_DNS, f"company-lens-test-revenue-{year}")
@@ -1052,16 +1054,32 @@ def test_resolve_entities_extracts_follow_up_public_company_target() -> None:
             query="Compare Cloudflare revenue growth",
             company_ids=(COMPANY_ID,),
             metrics=("revenue",),
-        )
+        ),
+        last_execution_plan=ExecutionPlan(
+            route=ResearchRoute.CALCULATION,
+            branches=(
+                CalculationBranch(
+                    branch_id="revenue_qoq_growth",
+                    operation="quarter_over_quarter_growth",
+                    input_refs=("source_revenue_quarters",),
+                    window=8,
+                ),
+            ),
+        ),
     )
 
     update = _resolve_entities(state, Runtime(context=ResearchAgentRuntime(model, tools)))
 
     resolved = cast(ResolvedQuery, update["resolved_query"])
+    frame = cast(ResearchFrame, update["research_frame"])
     public_company = next(entity for entity in resolved.entities if entity.kind == "public_company")
     assert resolved.company_ids == ()
     assert public_company.mention == "Zoom"
     assert public_company.candidates[0].canonical_value == "ZM"
+    assert frame.company_targets[0].mention == "Zoom"
+    assert frame.company_targets[0].ticker == "ZM"
+    assert frame.follow_up_operation == "quarter_over_quarter_growth"
+    assert frame.follow_up_window == 8
     assert tools.calls["resolve_public_company_mentions"] == 1
     assert ModelPurpose.ENTITY_EXTRACTION in model.purposes
 
@@ -1269,7 +1287,106 @@ def test_prepared_follow_up_company_resolves_company_id_from_extracted_ticker() 
     assert result["status"] is AgentRunStatus.COMPLETED
     assert result["resolved_query"].company_ids == (ZOOM_ID,)
     assert tools.calls["prepare"] == 1
+    assert tools.calls["financial"] == 2
+
+
+def test_plan_request_abstains_before_planning_when_follow_up_financial_data_missing() -> None:
+    class MissingFinancialFactsTools(FakeResearchTools):
+        def query_financial_facts(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
+            self.calls["financial"] += 1
+            assert request.company_ids == (NOKIA_ID,)
+            assert request.metrics == ("revenue",)
+            return FinancialFactQueryResult(
+                query=request,
+                observations=(),
+                available_units=(),
+                warnings=("no_matching_financial_facts",),
+            )
+
+    analysis = QuestionAnalysis(
+        normalized_question="now do the same for Nokia",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+        is_follow_up=True,
+        reason_codes=("follow_up", "revenue_growth_requested"),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.CALCULATION,
+            branches=(
+                FinancialFactsBranch(
+                    branch_id="source_revenue_quarters",
+                    request=FinancialFactQuery(metrics=("revenue",), limit=8),
+                ),
+                CalculationBranch(
+                    branch_id="revenue_qoq_growth",
+                    operation="quarter_over_quarter_growth",
+                    input_refs=("source_revenue_quarters",),
+                    window=8,
+                ),
+            ),
+        ),
+    )
+    state = create_initial_agent_state(
+        "а тепер те саме для Nokia",
+        session_id="session-follow-up-nokia-missing-readiness",
+    )
+    state["analysis"] = analysis
+    state["resolved_query"] = ResolvedQuery(
+        query="а тепер те саме для Nokia",
+        entities=(
+            EntityResolution(
+                kind="company",
+                mention="nokia",
+                status="resolved",
+                canonical_value=str(NOKIA_ID),
+                candidates=(
+                    EntityCandidate(
+                        id=NOKIA_ID,
+                        canonical_value=str(NOKIA_ID),
+                        display_value="NOKIA CORP",
+                        match_kind="normalized_legal_name",
+                    ),
+                ),
+            ),
+        ),
+        company_ids=(NOKIA_ID,),
+        metrics=("revenue",),
+    )
+    state["session_memory"] = SessionMemory(
+        last_resolved_query=ResolvedQuery(
+            query="Compare Cloudflare revenue growth",
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+        ),
+        last_execution_plan=ExecutionPlan(
+            route=ResearchRoute.CALCULATION,
+            branches=(
+                CalculationBranch(
+                    branch_id="revenue_qoq_growth",
+                    operation="quarter_over_quarter_growth",
+                    input_refs=("source_revenue_quarters",),
+                    window=8,
+                ),
+            ),
+        ),
+    )
+    tools = MissingFinancialFactsTools()
+
+    update = _plan_request(state, Runtime(context=ResearchAgentRuntime(model, tools)))
+
+    frame = cast(ResearchFrame, update["research_frame"])
+    assert update["status"] is AgentRunStatus.ABSTAINED
+    assert update["draft_answer"] is not None
+    assert "NOKIA CORP" in cast(str, update["draft_answer"])
+    assert frame.financial_readiness[0].status == "missing"
+    assert frame.financial_readiness[0].warnings == ("no_matching_financial_facts",)
     assert tools.calls["financial"] == 1
+    assert ModelPurpose.PLAN not in model.purposes
 
 
 def test_follow_up_without_company_mention_still_inherits_previous_company() -> None:
@@ -1694,6 +1811,8 @@ def test_planner_receives_recent_artifact_timeline_context() -> None:
         messages for purpose, messages in model.model_calls if purpose is ModelPurpose.PLAN
     )
     context = json.loads(plan_messages[1].content)
+    assert context["research_frame"]["company_targets"][0]["company_id"] == str(COMPANY_ID)
+    assert context["research_frame"]["financial_readiness"][0]["status"] == "available"
     assert [artifact["artifact_id"] for artifact in context["recent_artifacts"]] == [
         "chart:first",
         "chart:second",

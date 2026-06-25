@@ -302,6 +302,39 @@ class ExecutionPlan(FrozenModel):
         return self
 
 
+CompanyTargetStatus = Literal["resolved", "unresolved", "ambiguous"]
+CompanyTargetSource = Literal["current_question", "follow_up_context", "prepared_ticker"]
+FinancialDataReadinessStatus = Literal["available", "partial", "missing"]
+
+
+class CompanyTarget(FrozenModel):
+    mention: str = Field(min_length=1)
+    company_id: uuid.UUID | None = None
+    ticker: str | None = None
+    display_name: str | None = None
+    status: CompanyTargetStatus
+    source: CompanyTargetSource
+
+
+class FinancialDataReadiness(FrozenModel):
+    company_id: uuid.UUID
+    metric: str = Field(min_length=1)
+    status: FinancialDataReadinessStatus
+    observation_count: int = Field(default=0, ge=0)
+    warnings: tuple[str, ...] = ()
+
+
+class ResearchFrame(FrozenModel):
+    question: str = Field(min_length=1)
+    analysis: QuestionAnalysis
+    resolved_query: ResolvedQuery
+    company_targets: tuple[CompanyTarget, ...] = ()
+    inherited_from_previous: bool = False
+    follow_up_operation: CalculationOperation | None = None
+    follow_up_window: int | None = Field(default=None, ge=1)
+    financial_readiness: tuple[FinancialDataReadiness, ...] = ()
+
+
 class SessionMessage(FrozenModel):
     role: Literal["user", "assistant"]
     content: str = Field(min_length=1)
@@ -452,6 +485,7 @@ class AgentState(TypedDict, total=False):
     session_memory: NotRequired[SessionMemory]
     analysis: NotRequired[QuestionAnalysis | None]
     resolved_query: NotRequired[ResolvedQuery | None]
+    research_frame: NotRequired[ResearchFrame | None]
     execution_plan: NotRequired[ExecutionPlan | None]
     active_branch: NotRequired[ExecutionBranch]
     retrieval_results: Annotated[tuple[RetrievalBranchResult, ...], append_tuple]
