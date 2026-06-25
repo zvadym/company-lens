@@ -2670,6 +2670,7 @@ def test_unresolved_follow_up_company_abstain_has_user_facing_answer() -> None:
     assert any(error.code == "missing_company" for error in result["errors"])
     assert result["final_answer"] is not None
     assert "SAMSUNG" in result["final_answer"]
+    assert "SEC/EDGAR" in result["final_answer"]
     assert "попередній компанії" in result["final_answer"]
     assert "ticker" in result["final_answer"]
     assert frame.company_targets[0].mention == "SAMSUNG"

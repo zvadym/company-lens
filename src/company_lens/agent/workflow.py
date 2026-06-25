@@ -1157,16 +1157,18 @@ def _missing_company_answer(frame: ResearchFrame) -> str:
     company = _readiness_company_label(frame)
     if _looks_ukrainian(frame.question):
         return (
-            f"Не можу виконати цей запит для {company}: не знайшов однозначну публічну "
-            "компанію або ticker у доступних джерелах. Розрахунок не запускався, щоб "
-            "не повернути результат по попередній компанії. Спробуйте вказати біржовий "
-            "ticker або повну юридичну назву компанії."
+            f"Не можу виконати цей запит для {company}: зараз підтримуються тільки "
+            "публічні компанії, які можна однозначно знайти через SEC/EDGAR filings. "
+            "Я не знайшов таку компанію або ticker у доступних джерелах. Розрахунок "
+            "не запускався, щоб не повернути результат по попередній компанії. "
+            "Спробуйте вказати SEC ticker або повну юридичну назву компанії."
         )
     return (
-        f"I cannot complete this request for {company}: I could not resolve a public "
-        "company or ticker from the available sources. The calculation plan was not "
-        "run so the previous company would not be reused. Try using the stock ticker "
-        "or the company's full legal name."
+        f"I cannot complete this request for {company}: CompanyLens currently supports "
+        "only public companies that can be resolved through SEC/EDGAR filings. I could "
+        "not resolve that company or ticker from the available sources. The calculation "
+        "plan was not run so the previous company would not be reused. Try using the SEC "
+        "ticker or the company's full legal name."
     )
 
 
