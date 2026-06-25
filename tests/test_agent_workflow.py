@@ -2629,6 +2629,57 @@ def test_financial_chart_without_company_abstains_before_planning() -> None:
     assert tools.calls["macro"] == 0
 
 
+def test_unresolved_follow_up_company_abstain_has_user_facing_answer() -> None:
+    class UnresolvedSamsungTools(FakeResearchTools):
+        def resolve_entities(self, query: str) -> ResolvedQuery:
+            self.calls["resolve"] += 1
+            return ResolvedQuery(
+                query=query,
+                entities=(
+                    EntityResolution(
+                        kind="public_company",
+                        mention="SAMSUNG",
+                        status="unresolved",
+                    ),
+                ),
+                metrics=("revenue",),
+            )
+
+    analysis = QuestionAnalysis(
+        normalized_question="Compare Samsung revenue growth over the last eight quarters.",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+        is_follow_up=True,
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.CALCULATION),
+    )
+    tools = UnresolvedSamsungTools()
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, tools)).run(
+        "а тепер те саме для SAMSUNG",
+        session_id="session-missing-follow-up-company",
+    )
+
+    frame = cast(ResearchFrame, result["research_frame"])
+    assert result["status"] is AgentRunStatus.ABSTAINED
+    assert any(error.code == "missing_company" for error in result["errors"])
+    assert result["final_answer"] is not None
+    assert "SAMSUNG" in result["final_answer"]
+    assert "попередній компанії" in result["final_answer"]
+    assert "ticker" in result["final_answer"]
+    assert frame.company_targets[0].mention == "SAMSUNG"
+    assert frame.company_targets[0].source == "current_question"
+    assert not frame.inherited_from_previous
+    assert ModelPurpose.PLAN not in model.purposes
+    assert tools.calls["prepare"] == 0
+    assert tools.calls["financial"] == 0
+
+
 def test_invalid_citation_is_repaired_once() -> None:
     analysis = QuestionAnalysis(
         normalized_question="What was revenue?",

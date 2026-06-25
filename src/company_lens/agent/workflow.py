@@ -569,7 +569,24 @@ def _question_requests_chart_rebuild(normalized_question: str) -> bool:
 
 def _looks_ukrainian(text: str) -> bool:
     normalized = text.casefold()
-    return any(token in normalized for token in ("граф", "період", "скільки", "репорт"))
+    return any(
+        token in normalized
+        for token in (
+            "граф",
+            "період",
+            "скільки",
+            "репорт",
+            "тепер",
+            "те саме",
+            "для ",
+            "поперед",
+            "компан",
+            "і",
+            "ї",
+            "є",
+            "ґ",
+        )
+    )
 
 
 def _resolve_extracted_follow_up_companies(
@@ -1136,6 +1153,23 @@ def _financial_readiness_answer(
     )
 
 
+def _missing_company_answer(frame: ResearchFrame) -> str:
+    company = _readiness_company_label(frame)
+    if _looks_ukrainian(frame.question):
+        return (
+            f"Не можу виконати цей запит для {company}: не знайшов однозначну публічну "
+            "компанію або ticker у доступних джерелах. Розрахунок не запускався, щоб "
+            "не повернути результат по попередній компанії. Спробуйте вказати біржовий "
+            "ticker або повну юридичну назву компанії."
+        )
+    return (
+        f"I cannot complete this request for {company}: I could not resolve a public "
+        "company or ticker from the available sources. The calculation plan was not "
+        "run so the previous company would not be reused. Try using the stock ticker "
+        "or the company's full legal name."
+    )
+
+
 def _readiness_company_label(frame: ResearchFrame) -> str:
     for target in frame.company_targets:
         if target.display_name:
@@ -1156,6 +1190,13 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         missing_error = _validation_error("plan_request", "missing_planning_inputs")
         return {"status": AgentRunStatus.FAILED, "errors": (missing_error,)}
     started = time.monotonic()
+    memory = state.get("session_memory")
+    frame = _ensure_research_frame(
+        state,
+        analysis=analysis,
+        resolved=resolved,
+        memory=memory,
+    )
     if _requires_financial_company(analysis) and not resolved.company_ids:
         missing_company_error = _agent_error(
             "plan_request",
@@ -1167,6 +1208,8 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         return {
             "status": AgentRunStatus.ABSTAINED,
             "errors": (missing_company_error,),
+            "draft_answer": _missing_company_answer(frame),
+            "research_frame": frame,
             "trajectory": (
                 _event(
                     "plan_request",
@@ -1176,14 +1219,7 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
                 ),
             ),
         }
-    memory = state.get("session_memory")
     try:
-        frame = _ensure_research_frame(
-            state,
-            analysis=analysis,
-            resolved=resolved,
-            memory=memory,
-        )
         frame = _probe_financial_readiness_if_needed(frame, runtime.context.tools)
     except ResearchToolError as exc:
         tool_error = exc.error.model_copy(update={"node": "plan_request"})
