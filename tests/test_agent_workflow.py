@@ -1121,6 +1121,113 @@ def test_add_series_follow_up_merges_new_company_with_previous_chart_companies()
     assert merged.metrics == ("revenue",)
 
 
+def test_add_series_follow_up_plan_accepts_previous_and_new_company_ids() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="add Apple to the existing comparison chart",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+        is_follow_up=True,
+        reason_codes=("follow_up", "add_series", "comparison_chart"),
+    )
+    cloudflare = ResolvedQuery(
+        query="Plot Cloudflare revenue growth.",
+        company_ids=(COMPANY_ID,),
+        metrics=("revenue",),
+    )
+    previous_chart = ResolvedQuery(
+        query="а тепер на графік виведи обидва",
+        company_ids=(NETFLIX_ID, COMPANY_ID),
+        metrics=("revenue",),
+    )
+    apple = ResolvedQuery(
+        query="а тепер додай туди ще і Apple",
+        entities=(
+            EntityResolution(
+                kind="company",
+                mention="apple",
+                status="resolved",
+                canonical_value=str(APPLE_ID),
+            ),
+        ),
+        company_ids=(APPLE_ID,),
+        metrics=("revenue",),
+    )
+    memory = SessionMemory(
+        last_resolved_query=previous_chart,
+        recent_resolved_queries=(cloudflare, previous_chart),
+    )
+    merged = _merge_follow_up_if_needed(apple, analysis, memory)
+    branches: list[
+        FinancialFactsBranch | CalculationBranch | ChartBranch
+    ] = []
+    growth_refs: list[str] = []
+    for index, company_id in enumerate(merged.company_ids, start=1):
+        facts_id = f"company_{index}_revenue"
+        growth_id = f"company_{index}_growth"
+        branches.append(
+            FinancialFactsBranch(
+                branch_id=facts_id,
+                request=FinancialFactQuery(
+                    company_ids=(company_id,),
+                    metrics=("revenue",),
+                ),
+            )
+        )
+        branches.append(
+            CalculationBranch(
+                branch_id=growth_id,
+                operation="year_over_year_growth",
+                input_refs=(facts_id,),
+                depends_on=(facts_id,),
+            )
+        )
+        growth_refs.append(growth_id)
+    branches.append(
+        ChartBranch(
+            branch_id="comparison_chart",
+            chart_type="line",
+            dataset_ref=growth_refs[0],
+            depends_on=tuple(growth_refs),
+            title="Revenue growth comparison",
+        )
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.CALCULATION, branches=tuple(branches)),
+    )
+    state = create_initial_agent_state(
+        "а тепер додай туди ще і Apple",
+        session_id="session-add-series-plan-validation",
+    )
+    state["analysis"] = analysis
+    state["resolved_query"] = merged
+    state["session_memory"] = memory
+
+    update = _plan_request(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, PeerAnnualFinancialTools())),
+    )
+
+    plan = update["execution_plan"]
+    assert isinstance(plan, ExecutionPlan)
+    assert "errors" not in update
+    planned_company_ids = [
+        branch.request.company_ids
+        for branch in plan.branches
+        if isinstance(branch, FinancialFactsBranch)
+    ]
+    assert planned_company_ids == [
+        (COMPANY_ID,),
+        (NETFLIX_ID,),
+        (APPLE_ID,),
+    ]
+
+
 def test_multi_company_chart_fallback_plan_uses_each_company_series() -> None:
     analysis = QuestionAnalysis(
         normalized_question="compare Cloudflare and Alphabet revenue growth on a chart",
