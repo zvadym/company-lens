@@ -383,6 +383,7 @@ class SessionMemory(FrozenModel):
     last_resolved_query: ResolvedQuery | None = None
     recent_resolved_queries: tuple[ResolvedQuery, ...] = ()
     last_execution_plan: ExecutionPlan | None = None
+    last_chart_spec: ChartSpecification | None = None
     cached_source_results: tuple[CachedSourceResult, ...] = ()
     evidence: tuple[EvidenceEnvelope, ...] = ()
     updated_at: datetime | None = None

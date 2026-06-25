@@ -211,6 +211,10 @@ def build_research_graph(
     )
     builder.add_node("start_turn", _observed_node("start_turn", _start_turn))
     builder.add_node("parse_question", _observed_node("parse_question", _parse_question))
+    builder.add_node(
+        "answer_session_context",
+        _observed_node("answer_session_context", _answer_session_context),
+    )
     builder.add_node("resolve_entities", _observed_node("resolve_entities", _resolve_entities))
     builder.add_node(
         "prepare_company_data",
@@ -246,7 +250,12 @@ def build_research_graph(
 
     builder.add_edge(START, "start_turn")
     builder.add_edge("start_turn", "parse_question")
-    builder.add_edge("parse_question", "resolve_entities")
+    builder.add_edge("parse_question", "answer_session_context")
+    builder.add_conditional_edges(
+        "answer_session_context",
+        _route_after_session_context,
+        ["resolve_entities", END],
+    )
     builder.add_edge("resolve_entities", "prepare_company_data")
     builder.add_edge("prepare_company_data", "plan_request")
     builder.add_edge("plan_request", "hydrate_cached_results")
@@ -397,6 +406,109 @@ def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -
     elif output is not None:
         update["analysis"] = output
     return update
+
+
+def _answer_session_context(state: AgentState) -> dict[str, object]:
+    if state["status"] is not AgentRunStatus.RUNNING:
+        return _skipped("answer_session_context")
+    started = time.monotonic()
+    analysis = state.get("analysis")
+    memory = state.get("session_memory")
+    answer = _previous_chart_context_answer(state["question"], analysis, memory)
+    if answer is None:
+        return _skipped("answer_session_context")
+    return {
+        "status": AgentRunStatus.COMPLETED,
+        "final_answer": answer,
+        "messages": (
+            SessionMessage(role="assistant", content=answer, created_at=datetime.now(UTC)),
+        ),
+        "trajectory": (
+            _event(
+                "answer_session_context",
+                TrajectoryStatus.COMPLETED,
+                "Answered from the previous chart in session memory.",
+                started,
+            ),
+        ),
+    }
+
+
+def _route_after_session_context(state: AgentState) -> Literal["resolve_entities", "__end__"]:
+    return "__end__" if state["status"] is AgentRunStatus.COMPLETED else "resolve_entities"
+
+
+def _previous_chart_context_answer(
+    question: str,
+    analysis: QuestionAnalysis | None,
+    memory: SessionMemory | None,
+) -> str | None:
+    if memory is None or memory.last_chart_spec is None:
+        return None
+    if not _asks_about_previous_chart_context(question, analysis):
+        return None
+    chart = memory.last_chart_spec
+    if not chart.data:
+        return None
+    dates = tuple(point.x for point in chart.data)
+    start = min(dates)
+    end = max(dates)
+    point_count = len(chart.data)
+    series_labels = ", ".join(series.label for series in chart.series)
+    if _looks_ukrainian(question):
+        return (
+            "## Період графіка\n\n"
+            f"Останній графік був за період з {start.isoformat()} до {end.isoformat()}.\n\n"
+            "## Кількість звітних періодів\n\n"
+            f"На графіку було {point_count} точок, тобто {point_count} останніх "
+            "звітних періодів у побудованому наборі даних.\n\n"
+            "## Серії\n\n"
+            f"Серії на графіку: {series_labels}."
+        )
+    return (
+        "## Chart Period\n\n"
+        f"The latest chart covered {start.isoformat()} through {end.isoformat()}.\n\n"
+        "## Report Count\n\n"
+        f"The chart had {point_count} points, meaning {point_count} latest reporting "
+        "periods in the plotted dataset.\n\n"
+        "## Series\n\n"
+        f"The chart series were: {series_labels}."
+    )
+
+
+def _asks_about_previous_chart_context(
+    question: str,
+    analysis: QuestionAnalysis | None,
+) -> bool:
+    normalized = question.casefold()
+    reason_codes = analysis.reason_codes if analysis is not None else ()
+    if any(
+        marker in reason
+        for reason in reason_codes
+        for marker in (
+            "previous_output",
+            "previous_chart",
+            "covered_period",
+            "number_of_reports",
+        )
+    ):
+        return True
+    return (
+        ("графік" in normalized or "chart" in normalized or "plot" in normalized)
+        and (
+            "період" in normalized
+            or "period" in normalized
+            or "репорт" in normalized
+            or "report" in normalized
+            or "скільки" in normalized
+            or "how many" in normalized
+        )
+    )
+
+
+def _looks_ukrainian(text: str) -> bool:
+    normalized = text.casefold()
+    return any(token in normalized for token in ("граф", "період", "скільки", "репорт"))
 
 
 def _resolve_entities(
@@ -2036,6 +2148,7 @@ def _updated_session_memory(state: AgentState, cache_limit: int) -> SessionMemor
             resolved,
         ),
         last_execution_plan=plan or previous.last_execution_plan,
+        last_chart_spec=state.get("chart_spec") or previous.last_chart_spec,
         cached_source_results=entries,
         evidence=state.get("evidence", ()) or previous.evidence,
         updated_at=stored_at,

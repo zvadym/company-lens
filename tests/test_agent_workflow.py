@@ -46,8 +46,10 @@ from company_lens.agent.workflow import (
     _merge_follow_up_if_needed,
     _merge_follow_up_resolution,
     _plan_request,
+    build_research_graph,
     create_initial_agent_state,
 )
+from company_lens.analytics.schemas import ChartPoint, ChartSeries, ChartSpecification
 from company_lens.financials.schemas import (
     FinancialFactObservation,
     FinancialFactQuery,
@@ -600,6 +602,79 @@ def test_rag_only_route_uses_document_retrieval() -> None:
     )
     assert "untrusted data" in answer_messages[0].content
     assert '"trust": "untrusted_external_data"' in answer_messages[1].content
+
+
+def test_previous_chart_period_question_answers_from_session_memory_without_rag() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="what period was that chart and how many reports",
+        route=ResearchRoute.RAG_ONLY,
+        required_capabilities=(AgentCapability.DOCUMENTS,),
+        chart_requested=False,
+        is_follow_up=True,
+        reason_codes=(
+            "follow_up_about_previous_output",
+            "asks_about_covered_period",
+            "asks_about_number_of_reports",
+        ),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.RAG_ONLY,
+            branches=(
+                DocumentRetrievalBranch(
+                    branch_id="previous_chart_context",
+                    request=AdaptiveRetrievalRequest(query="Find the previous chart output"),
+                ),
+            ),
+        ),
+    )
+    chart = ChartSpecification(
+        chart_type="line",
+        title="Revenue growth comparison",
+        x_label="Date",
+        series=(
+            ChartSeries(key="apple", label="Apple Inc. revenue YoY", unit="percent"),
+            ChartSeries(key="cloudflare", label="Cloudflare, Inc. revenue YoY", unit="percent"),
+            ChartSeries(key="tesla", label="Tesla, Inc. revenue YoY", unit="percent"),
+        ),
+        data=tuple(
+            ChartPoint(
+                x=date(2024, month, 30 if month in {6, 9} else 31),
+                values={
+                    "apple": Decimal("1"),
+                    "cloudflare": Decimal("2"),
+                    "tesla": Decimal("3"),
+                },
+                source_urls=("https://example.com/source",),
+            )
+            for month in (3, 6, 9, 12)
+        ),
+        sources=("https://example.com/source",),
+    )
+    state = create_initial_agent_state(
+        "це був графік за який період? скільки там останніх репортів?",
+        session_id="session-previous-chart-period",
+    )
+    state["session_memory"] = SessionMemory(last_chart_spec=chart)
+    tools = FakeResearchTools()
+
+    result = build_research_graph().invoke(
+        state,
+        config={"recursion_limit": 24},
+        context=ResearchAgentRuntime(model, tools),
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["final_answer"] is not None
+    assert "2024-03-31" in result["final_answer"]
+    assert "2024-12-31" in result["final_answer"]
+    assert "4 точок" in result["final_answer"]
+    assert "Apple Inc. revenue YoY" in result["final_answer"]
+    assert tools.calls["resolve"] == 0
+    assert tools.calls["retrieval"] == 0
+    assert model.purposes == [ModelPurpose.PARSE]
+    assert result["branch_outcomes"] == ()
 
 
 def test_sec_item_labels_do_not_trigger_false_abstain() -> None:
