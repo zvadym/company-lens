@@ -99,7 +99,11 @@ from company_lens.evidence.schemas import (
     ValidationIssue,
 )
 from company_lens.evidence.validation import AnswerValidator, SemanticSupportJudge
-from company_lens.financials.schemas import FinancialFactObservation, FinancialFactQuery
+from company_lens.financials.schemas import (
+    FinancialFactObservation,
+    FinancialFactQuery,
+    FinancialFactQueryResult,
+)
 from company_lens.macro.schemas import FredSeriesResult
 from company_lens.observability.context import bind_context
 from company_lens.observability.telemetry import (
@@ -123,6 +127,14 @@ DETERMINISTIC_PLAN_REASON_CODES = frozenset(
         "deterministic_follow_up_replay_plan",
         "deterministic_multi_company_growth_chart_plan",
         "deterministic_recent_artifact_period_plan",
+    }
+)
+ANNUAL_FINANCIAL_FALLBACK_OPERATIONS = frozenset(
+    {
+        "year_over_year_growth",
+        "cagr",
+        "absolute_change",
+        "percentage_change",
     }
 )
 UNIT_NUMBER_RE = re.compile(
@@ -1243,6 +1255,7 @@ def _minimum_observations_for_operation(operation: CalculationOperation | None) 
     if operation in {
         "quarter_over_quarter_growth",
         "year_over_year_growth",
+        "cagr",
         "absolute_change",
         "percentage_change",
     }:
@@ -2275,10 +2288,185 @@ def _query_financial_facts(
         "query_financial_facts",
     )
     if result is not None:
+        result = _query_annual_financial_fallback_if_needed(
+            state,
+            branch,
+            result,
+            common,
+            runtime.context.tools,
+        )
         common["financial_results"] = (
             FinancialBranchResult(branch_id=branch.branch_id, result=result),
         )
     return common
+
+
+def _query_annual_financial_fallback_if_needed(
+    state: AgentState,
+    branch: FinancialFactsBranch,
+    result: FinancialFactQueryResult,
+    update: dict[str, object],
+    tools: ResearchTools,
+) -> FinancialFactQueryResult:
+    fallback_request = _annual_financial_fallback_request(state, branch, result)
+    if fallback_request is None:
+        return result
+    _record_financial_fallback_attempt(update, branch.branch_id)
+    started = time.monotonic()
+    try:
+        fallback = tools.query_financial_facts(fallback_request)
+    except ResearchToolError as exc:
+        error = exc.error.model_copy(update={"node": "query_financial_facts", "attempt": 1})
+        _append_update_tuple(update, "errors", (error,))
+        _append_update_tuple(
+            update,
+            "trajectory",
+            (
+                _event(
+                    "query_financial_facts",
+                    TrajectoryStatus.FAILED,
+                    "Annual financial fallback query failed.",
+                    started,
+                    details={"branch_id": branch.branch_id},
+                ),
+            ),
+        )
+        return _financial_result_with_warnings(result, "annual_financial_fallback_failed")
+    except Exception:
+        error = _agent_error(
+            "query_financial_facts",
+            "annual_financial_fallback_failed",
+            "Annual financial fallback query failed.",
+            category=AgentErrorCategory.TOOL,
+            severity=AgentErrorSeverity.RECOVERABLE,
+        )
+        _append_update_tuple(update, "errors", (error,))
+        _append_update_tuple(
+            update,
+            "trajectory",
+            (
+                _event(
+                    "query_financial_facts",
+                    TrajectoryStatus.FAILED,
+                    "Annual financial fallback query failed.",
+                    started,
+                    details={"branch_id": branch.branch_id},
+                ),
+            ),
+        )
+        return _financial_result_with_warnings(result, "annual_financial_fallback_failed")
+    fallback_status = (
+        "annual_financial_fallback_used"
+        if fallback.observations
+        else "annual_financial_fallback_missing"
+    )
+    _append_update_tuple(
+        update,
+        "trajectory",
+        (
+            _event(
+                "query_financial_facts",
+                TrajectoryStatus.COMPLETED,
+                "Annual financial fallback query completed.",
+                started,
+                details={
+                    "branch_id": branch.branch_id,
+                    "fallback_observations": len(fallback.observations),
+                },
+            ),
+        ),
+    )
+    if fallback.observations:
+        return _financial_result_with_warnings(
+            fallback,
+            "quarterly_financial_facts_missing",
+            fallback_status,
+        )
+    return _financial_result_with_warnings(
+        result,
+        "quarterly_financial_facts_missing",
+        fallback_status,
+        *fallback.warnings,
+    )
+
+
+def _annual_financial_fallback_request(
+    state: AgentState,
+    branch: FinancialFactsBranch,
+    result: FinancialFactQueryResult,
+) -> FinancialFactQuery | None:
+    if result.observations:
+        return None
+    request = branch.request
+    if request.period_types != ("quarter",) or request.fiscal_periods:
+        return None
+    operations = _financial_branch_calculation_operations(
+        state.get("execution_plan"),
+        branch.branch_id,
+    )
+    if not operations or any(
+        operation not in ANNUAL_FINANCIAL_FALLBACK_OPERATIONS for operation in operations
+    ):
+        return None
+    minimum_limit = max(_minimum_observations_for_operation(operation) for operation in operations)
+    # The fallback changes only the reporting cadence. Company, metric, date, unit, and
+    # amendment filters stay intact so the replayed plan cannot drift to another question.
+    return request.model_copy(
+        update={
+            "period_types": ("annual",),
+            "fiscal_periods": (),
+            "limit": max(request.limit, minimum_limit),
+        }
+    )
+
+
+def _financial_branch_calculation_operations(
+    plan: ExecutionPlan | None,
+    branch_id: str,
+) -> tuple[CalculationOperation, ...]:
+    if plan is None:
+        return ()
+    return tuple(
+        branch.operation
+        for branch in plan.branches
+        if isinstance(branch, CalculationBranch) and branch_id in branch.input_refs
+    )
+
+
+def _record_financial_fallback_attempt(update: dict[str, object], branch_id: str) -> None:
+    update["tool_calls_used"] = cast(int, update.get("tool_calls_used", 0)) + 1
+    outcomes = cast(tuple[BranchOutcome, ...], update.get("branch_outcomes", ()))
+    update["branch_outcomes"] = tuple(
+        outcome.model_copy(update={"attempts": outcome.attempts + 1})
+        if outcome.branch_id == branch_id
+        else outcome
+        for outcome in outcomes
+    )
+    attempt_node = f"query_financial_facts:{branch_id}"
+    attempts = cast(tuple[NodeAttempt, ...], update.get("node_attempts", ()))
+    update["node_attempts"] = tuple(
+        item.model_copy(update={"attempts": item.attempts + 1})
+        if item.node == attempt_node
+        else item
+        for item in attempts
+    )
+
+
+def _financial_result_with_warnings(
+    result: FinancialFactQueryResult,
+    *warnings: str,
+) -> FinancialFactQueryResult:
+    return result.model_copy(
+        update={"warnings": tuple(dict.fromkeys((*result.warnings, *warnings)))}
+    )
+
+
+def _append_update_tuple[ItemT](
+    update: dict[str, object],
+    key: str,
+    values: tuple[ItemT, ...],
+) -> None:
+    update[key] = (*cast(tuple[ItemT, ...], update.get(key, ())), *values)
 
 
 def _query_macro_series(
@@ -2436,12 +2624,139 @@ def _evaluate_context(state: AgentState) -> dict[str, object]:
     if required:
         execution_failure = any(reason == "execution_failed" for _, reason in required)
         update["status"] = AgentRunStatus.FAILED if execution_failure else AgentRunStatus.ABSTAINED
+        if not execution_failure:
+            financial_missing = tuple(
+                branch
+                for branch, reason in required
+                if reason == "insufficient_evidence" and isinstance(branch, FinancialFactsBranch)
+            )
+            if financial_missing:
+                update["draft_answer"] = _runtime_financial_missing_answer(
+                    state,
+                    financial_missing,
+                )
     elif optional:
         if _has_any_source_evidence(state):
             update["status"] = AgentRunStatus.PARTIAL
         else:
             update["status"] = AgentRunStatus.ABSTAINED
     return update
+
+
+def _runtime_financial_missing_answer(
+    state: AgentState,
+    branches: tuple[FinancialFactsBranch, ...],
+) -> str:
+    company = _runtime_financial_missing_company_label(state, branches)
+    metrics = ", ".join(_runtime_financial_missing_metrics(branches))
+    fallback_note = _runtime_financial_fallback_note(state, branches)
+    if _looks_ukrainian(state["question"]):
+        return (
+            f"Не можу виконати цей запит для {company}: зараз CompanyLens підтримує тільки "
+            "SEC/EDGAR companies і ті structured financial facts, які вже доступні після "
+            f"підготовки даних. Для метрик {metrics} не знайшов потрібних фактів. "
+            f"{fallback_note} Розрахунок і графік не будувалися, щоб не показати "
+            "необґрунтований результат."
+        )
+    return (
+        f"I cannot complete this request for {company}: CompanyLens currently supports only "
+        "SEC/EDGAR companies and the structured financial facts available after data "
+        f"preparation. I could not find the required facts for: {metrics}. {fallback_note} "
+        "The calculation and chart were not produced so the result would not be unsupported."
+    )
+
+
+def _runtime_financial_missing_company_label(
+    state: AgentState,
+    branches: tuple[FinancialFactsBranch, ...],
+) -> str:
+    frame = state.get("research_frame")
+    if frame is not None:
+        return _readiness_company_label(frame)
+    resolved = state.get("resolved_query")
+    if resolved is not None:
+        for entity in resolved.entities:
+            if entity.candidates:
+                return entity.candidates[0].display_value
+            if entity.canonical_value:
+                return entity.canonical_value
+            if entity.mention:
+                return entity.mention
+    for branch in branches:
+        if branch.request.tickers:
+            return ", ".join(branch.request.tickers)
+        if branch.request.company_ids:
+            return ", ".join(str(company_id) for company_id in branch.request.company_ids)
+    return "the resolved company"
+
+
+def _runtime_financial_missing_metrics(
+    branches: tuple[FinancialFactsBranch, ...],
+) -> tuple[str, ...]:
+    metrics: list[str] = []
+    for branch in branches:
+        metrics.extend(branch.request.metrics)
+    return tuple(dict.fromkeys(metrics)) or ("financial facts",)
+
+
+def _runtime_financial_fallback_note(
+    state: AgentState,
+    branches: tuple[FinancialFactsBranch, ...],
+) -> str:
+    warnings = _runtime_financial_missing_warnings(state, branches)
+    ukrainian = _looks_ukrainian(state["question"])
+    if "annual_financial_fallback_missing" in warnings:
+        return (
+            "Я також спробував annual fallback, але annual facts теж не знайшлися."
+            if ukrainian
+            else "I also tried the annual fallback, but annual facts were unavailable too."
+        )
+    if "annual_financial_fallback_failed" in warnings:
+        return (
+            "Annual fallback був спробуваний, але fallback query не виконався."
+            if ukrainian
+            else "The annual fallback was attempted, but the fallback query failed."
+        )
+    if _runtime_financial_requires_quarterly_data(state, branches):
+        return (
+            "Annual fallback не застосовувався, бо цей розрахунок потребує quarterly facts."
+            if ukrainian
+            else "Annual fallback was not used because this calculation requires quarterly facts."
+        )
+    return (
+        "Annual fallback не застосовувався, бо його не можна безпечно використати для цього "
+        "запиту."
+        if ukrainian
+        else "Annual fallback was not used because it was not safe for this request."
+    )
+
+
+def _runtime_financial_missing_warnings(
+    state: AgentState,
+    branches: tuple[FinancialFactsBranch, ...],
+) -> set[str]:
+    branch_ids = {branch.branch_id for branch in branches}
+    warnings: set[str] = set()
+    for result in state.get("financial_results", ()):
+        if result.branch_id in branch_ids:
+            warnings.update(result.result.warnings)
+    return warnings
+
+
+def _runtime_financial_requires_quarterly_data(
+    state: AgentState,
+    branches: tuple[FinancialFactsBranch, ...],
+) -> bool:
+    plan = state.get("execution_plan")
+    if plan is None:
+        return False
+    branch_ids = {branch.branch_id for branch in branches}
+    return any(
+        isinstance(branch, CalculationBranch)
+        and branch.operation == "quarter_over_quarter_growth"
+        and bool(branch_ids.intersection(branch.input_refs))
+        for branch in plan.branches
+    )
 
 
 def _dispatch_calculation_branches(state: AgentState) -> list[Send] | str:

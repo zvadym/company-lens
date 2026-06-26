@@ -465,6 +465,44 @@ class AnnualSeriesFinancialTools(FakeResearchTools):
         )
 
 
+class QuarterlyMissingAnnualFallbackTools(FakeResearchTools):
+    def __init__(self, *, annual_observations: bool = True) -> None:
+        super().__init__()
+        self.annual_observations = annual_observations
+        self.financial_requests: list[FinancialFactQuery] = []
+
+    def query_financial_facts(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
+        self.calls["financial"] += 1
+        self.financial_requests.append(request)
+        if request.period_types == ("quarter",):
+            return FinancialFactQueryResult(
+                query=request,
+                observations=(),
+                available_units=(),
+                warnings=("no_matching_financial_facts",),
+            )
+        observations = (
+            tuple(
+                _financial_observation(date(year, 12, 31), value).model_copy(
+                    update={"id": ANNUAL_FACT_IDS[year]}
+                )
+                for year, value in zip(
+                    range(2022, 2026),
+                    (Decimal("64"), Decimal("80"), Decimal("100"), Decimal("125")),
+                    strict=True,
+                )
+            )
+            if self.annual_observations
+            else ()
+        )
+        return FinancialFactQueryResult(
+            query=request,
+            observations=observations,
+            available_units=("USD",) if observations else (),
+            warnings=() if observations else ("no_matching_financial_facts",),
+        )
+
+
 class PeerAnnualFinancialTools(FakeResearchTools):
     def resolve_entities(self, query: str) -> ResolvedQuery:
         self.calls["resolve"] += 1
@@ -3545,6 +3583,142 @@ def test_answer_timeout_fallback_formats_multi_point_calculations() -> None:
     assert "[{'label':" not in result["final_answer"]
     assert "'observed_at':" not in result["final_answer"]
     assert result["answer_validation"].valid is True
+
+
+def test_quarterly_missing_financial_facts_fall_back_to_annual_series() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Compare Cloudflare revenue growth over the last eight quarters.",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS, AgentCapability.CALCULATIONS),
+    )
+    plan = ExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=(
+            FinancialFactsBranch(
+                branch_id="financial",
+                request=FinancialFactQuery(
+                    company_ids=(COMPANY_ID,),
+                    metrics=("revenue",),
+                    period_types=("quarter",),
+                    limit=24,
+                ),
+            ),
+            CalculationBranch(
+                branch_id="growth",
+                operation="year_over_year_growth",
+                input_refs=("financial",),
+                depends_on=("financial",),
+            ),
+        ),
+    )
+    model = AnswerTimeoutModelProvider(analysis=analysis, plan=plan)
+    tools = QuarterlyMissingAnnualFallbackTools()
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, tools)).run(
+        "Compare Cloudflare revenue growth over the last eight quarters.",
+        session_id="session-annual-fallback-success",
+        policy=ExecutionPolicy(max_retries_per_node=0),
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert tools.calls["financial"] == 2
+    assert [request.period_types for request in tools.financial_requests] == [
+        ("quarter",),
+        ("annual",),
+    ]
+    financial = result["financial_results"][-1].result
+    assert financial.query.period_types == ("annual",)
+    assert "annual_financial_fallback_used" in financial.warnings
+    assert result["tool_calls_used"] == 2
+    assert result["final_answer"] is not None
+    assert "latest value was 25% at 2025-12-31" in result["final_answer"]
+    assert result["answer_validation"].valid is True
+
+
+def test_financial_missing_after_annual_fallback_abstains_with_explanation() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Compare Cloudflare revenue growth over the last eight quarters.",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS, AgentCapability.CALCULATIONS),
+    )
+    plan = ExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=(
+            FinancialFactsBranch(
+                branch_id="financial",
+                request=FinancialFactQuery(
+                    company_ids=(COMPANY_ID,),
+                    metrics=("revenue",),
+                    period_types=("quarter",),
+                    limit=24,
+                ),
+            ),
+            CalculationBranch(
+                branch_id="growth",
+                operation="year_over_year_growth",
+                input_refs=("financial",),
+                depends_on=("financial",),
+            ),
+        ),
+    )
+    model = FakeModelProvider(analysis=analysis, plan=plan)
+    tools = QuarterlyMissingAnnualFallbackTools(annual_observations=False)
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, tools)).run(
+        "Compare Cloudflare revenue growth over the last eight quarters.",
+        session_id="session-annual-fallback-missing",
+    )
+
+    assert result["status"] is AgentRunStatus.ABSTAINED
+    assert tools.calls["financial"] == 2
+    assert ModelPurpose.ANSWER not in model.purposes
+    assert result["final_answer"] is not None
+    assert "SEC/EDGAR companies" in result["final_answer"]
+    assert "annual fallback" in result["final_answer"]
+    financial = result["financial_results"][-1].result
+    assert financial.observations == ()
+    assert "annual_financial_fallback_missing" in financial.warnings
+
+
+def test_qoq_missing_quarterly_facts_does_not_use_annual_fallback() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Calculate Cloudflare quarter over quarter revenue growth.",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS, AgentCapability.CALCULATIONS),
+    )
+    plan = ExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=(
+            FinancialFactsBranch(
+                branch_id="financial",
+                request=FinancialFactQuery(
+                    company_ids=(COMPANY_ID,),
+                    metrics=("revenue",),
+                    period_types=("quarter",),
+                    limit=8,
+                ),
+            ),
+            CalculationBranch(
+                branch_id="growth",
+                operation="quarter_over_quarter_growth",
+                input_refs=("financial",),
+                depends_on=("financial",),
+            ),
+        ),
+    )
+    model = FakeModelProvider(analysis=analysis, plan=plan)
+    tools = QuarterlyMissingAnnualFallbackTools()
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, tools)).run(
+        "Calculate Cloudflare quarter over quarter revenue growth.",
+        session_id="session-qoq-no-annual-fallback",
+    )
+
+    assert result["status"] is AgentRunStatus.ABSTAINED
+    assert tools.calls["financial"] == 1
+    assert tools.financial_requests[0].period_types == ("quarter",)
+    assert result["final_answer"] is not None
+    assert "requires quarterly facts" in result["final_answer"]
 
 
 def test_answer_generation_uses_human_number_display_values() -> None:
