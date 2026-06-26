@@ -118,11 +118,19 @@ DEFAULT_CHART_QUARTERLY_FACT_LIMIT = 24
 DEFAULT_CHART_MACRO_MONTH_LIMIT = 48
 MIN_LINE_CHART_POINTS = 3
 DEFAULT_CHART_WINDOW_REASON = "default_chart_window_latest_8_quarters"
+DETERMINISTIC_PLAN_REASON_CODES = frozenset(
+    {
+        "deterministic_follow_up_replay_plan",
+        "deterministic_multi_company_growth_chart_plan",
+        "deterministic_recent_artifact_period_plan",
+    }
+)
 UNIT_NUMBER_RE = re.compile(
     r"(?<![\w.:-])(?P<value>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)"
     r"\s*(?P<unit>USD|percent|%)(?![\w:-])",
     re.IGNORECASE,
 )
+ChartKind = Literal["line", "bar", "area", "scatter"]
 
 
 @dataclass(frozen=True)
@@ -1294,41 +1302,25 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
                 ),
             ),
         }
-    previous_plan = memory.last_execution_plan if memory is not None else None
-    artifact_period_plan = _fallback_recent_artifact_period_plan(
+    deterministic_plan = _deterministic_follow_up_plan(
         state["question"],
         analysis,
         resolved,
         memory,
     )
-    if artifact_period_plan is not None:
-        reconciled_analysis = _reconcile_analysis_with_plan(analysis, artifact_period_plan)
-        try:
-            plan = _normalize_and_validate_plan(
-                artifact_period_plan,
-                reconciled_analysis,
-                resolved,
-                state["policy"],
-                retrieval_index_name=runtime.context.retrieval_index_name,
-                retrieval_index_version=runtime.context.retrieval_index_version,
-            )
-        except ValueError:
-            plan = None
-        if plan is not None:
-            return {
-                "execution_plan": plan,
-                "analysis": reconciled_analysis,
-                "research_frame": frame,
-                "node_attempts": (NodeAttempt(node="plan_request", attempts=1),),
-                "trajectory": (
-                    _event(
-                        "plan_request",
-                        TrajectoryStatus.COMPLETED,
-                        "Reused a recent artifact with an updated period.",
-                        started,
-                    ),
-                ),
-            }
+    if deterministic_plan is not None:
+        deterministic_update = _validated_deterministic_plan_update(
+            deterministic_plan,
+            analysis,
+            resolved,
+            state["policy"],
+            frame,
+            runtime,
+            started,
+        )
+        if deterministic_update is not None:
+            return deterministic_update
+    previous_plan = memory.last_execution_plan if memory is not None else None
     planning_context = json.dumps(
         {
             "question": state["question"],
@@ -1471,6 +1463,334 @@ def _requires_financial_company(analysis: QuestionAnalysis) -> bool:
     return AgentCapability.FINANCIAL_FACTS in analysis.required_capabilities
 
 
+def _validated_deterministic_plan_update(
+    deterministic_plan: ExecutionPlan,
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+    policy: ExecutionPolicy,
+    frame: ResearchFrame,
+    runtime: Runtime[ResearchAgentRuntime],
+    started: float,
+) -> dict[str, object] | None:
+    reconciled_analysis = _reconcile_analysis_with_plan(analysis, deterministic_plan)
+    try:
+        plan = _normalize_and_validate_plan(
+            deterministic_plan,
+            reconciled_analysis,
+            resolved,
+            policy,
+            retrieval_index_name=runtime.context.retrieval_index_name,
+            retrieval_index_version=runtime.context.retrieval_index_version,
+        )
+    except ValueError:
+        return None
+    update: dict[str, object] = {
+        "execution_plan": plan,
+        "analysis": reconciled_analysis,
+        "research_frame": frame,
+        "node_attempts": (NodeAttempt(node="plan_request", attempts=1),),
+        "trajectory": (
+            _event(
+                "plan_request",
+                TrajectoryStatus.COMPLETED,
+                "Replayed the previous execution plan with the user's explicit changes.",
+                started,
+            ),
+        ),
+    }
+    return update
+
+
+def _deterministic_follow_up_plan(
+    question: str,
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+    memory: SessionMemory | None,
+) -> ExecutionPlan | None:
+    if memory is None or not analysis.is_follow_up:
+        return None
+    artifact_period_plan = _fallback_recent_artifact_period_plan(
+        question,
+        analysis,
+        resolved,
+        memory,
+    )
+    if artifact_period_plan is not None:
+        return artifact_period_plan
+    if memory.last_execution_plan is None or not _requests_plan_replay(question, analysis):
+        return None
+    return _replay_financial_follow_up_plan(
+        question,
+        analysis,
+        resolved,
+        memory.last_execution_plan,
+    )
+
+
+def _replay_financial_follow_up_plan(
+    question: str,
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+    previous_plan: ExecutionPlan,
+) -> ExecutionPlan | None:
+    template_facts = _first_financial_branch(previous_plan)
+    if template_facts is None:
+        return None
+    template_calculation = _first_single_input_financial_calculation(previous_plan)
+    company_ids = resolved.company_ids or _plan_company_ids(previous_plan)
+    metric = (resolved.metrics or template_facts.request.metrics or ("revenue",))[0]
+    if not company_ids:
+        return None
+
+    period = _resolved_period_override(question, resolved)
+    branches: list[ExecutionBranch] = []
+    numeric_refs: list[str] = []
+    for index, company_id in enumerate(company_ids, start=1):
+        fact_id = f"replay_{index}_{_branch_id_token(metric)}_facts"
+        branches.append(
+            FinancialFactsBranch(
+                branch_id=fact_id,
+                request=_replayed_financial_request(
+                    template_facts.request,
+                    company_id,
+                    metric,
+                    period,
+                ),
+            )
+        )
+        if template_calculation is None:
+            numeric_refs.append(fact_id)
+            continue
+        calculation_id = f"replay_{index}_{_branch_id_token(metric)}_calc"
+        branches.append(
+            template_calculation.model_copy(
+                update={
+                    "branch_id": calculation_id,
+                    "input_refs": (fact_id,),
+                    "depends_on": (fact_id,),
+                }
+            )
+        )
+        numeric_refs.append(calculation_id)
+
+    macro_refs = _replayed_macro_branches(previous_plan, period)
+    branches.extend(macro_refs)
+    previous_chart = _previous_chart_branch(previous_plan)
+    if analysis.chart_requested or previous_chart is not None:
+        chart_refs = (*numeric_refs, *tuple(branch.branch_id for branch in macro_refs))
+        if not chart_refs:
+            return None
+        chart_type = _requested_chart_type(question)
+        branches.append(
+            ChartBranch(
+                branch_id="replay_chart",
+                chart_type=chart_type
+                or (previous_chart.chart_type if previous_chart is not None else "line"),
+                dataset_ref=chart_refs[0],
+                depends_on=chart_refs,
+                title=_replayed_chart_title(metric, template_calculation, previous_chart),
+            )
+        )
+
+    return _canonicalize_plan_route(
+        ExecutionPlan(
+            route=ResearchRoute.CALCULATION,
+            branches=tuple(branches),
+            reason_codes=("deterministic_follow_up_replay_plan",),
+        )
+    )
+
+
+def _replayed_financial_request(
+    template: FinancialFactQuery,
+    company_id: uuid.UUID,
+    metric: str,
+    period: tuple[date, date] | None,
+) -> FinancialFactQuery:
+    updates: dict[str, object] = {
+        "company_ids": (company_id,),
+        "tickers": (),
+        "metrics": (metric,),
+    }
+    if period is not None:
+        period_start, period_end = period
+        updates.update(
+            {
+                "period_start": period_start,
+                "period_end": period_end,
+                "fiscal_years": (),
+                "fiscal_periods": (),
+            }
+        )
+    return template.model_copy(update=updates)
+
+
+def _replayed_macro_branches(
+    previous_plan: ExecutionPlan,
+    period: tuple[date, date] | None,
+) -> list[MacroSeriesBranch]:
+    macro_branches: list[MacroSeriesBranch] = []
+    for branch in previous_plan.branches:
+        if not isinstance(branch, MacroSeriesBranch):
+            continue
+        if period is None:
+            macro_branches.append(branch)
+            continue
+        period_start, period_end = period
+        macro_branches.append(
+            branch.model_copy(
+                update={
+                    "request": branch.request.model_copy(
+                        update={
+                            "observation_start": period_start,
+                            "observation_end": period_end,
+                        }
+                    )
+                }
+            )
+        )
+    return macro_branches
+
+
+def _requests_plan_replay(question: str, analysis: QuestionAnalysis) -> bool:
+    replay_capabilities = {
+        AgentCapability.FINANCIAL_FACTS,
+        AgentCapability.CALCULATIONS,
+        AgentCapability.CHART,
+    }
+    if (
+        not analysis.chart_requested
+        and not replay_capabilities.intersection(analysis.required_capabilities)
+    ):
+        return False
+    normalized = question.casefold()
+    if _requested_chart_type(question) is not None:
+        return True
+    if _requests_period_override(question, analysis):
+        return True
+    if _analysis_requests_add_series(analysis) or _question_requests_add_series(question):
+        return True
+    if any(
+        marker in reason
+        for reason in analysis.reason_codes
+        for marker in (
+            "same",
+            "repeat",
+            "previous",
+            "follow_up_chart",
+            "same_chart",
+            "same_data",
+        )
+    ):
+        return True
+    return any(
+        marker in normalized
+        for marker in (
+            "same",
+            "same data",
+            "same chart",
+            "do the same",
+            "previous chart",
+            "that chart",
+            "again",
+            "те саме",
+            "так само",
+            "такий графік",
+            "цей графік",
+            "попередній графік",
+            "на цих дан",
+        )
+    )
+
+
+def _resolved_period_override(
+    question: str,
+    resolved: ResolvedQuery,
+) -> tuple[date, date] | None:
+    period = _period_override(question)
+    if period is not None:
+        return period
+    if resolved.dates:
+        return min(resolved.dates), max(resolved.dates)
+    return None
+
+
+def _requested_chart_type(question: str) -> ChartKind | None:
+    normalized = question.casefold()
+    markers: tuple[tuple[ChartKind, tuple[str, ...]], ...] = (
+        ("bar", ("bar chart", "bar graph", "стовп", "гістограм", "bar ")),
+        ("line", ("line chart", "line graph", "лінійн", "лінійний")),
+        ("area", ("area chart", "area graph")),
+        ("scatter", ("scatter chart", "scatter plot", "точков")),
+    )
+    for chart_type, chart_markers in markers:
+        if any(marker in normalized for marker in chart_markers):
+            return chart_type
+    return None
+
+
+def _first_financial_branch(plan: ExecutionPlan) -> FinancialFactsBranch | None:
+    return next(
+        (branch for branch in plan.branches if isinstance(branch, FinancialFactsBranch)),
+        None,
+    )
+
+
+def _first_single_input_financial_calculation(
+    plan: ExecutionPlan,
+) -> CalculationBranch | None:
+    branches = {branch.branch_id: branch for branch in plan.branches}
+    for branch in plan.branches:
+        if not isinstance(branch, CalculationBranch) or len(branch.input_refs) != 1:
+            continue
+        # Multi-input operations need their full source topology, so they remain model-planned.
+        input_branch = branches.get(branch.input_refs[0])
+        if isinstance(input_branch, FinancialFactsBranch):
+            return branch
+    return None
+
+
+def _previous_chart_branch(plan: ExecutionPlan) -> ChartBranch | None:
+    for branch in reversed(plan.branches):
+        if isinstance(branch, ChartBranch):
+            return branch
+    return None
+
+
+def _plan_company_ids(plan: ExecutionPlan) -> tuple[uuid.UUID, ...]:
+    company_ids: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for branch in plan.branches:
+        if not isinstance(branch, FinancialFactsBranch):
+            continue
+        for company_id in branch.request.company_ids:
+            if company_id in seen:
+                continue
+            seen.add(company_id)
+            company_ids.append(company_id)
+    return tuple(company_ids)
+
+
+def _branch_id_token(value: str) -> str:
+    token = re.sub(r"[^a-z0-9_]+", "_", value.casefold()).strip("_")
+    if not token:
+        return "metric"
+    if not token[0].isalpha():
+        token = f"metric_{token}"
+    return token
+
+
+def _replayed_chart_title(
+    metric: str,
+    calculation: CalculationBranch | None,
+    previous_chart: ChartBranch | None,
+) -> str:
+    if previous_chart is not None:
+        return previous_chart.title
+    operation = calculation.operation.replace("_", " ") if calculation is not None else "values"
+    return f"{metric.replace('_', ' ').title()} {operation.title()}"
+
+
 def _fallback_recent_artifact_period_plan(
     question: str,
     analysis: QuestionAnalysis,
@@ -1582,9 +1902,9 @@ def _artifact_growth_operation(artifact: SessionArtifactContext) -> CalculationO
 
 def _artifact_chart_type(
     artifact: SessionArtifactContext,
-) -> Literal["line", "bar", "area", "scatter"]:
+) -> ChartKind:
     if artifact.chart_type in {"line", "bar", "area", "scatter"}:
-        return cast(Literal["line", "bar", "area", "scatter"], artifact.chart_type)
+        return cast(ChartKind, artifact.chart_type)
     return "line"
 
 
@@ -3391,7 +3711,7 @@ def _reconcile_analysis_with_plan(
 
     represented = _represented_capabilities(plan)
     if (
-        "deterministic_multi_company_growth_chart_plan" in plan.reason_codes
+        not DETERMINISTIC_PLAN_REASON_CODES.isdisjoint(plan.reason_codes)
         and plan.route is not ResearchRoute.UNSUPPORTED
     ):
         return _analysis_for_represented_plan(
@@ -3734,6 +4054,8 @@ def _should_inherit_recent_companies(
         return _should_add_to_existing_company_set(resolved, analysis, memory)
     recent_company_count = len(_recent_company_ids(memory))
     if _requests_period_override(analysis.normalized_question, analysis):
+        return recent_company_count >= 1
+    if _requests_plan_replay(analysis.normalized_question, analysis):
         return recent_company_count >= 1
     if recent_company_count < 2:
         return False

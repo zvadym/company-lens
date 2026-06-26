@@ -2442,6 +2442,195 @@ def test_period_override_follow_up_reuses_recent_chart_artifact_without_model_pl
     )
 
 
+def test_follow_up_replays_previous_growth_chart_for_new_company_without_model_plan() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="do the same for zoom",
+        route=ResearchRoute.RAG_ONLY,
+        required_capabilities=(AgentCapability.DOCUMENTS, AgentCapability.CHART),
+        chart_requested=True,
+        is_follow_up=True,
+        reason_codes=("follow_up", "same_chart"),
+    )
+    previous_plan = _previous_revenue_growth_chart_plan(MICROSOFT_ID)
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.RAG_ONLY),
+    )
+    state = create_initial_agent_state(
+        "do the same for Zoom",
+        session_id="session-replay-new-company",
+    )
+    state["analysis"] = analysis
+    state["resolved_query"] = ResolvedQuery(
+        query="do the same for Zoom",
+        company_ids=(ZOOM_ID,),
+        metrics=("revenue",),
+    )
+    state["session_memory"] = SessionMemory(last_execution_plan=previous_plan)
+
+    update = _plan_request(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, PeerAnnualFinancialTools())),
+    )
+
+    assert model.model_calls == []
+    plan = update["execution_plan"]
+    assert isinstance(plan, ExecutionPlan)
+    assert "deterministic_follow_up_replay_plan" in plan.reason_codes
+    financial_branches = [
+        branch for branch in plan.branches if isinstance(branch, FinancialFactsBranch)
+    ]
+    assert [branch.request.company_ids for branch in financial_branches] == [(ZOOM_ID,)]
+    assert [
+        branch.operation for branch in plan.branches if isinstance(branch, CalculationBranch)
+    ] == ["year_over_year_growth"]
+    chart = plan.branches[-1]
+    assert isinstance(chart, ChartBranch)
+    assert chart.chart_type == "line"
+    reconciled = update["analysis"]
+    assert isinstance(reconciled, QuestionAnalysis)
+    assert reconciled.route is ResearchRoute.CALCULATION
+    assert AgentCapability.DOCUMENTS not in reconciled.required_capabilities
+
+
+def test_follow_up_replays_previous_chart_with_chart_type_override() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="build a bar chart from the same data",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+        is_follow_up=True,
+        reason_codes=("follow_up", "same_data", "chart_type_override"),
+    )
+    previous_plan = _previous_revenue_growth_chart_plan(MICROSOFT_ID)
+    previous_resolved = ResolvedQuery(
+        query="plot microsoft revenue growth",
+        company_ids=(MICROSOFT_ID,),
+        metrics=("revenue",),
+    )
+    memory = SessionMemory(
+        last_resolved_query=previous_resolved,
+        recent_resolved_queries=(previous_resolved,),
+        last_execution_plan=previous_plan,
+    )
+    merged = _merge_follow_up_if_needed(
+        ResolvedQuery(query="build a bar chart from the same data", metrics=("revenue",)),
+        analysis,
+        memory,
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.RAG_ONLY),
+    )
+    state = create_initial_agent_state(
+        "build a bar chart from the same data",
+        session_id="session-replay-chart-type",
+    )
+    state["analysis"] = analysis
+    state["resolved_query"] = merged
+    state["session_memory"] = memory
+
+    update = _plan_request(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, PeerAnnualFinancialTools())),
+    )
+
+    assert model.model_calls == []
+    assert merged.company_ids == (MICROSOFT_ID,)
+    plan = update["execution_plan"]
+    assert isinstance(plan, ExecutionPlan)
+    chart = plan.branches[-1]
+    assert isinstance(chart, ChartBranch)
+    assert chart.chart_type == "bar"
+    assert chart.depends_on == ("replay_1_revenue_calc",)
+
+
+def test_follow_up_replays_add_company_bar_chart_without_dropping_previous_company() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="додай amazon і побудуй bar chart",
+        route=ResearchRoute.HYBRID,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+        is_follow_up=True,
+        reason_codes=("follow_up", "adds_company", "explicit_chart_request"),
+    )
+    previous_plan = _previous_revenue_growth_chart_plan(MICROSOFT_ID)
+    previous_resolved = ResolvedQuery(
+        query="побудуй графік росту revenue microsoft",
+        company_ids=(MICROSOFT_ID,),
+        metrics=("revenue",),
+    )
+    memory = SessionMemory(
+        last_resolved_query=previous_resolved,
+        recent_resolved_queries=(previous_resolved,),
+        last_execution_plan=previous_plan,
+    )
+    merged = _merge_follow_up_if_needed(
+        ResolvedQuery(
+            query="додай amazon і побудуй bar chart",
+            entities=(
+                EntityResolution(
+                    kind="company",
+                    mention="amazon",
+                    status="resolved",
+                    canonical_value=str(AMAZON_ID),
+                    candidates=(
+                        EntityCandidate(
+                            id=AMAZON_ID,
+                            canonical_value=str(AMAZON_ID),
+                            display_value="AMAZON COM INC",
+                            match_kind="sec_company_extracted",
+                        ),
+                    ),
+                ),
+            ),
+            company_ids=(AMAZON_ID,),
+            metrics=("revenue",),
+        ),
+        analysis,
+        memory,
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.RAG_ONLY),
+    )
+    state = create_initial_agent_state(
+        "додай amazon і побудуй bar chart",
+        session_id="session-replay-add-company-bar-chart",
+    )
+    state["analysis"] = analysis
+    state["resolved_query"] = merged
+    state["session_memory"] = memory
+
+    update = _plan_request(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, PeerAnnualFinancialTools())),
+    )
+
+    assert model.model_calls == []
+    assert merged.company_ids == (MICROSOFT_ID, AMAZON_ID)
+    plan = update["execution_plan"]
+    assert isinstance(plan, ExecutionPlan)
+    assert "errors" not in update
+    assert [
+        branch.request.company_ids
+        for branch in plan.branches
+        if isinstance(branch, FinancialFactsBranch)
+    ] == [(MICROSOFT_ID,), (AMAZON_ID,)]
+    chart = plan.branches[-1]
+    assert isinstance(chart, ChartBranch)
+    assert chart.chart_type == "bar"
+    assert chart.depends_on == ("replay_1_revenue_calc", "replay_2_revenue_calc")
+
+
 def test_multi_company_chart_fallback_plan_uses_each_company_series() -> None:
     analysis = QuestionAnalysis(
         normalized_question="compare Cloudflare and Alphabet revenue growth on a chart",
@@ -4135,6 +4324,32 @@ def _model_execution_plan(plan: ExecutionPlan) -> ModelExecutionPlan:
         requires_citations=plan.requires_citations,
         reason_codes=plan.reason_codes,
     )
+
+
+def _previous_revenue_growth_chart_plan(company_id: uuid.UUID) -> ExecutionPlan:
+    facts = FinancialFactsBranch(
+        branch_id="previous_revenue",
+        request=FinancialFactQuery(
+            company_ids=(company_id,),
+            metrics=("revenue",),
+            period_types=("quarter",),
+            limit=8,
+        ),
+    )
+    growth = CalculationBranch(
+        branch_id="previous_growth",
+        operation="year_over_year_growth",
+        input_refs=(facts.branch_id,),
+        depends_on=(facts.branch_id,),
+    )
+    chart = ChartBranch(
+        branch_id="previous_chart",
+        chart_type="line",
+        dataset_ref=growth.branch_id,
+        depends_on=(growth.branch_id,),
+        title="Revenue growth",
+    )
+    return ExecutionPlan(route=ResearchRoute.CALCULATION, branches=(facts, growth, chart))
 
 
 def _financial_observation(period_end: date, value: Decimal) -> FinancialFactObservation:
