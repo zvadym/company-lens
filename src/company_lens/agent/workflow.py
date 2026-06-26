@@ -891,12 +891,21 @@ def _merge_prepared_ticker_resolutions(
         if entity.kind in {"company", "public_company"}
     }
     for ticker_resolution in ticker_resolutions:
+        ticker_has_resolved_company = bool(ticker_resolution.company_ids) or any(
+            entity.kind == "company" and _entity_company_id(entity) is not None
+            for entity in ticker_resolution.entities
+        )
         for company_id in ticker_resolution.company_ids:
             if company_id not in seen_company_ids:
                 seen_company_ids.add(company_id)
                 company_ids.append(company_id)
         for entity in ticker_resolution.entities:
             if entity.kind not in {"company", "public_company"}:
+                continue
+            # Once the downloaded ticker resolves to a local company row, keeping the
+            # public-company placeholder would create a second unresolved target for
+            # the same SEC ticker and make the planner reject otherwise valid plans.
+            if entity.kind == "public_company" and ticker_has_resolved_company:
                 continue
             key = (entity.kind, entity.canonical_value or entity.mention.casefold())
             if key in seen_entities:
@@ -3640,7 +3649,7 @@ def _analysis_requests_add_series(analysis: QuestionAnalysis) -> bool:
     return any(
         marker in reason
         for reason in analysis.reason_codes
-        for marker in ("add_series", "add_to_chart", "add_company")
+        for marker in ("add_series", "add_to_chart", "add_company", "adds_company")
     )
 
 
