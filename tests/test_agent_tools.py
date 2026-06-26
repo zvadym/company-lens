@@ -27,7 +27,7 @@ def test_sql_research_tools_owns_a_distinct_session_per_call(
         def __init__(self, *, session: Session) -> None:
             sessions.append(session)
 
-        def resolve(self, query: str) -> ResolvedQuery:
+        def resolve(self, query: str, *, include_companies: bool = True) -> ResolvedQuery:
             return ResolvedQuery(query=query)
 
     monkeypatch.setattr("company_lens.agent.tools.EntityResolver", TrackingResolver)
@@ -48,7 +48,7 @@ def test_sql_research_tools_sanitizes_unexpected_service_errors(
         def __init__(self, *, session: Session) -> None:
             pass
 
-        def resolve(self, query: str) -> Any:
+        def resolve(self, query: str, *, include_companies: bool = True) -> Any:
             raise RuntimeError("database failed with sk-secret-value")
 
     monkeypatch.setattr("company_lens.agent.tools.EntityResolver", BrokenResolver)
@@ -70,7 +70,7 @@ def test_sql_research_tools_discovers_public_company_from_sec_ticker_map(
         def __init__(self, *, session: Session) -> None:
             pass
 
-        def resolve(self, query: str) -> ResolvedQuery:
+        def resolve(self, query: str, *, include_companies: bool = True) -> ResolvedQuery:
             return ResolvedQuery(query=query)
 
     class FakeSecClient:
@@ -116,7 +116,7 @@ def test_sql_research_tools_resolves_extracted_public_company_brand_from_sec_map
         def __init__(self, *, session: Session) -> None:
             pass
 
-        def resolve(self, query: str) -> ResolvedQuery:
+        def resolve(self, query: str, *, include_companies: bool = True) -> ResolvedQuery:
             return ResolvedQuery(query=query)
 
     class FakeSecClient:

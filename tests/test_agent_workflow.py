@@ -269,6 +269,22 @@ class FakeResearchTools:
         self.calls["resolve"] += 1
         return ResolvedQuery(query=query, company_ids=(COMPANY_ID,), metrics=("revenue",))
 
+    def resolve_non_company_entities(self, query: str) -> ResolvedQuery:
+        resolved = self.resolve_entities(query)
+        has_company_entities = any(
+            entity.kind in {"company", "public_company"} for entity in resolved.entities
+        )
+        return resolved.model_copy(
+            update={
+                "entities": tuple(
+                    entity
+                    for entity in resolved.entities
+                    if entity.kind not in {"company", "public_company"}
+                ),
+                "company_ids": () if has_company_entities else resolved.company_ids,
+            }
+        )
+
     def resolve_public_company_mentions(
         self,
         mentions: Sequence[str],
@@ -889,6 +905,21 @@ def test_workflow_prepares_unavailable_public_company_before_planning() -> None:
                 )
             return ResolvedQuery(query=query, company_ids=(COMPANY_ID,))
 
+        def resolve_public_company_mentions(
+            self,
+            mentions: Sequence[str],
+        ) -> tuple[EntityResolution, ...]:
+            self.calls["resolve_public_company_mentions"] += 1
+            assert mentions == ("Netflix",)
+            return (
+                public_company_resolution(
+                    mention="Netflix",
+                    ticker="NFLX",
+                    display_name="NETFLIX INC",
+                    match_kind="sec_company_extracted",
+                ),
+            )
+
         def prepare_companies(
             self,
             *,
@@ -929,6 +960,11 @@ def test_workflow_prepares_unavailable_public_company_before_planning() -> None:
             ),
         ),
         texts=("Competition was a reported risk [document:cloudflare-risk].",),
+        company_extraction=CompanyMentionExtraction(
+            mentions=("Netflix",),
+            new_company_target=True,
+            reason_codes=("explicit_company_target",),
+        ),
     )
     tools = OnDemandTools()
 
@@ -1131,6 +1167,78 @@ def test_resolve_entities_does_not_inherit_previous_company_for_unknown_extracte
     assert public_company.mention == "Globex"
     assert public_company.candidates == ()
     assert tools.calls["resolve_public_company_mentions"] == 1
+
+
+def test_chart_type_follow_up_does_not_treat_bar_as_company() -> None:
+    class BarTickerTools(FakeResearchTools):
+        def resolve_entities(self, query: str) -> ResolvedQuery:
+            self.calls["resolve"] += 1
+            return ResolvedQuery(
+                query=query,
+                entities=(
+                    public_company_resolution(
+                        mention="bar",
+                        ticker="BAR",
+                        display_name="GraniteShares Gold Trust",
+                        match_kind="identity:ticker",
+                    ),
+                ),
+                metrics=("revenue",),
+            )
+
+    analysis = QuestionAnalysis(
+        normalized_question="build a bar chart from the same data",
+        route=ResearchRoute.HYBRID,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+        is_follow_up=True,
+        reason_codes=(
+            "explicit_chart_request",
+            "follow_up_on_prior_table",
+            "derived_comparison",
+        ),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.HYBRID),
+        company_extraction=CompanyMentionExtraction(
+            mentions=(),
+            new_company_target=False,
+            reason_codes=("no_company_mentioned", "bar_is_chart_type"),
+        ),
+    )
+    tools = BarTickerTools()
+    state = create_initial_agent_state(
+        "а тепер побудуй bar chart на цих данних",
+        session_id="session-follow-up-bar-chart",
+    )
+    state["analysis"] = analysis
+    state["session_memory"] = SessionMemory(
+        last_resolved_query=ResolvedQuery(
+            query="Compare Cloudflare revenue growth",
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+        )
+    )
+
+    update = _resolve_entities(state, Runtime(context=ResearchAgentRuntime(model, tools)))
+
+    resolved = cast(ResolvedQuery, update["resolved_query"])
+    assert resolved.company_ids == (COMPANY_ID,)
+    assert all(entity.mention != "bar" for entity in resolved.entities)
+    assert all(
+        not (
+            entity.candidates
+            and entity.candidates[0].display_value == "GraniteShares Gold Trust"
+        )
+        for entity in resolved.entities
+    )
+    assert tools.calls["resolve_public_company_mentions"] == 0
+    assert ModelPurpose.ENTITY_EXTRACTION in model.purposes
 
 
 def test_prepared_follow_up_company_resolves_company_id_from_extracted_ticker() -> None:
@@ -2657,6 +2765,11 @@ def test_unresolved_follow_up_company_abstain_has_user_facing_answer() -> None:
     model = FakeModelProvider(
         analysis=analysis,
         plan=ExecutionPlan(route=ResearchRoute.CALCULATION),
+        company_extraction=CompanyMentionExtraction(
+            mentions=("SAMSUNG",),
+            new_company_target=True,
+            reason_codes=("explicit_company_target",),
+        ),
     )
     tools = UnresolvedSamsungTools()
 

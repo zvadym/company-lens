@@ -589,23 +589,27 @@ def _looks_ukrainian(text: str) -> bool:
     )
 
 
-def _resolve_extracted_follow_up_companies(
+def _resolve_extracted_company_mentions(
     state: AgentState,
     runtime: Runtime[ResearchAgentRuntime],
     resolved: ResolvedQuery,
     analysis: QuestionAnalysis | None,
 ) -> ResolvedQuery:
-    if not _should_extract_follow_up_company_mentions(resolved, analysis, state["question"]):
+    if not _should_extract_company_mentions(analysis):
         return resolved
+    base_resolved = _resolved_query_without_company_entities(resolved)
     messages = (
         ModelMessage(
             role="system",
             content=(
                 "Extract public-company names or stock tickers explicitly present in the current "
                 "user message. This is not canonical resolution: do not infer aliases, do not use "
-                "prior conversation context, and do not add companies that are only implied. "
-                "Set new_company_target only when the message asks to apply the prior task to a "
-                "new explicitly named company. Use English lowercase_snake_case reason codes."
+                "prior conversation context, and do not add companies that are only implied. Do "
+                "not return ordinary words, metrics, products, chart types, or visualization words "
+                "such as bar, line, area, scatter, table, chart, graph, plot, revenue, growth, "
+                "cash, or rate unless they are clearly being used as a company name or stock "
+                "ticker. Set new_company_target when the current message explicitly introduces, "
+                "replaces, or adds a company target. Use English lowercase_snake_case reason codes."
             ),
         ),
         ModelMessage(
@@ -627,50 +631,29 @@ def _resolve_extracted_follow_up_companies(
         node="resolve_entities",
     )
     if error is not None or extraction is None:
-        return resolved
-    if not extraction.new_company_target or not extraction.mentions:
-        return resolved
+        return base_resolved
+    if not extraction.mentions:
+        return base_resolved
     resolved_entities = runtime.context.tools.resolve_public_company_mentions(extraction.mentions)
     if resolved_entities:
-        return _resolved_query_with_extra_entities(resolved, resolved_entities)
+        return _resolved_query_with_extra_entities(base_resolved, resolved_entities)
     unresolved_mentions = tuple(
         EntityResolution(kind="public_company", mention=mention, status="unresolved")
         for mention in extraction.mentions
     )
-    return _resolved_query_with_extra_entities(resolved, unresolved_mentions)
+    return _resolved_query_with_extra_entities(base_resolved, unresolved_mentions)
 
 
-def _should_extract_follow_up_company_mentions(
-    resolved: ResolvedQuery,
+def _should_extract_company_mentions(
     analysis: QuestionAnalysis | None,
-    question: str,
 ) -> bool:
+    if analysis is None or analysis.route is ResearchRoute.UNSUPPORTED:
+        return False
+    capabilities = set(analysis.required_capabilities)
     return (
-        analysis is not None
-        and analysis.is_follow_up
-        and AgentCapability.FINANCIAL_FACTS in analysis.required_capabilities
-        and not _has_company_like_entity(resolved)
-        and (
-            _question_may_name_new_company_target(question)
-            or _question_may_name_new_company_target(analysis.normalized_question)
-        )
-    )
-
-
-def _question_may_name_new_company_target(question: str) -> bool:
-    normalized = question.casefold()
-    padded = f" {normalized} "
-    return any(
-        marker in padded
-        for marker in (
-            " for ",
-            "same for",
-            "add ",
-            "додай",
-            "для ",
-            "те саме для",
-            "ще і ",
-        )
+        analysis.chart_requested
+        or AgentCapability.FINANCIAL_FACTS in capabilities
+        or AgentCapability.DOCUMENTS in capabilities
     )
 
 
@@ -684,7 +667,38 @@ def _resolved_query_with_extra_entities(
     )
     if not additions:
         return resolved
-    return resolved.model_copy(update={"entities": (*resolved.entities, *additions)})
+    company_ids = tuple(
+        dict.fromkeys(
+            (
+                *resolved.company_ids,
+                *(
+                    company_id
+                    for entity in additions
+                    if (company_id := _entity_company_id(entity)) is not None
+                ),
+            )
+        )
+    )
+    return resolved.model_copy(
+        update={
+            "entities": (*resolved.entities, *additions),
+            "company_ids": company_ids,
+        }
+    )
+
+
+def _resolved_query_without_company_entities(resolved: ResolvedQuery) -> ResolvedQuery:
+    has_company_entities = _has_company_like_entity(resolved)
+    return resolved.model_copy(
+        update={
+            "entities": tuple(
+                entity
+                for entity in resolved.entities
+                if entity.kind not in {"company", "public_company"}
+            ),
+            "company_ids": () if has_company_entities else resolved.company_ids,
+        }
+    )
 
 
 def _normalized_analysis_question(
@@ -701,10 +715,14 @@ def _resolve_entities(
         return _skipped("resolve_entities")
     started = time.monotonic()
     try:
-        resolved = runtime.context.tools.resolve_entities(state["question"])
         analysis = state.get("analysis")
+        resolved = _resolve_question_entities(
+            state["question"],
+            analysis,
+            runtime.context.tools,
+        )
         memory = state.get("session_memory")
-        resolved = _resolve_extracted_follow_up_companies(
+        resolved = _resolve_extracted_company_mentions(
             state,
             runtime,
             resolved,
@@ -792,8 +810,12 @@ def _prepare_company_data(
     resolved_tickers = tuple(dict.fromkeys((*result.prepared_tickers, *result.skipped_tickers)))
     if resolved_tickers:
         with suppress(Exception):
-            resolved = runtime.context.tools.resolve_entities(state["question"])
-            resolved = _resolve_extracted_follow_up_companies(
+            resolved = _resolve_question_entities(
+                state["question"],
+                state.get("analysis"),
+                runtime.context.tools,
+            )
+            resolved = _resolve_extracted_company_mentions(
                 state,
                 runtime,
                 resolved,
@@ -896,6 +918,16 @@ def _merge_prepared_ticker_resolutions(
             "company_ids": tuple(company_ids),
         }
     )
+
+
+def _resolve_question_entities(
+    question: str,
+    analysis: QuestionAnalysis | None,
+    tools: ResearchTools,
+) -> ResolvedQuery:
+    if _should_extract_company_mentions(analysis):
+        return tools.resolve_non_company_entities(question)
+    return tools.resolve_entities(question)
 
 
 def _build_research_frame(

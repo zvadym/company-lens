@@ -104,23 +104,24 @@ class EntityResolver:
     def __init__(self, *, session: Session) -> None:
         self._session = session
 
-    def resolve(self, query: str) -> ResolvedQuery:
+    def resolve(self, query: str, *, include_companies: bool = True) -> ResolvedQuery:
         cleaned = " ".join(query.strip().split())
         entities: list[EntityResolution] = []
         company_ids: list[uuid.UUID] = []
 
-        company_entities = self._resolve_companies(cleaned)
-        entities.extend(company_entities)
-        for entity in company_entities:
-            if entity.status == "resolved" and entity.candidates[0].id is not None:
-                company_ids.append(entity.candidates[0].id)
+        if include_companies:
+            company_entities = self._resolve_companies(cleaned)
+            entities.extend(company_entities)
+            for entity in company_entities:
+                if entity.status == "resolved" and entity.candidates[0].id is not None:
+                    company_ids.append(entity.candidates[0].id)
 
-        matched_company_ids = set(company_ids)
-        identity_entities = self._resolve_company_identities(cleaned, matched_company_ids)
-        entities.extend(identity_entities)
-        for entity in identity_entities:
-            if entity.status == "resolved" and entity.candidates[0].id is not None:
-                company_ids.append(entity.candidates[0].id)
+            matched_company_ids = set(company_ids)
+            identity_entities = self._resolve_company_identities(cleaned, matched_company_ids)
+            entities.extend(identity_entities)
+            for entity in identity_entities:
+                if entity.status == "resolved" and entity.candidates[0].id is not None:
+                    company_ids.append(entity.candidates[0].id)
 
         accessions = tuple(dict.fromkeys(ACCESSION_RE.findall(cleaned)))
         entities.extend(self._resolve_accessions(accessions))

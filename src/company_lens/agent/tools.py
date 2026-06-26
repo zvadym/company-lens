@@ -44,6 +44,8 @@ class ResearchTools(Protocol):
 
     def resolve_entities(self, query: str) -> ResolvedQuery: ...
 
+    def resolve_non_company_entities(self, query: str) -> ResolvedQuery: ...
+
     def resolve_public_company_mentions(
         self,
         mentions: Sequence[str],
@@ -101,6 +103,9 @@ class SqlResearchTools:
         if not public_entities:
             return resolved
         return resolved.model_copy(update={"entities": (*resolved.entities, *public_entities)})
+
+    def resolve_non_company_entities(self, query: str) -> ResolvedQuery:
+        return self._resolve_entities(query, include_companies=False)
 
     def resolve_public_company_mentions(
         self,
@@ -232,11 +237,14 @@ class SqlResearchTools:
                 )
             ) from None
 
-    def _resolve_entities(self, query: str) -> ResolvedQuery:
+    def _resolve_entities(self, query: str, *, include_companies: bool = True) -> ResolvedQuery:
         try:
             with self._session_factory.begin() as session:
                 self._seed_curated_identities(session)
-                return EntityResolver(session=session).resolve(query)
+                return EntityResolver(session=session).resolve(
+                    query,
+                    include_companies=include_companies,
+                )
         except ResearchToolError:
             raise
         except (ValueError, TypeError):
