@@ -2816,7 +2816,17 @@ def _finalize_response(
     status = state["status"]
     validation = state.get("answer_validation")
     answer = state.get("draft_answer")
-    memory = _updated_session_memory(state, runtime.context.max_cached_source_results)
+    promote_current_context = (
+        status in {AgentRunStatus.RUNNING, AgentRunStatus.PARTIAL}
+        and answer is not None
+        and validation is not None
+        and validation.valid
+    )
+    memory = _updated_session_memory(
+        state,
+        runtime.context.max_cached_source_results,
+        promote_current_context=promote_current_context,
+    )
     if status in {AgentRunStatus.RUNNING, AgentRunStatus.PARTIAL}:
         if answer and validation is not None and validation.valid:
             final_status = (
@@ -2873,14 +2883,21 @@ def _finalize_response(
     }
 
 
-def _updated_session_memory(state: AgentState, cache_limit: int) -> SessionMemory:
+def _updated_session_memory(
+    state: AgentState,
+    cache_limit: int,
+    *,
+    promote_current_context: bool,
+) -> SessionMemory:
     previous = state.get("session_memory") or SessionMemory()
+    stored_at = datetime.now(UTC)
+    if not promote_current_context:
+        return previous.model_copy(update={"updated_at": stored_at})
     cached = {
         (item.kind, item.request_fingerprint): item for item in previous.cached_source_results
     }
     plan = state.get("execution_plan")
     branches = {branch.branch_id: branch for branch in plan.branches} if plan else {}
-    stored_at = datetime.now(UTC)
     for retrieval in state.get("retrieval_results", ()):
         branch = branches.get(retrieval.branch_id)
         if isinstance(branch, DocumentRetrievalBranch) and retrieval.result.context:

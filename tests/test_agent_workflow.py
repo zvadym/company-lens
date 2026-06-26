@@ -52,6 +52,7 @@ from company_lens.agent.workflow import (
     _plan_request,
     _prepare_company_data,
     _resolve_entities,
+    _updated_session_memory,
     build_research_graph,
     create_initial_agent_state,
 )
@@ -1239,6 +1240,65 @@ def test_chart_type_follow_up_does_not_treat_bar_as_company() -> None:
     )
     assert tools.calls["resolve_public_company_mentions"] == 0
     assert ModelPurpose.ENTITY_EXTRACTION in model.purposes
+
+
+def test_failed_turn_does_not_promote_bad_company_resolution_to_session_memory() -> None:
+    previous = ResolvedQuery(
+        query="Compare Cloudflare revenue growth",
+        company_ids=(COMPANY_ID,),
+        metrics=("revenue",),
+    )
+    bad_bar_resolution = ResolvedQuery(
+        query="а тепер побудуй bar chart на цих данних",
+        entities=(
+            EntityResolution(
+                kind="company",
+                mention="bar",
+                status="resolved",
+                canonical_value=str(APPLE_ID),
+                candidates=(
+                    EntityCandidate(
+                        id=APPLE_ID,
+                        canonical_value=str(APPLE_ID),
+                        display_value="GraniteShares Gold Trust",
+                        match_kind="ticker",
+                    ),
+                ),
+            ),
+            public_company_resolution(
+                mention="bar",
+                ticker="BAR",
+                display_name="GraniteShares Gold Trust",
+                match_kind="identity:ticker",
+            ),
+        ),
+        company_ids=(APPLE_ID,),
+        metrics=("revenue",),
+    )
+    state = create_initial_agent_state(
+        "а тепер побудуй bar chart на цих данних",
+        session_id="session-failed-memory-promotion",
+    )
+    state["status"] = AgentRunStatus.FAILED
+    state["resolved_query"] = bad_bar_resolution
+    state["session_memory"] = SessionMemory(
+        last_resolved_query=previous,
+        recent_resolved_queries=(previous,),
+    )
+
+    memory = _updated_session_memory(
+        state,
+        cache_limit=20,
+        promote_current_context=False,
+    )
+
+    assert memory.last_resolved_query == previous
+    assert memory.recent_resolved_queries == (previous,)
+    assert all(
+        entity.mention != "bar"
+        for query in memory.recent_resolved_queries
+        for entity in query.entities
+    )
 
 
 def test_prepared_follow_up_company_resolves_company_id_from_extracted_ticker() -> None:
