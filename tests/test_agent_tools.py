@@ -181,9 +181,7 @@ def test_sql_research_tools_resolves_extracted_mention_without_sec_map_hydration
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine)
     with factory.begin() as session:
-        CompanyIdentityRegistry(session=session).seed_curated_identities(
-            load_curated_identities()
-        )
+        CompanyIdentityRegistry(session=session).seed_curated_identities(load_curated_identities())
     tools = SqlResearchTools(
         session_factory=factory,
         settings=Settings(sec_user_agent="company-lens-test contact@example.com"),

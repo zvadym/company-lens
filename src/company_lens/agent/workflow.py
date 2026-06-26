@@ -464,9 +464,7 @@ def _fallback_follow_up_analysis(
     question: str,
     memory: SessionMemory | None,
 ) -> QuestionAnalysis | None:
-    if memory is None or (
-        memory.last_execution_plan is None and not memory.recent_artifacts
-    ):
+    if memory is None or (memory.last_execution_plan is None and not memory.recent_artifacts):
         return None
     if not (
         _question_references_previous_work(question)
@@ -1786,9 +1784,8 @@ def _requests_plan_replay(question: str, analysis: QuestionAnalysis) -> bool:
         AgentCapability.CALCULATIONS,
         AgentCapability.CHART,
     }
-    if (
-        not analysis.chart_requested
-        and not replay_capabilities.intersection(analysis.required_capabilities)
+    if not analysis.chart_requested and not replay_capabilities.intersection(
+        analysis.required_capabilities
     ):
         return False
     if _requested_chart_type(question) is not None:
@@ -2724,8 +2721,7 @@ def _runtime_financial_fallback_note(
             else "Annual fallback was not used because this calculation requires quarterly facts."
         )
     return (
-        "Annual fallback не застосовувався, бо його не можна безпечно використати для цього "
-        "запиту."
+        "Annual fallback не застосовувався, бо його не можна безпечно використати для цього запиту."
         if ukrainian
         else "Annual fallback was not used because it was not safe for this request."
     )
@@ -3316,9 +3312,7 @@ def _display_summary(item: EvidenceEnvelope) -> str:
 
 def _calculation_display_summary(result: CalculationResult) -> str:
     values = tuple(
-        point
-        for point in result.values
-        if _display_value(point.value, result.unit) is not None
+        point for point in result.values if _display_value(point.value, result.unit) is not None
     )
     operation = _fallback_operation_label(result.operation)
     if not values:

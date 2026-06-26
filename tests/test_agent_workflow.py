@@ -1317,10 +1317,7 @@ def test_chart_type_follow_up_does_not_treat_bar_as_company() -> None:
     assert resolved.company_ids == (COMPANY_ID,)
     assert all(entity.mention != "bar" for entity in resolved.entities)
     assert all(
-        not (
-            entity.candidates
-            and entity.candidates[0].display_value == "GraniteShares Gold Trust"
-        )
+        not (entity.candidates and entity.candidates[0].display_value == "GraniteShares Gold Trust")
         for entity in resolved.entities
     )
     assert tools.calls["resolve_public_company_mentions"] == 0
