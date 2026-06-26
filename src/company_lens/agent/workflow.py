@@ -422,12 +422,107 @@ def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -
     )
     update = _model_node_update("parse_question", attempts, started, error)
     if error is not None:
+        fallback_analysis = _fallback_follow_up_analysis(
+            state["question"],
+            state.get("session_memory"),
+        )
+        if fallback_analysis is not None:
+            update.pop("errors", None)
+            update["analysis"] = fallback_analysis
+            update["trajectory"] = (
+                *cast(tuple[TrajectoryEvent, ...], update["trajectory"]),
+                _event(
+                    "parse_question",
+                    TrajectoryStatus.COMPLETED,
+                    "Recovered classification from deterministic follow-up context.",
+                    started,
+                    details={"attempts": attempts},
+                ),
+            )
+            return update
         update["status"] = _terminal_parse_status(error)
         if update["status"] is AgentRunStatus.ABSTAINED:
             update["draft_answer"] = _parse_failure_answer(state, error)
     elif output is not None:
         update["analysis"] = output
     return update
+
+
+def _fallback_follow_up_analysis(
+    question: str,
+    memory: SessionMemory | None,
+) -> QuestionAnalysis | None:
+    if memory is None or (
+        memory.last_execution_plan is None and not memory.recent_artifacts
+    ):
+        return None
+    if not (
+        _question_references_previous_work(question)
+        or _question_requests_add_series(question)
+        or _period_override(question) is not None
+    ):
+        return None
+    represented = (
+        _represented_capabilities(memory.last_execution_plan)
+        if memory.last_execution_plan is not None
+        else {
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        }
+    )
+    if not represented:
+        return None
+    chart_requested = AgentCapability.CHART in represented or _question_requests_chart(question)
+    capabilities = set(represented)
+    if chart_requested:
+        capabilities.add(AgentCapability.CHART)
+    ordered_capabilities = tuple(
+        capability for capability in AgentCapability if capability in capabilities
+    )
+    if not ordered_capabilities:
+        return None
+    route = _fallback_follow_up_route(capabilities, memory.last_execution_plan)
+    reason_codes = ["heuristic_follow_up_parse", "deterministic_replay_candidate"]
+    if _requested_chart_type(question) is not None:
+        reason_codes.append("chart_type_override")
+    if _period_override(question) is not None:
+        reason_codes.append("period_override")
+    if _question_requests_add_series(question):
+        reason_codes.append("adds_company")
+    if _question_references_previous_work(question):
+        reason_codes.append("same_data")
+    return QuestionAnalysis(
+        normalized_question=question,
+        route=route,
+        required_capabilities=ordered_capabilities,
+        chart_requested=chart_requested,
+        is_follow_up=True,
+        reason_codes=tuple(dict.fromkeys(reason_codes)),
+    )
+
+
+def _fallback_follow_up_route(
+    capabilities: set[AgentCapability],
+    previous_plan: ExecutionPlan | None,
+) -> ResearchRoute:
+    if AgentCapability.CALCULATIONS in capabilities:
+        return ResearchRoute.CALCULATION
+    if {
+        AgentCapability.DOCUMENTS,
+        AgentCapability.FINANCIAL_FACTS,
+    }.issubset(capabilities) or {
+        AgentCapability.MACRO_SERIES,
+        AgentCapability.FINANCIAL_FACTS,
+    }.issubset(capabilities):
+        return ResearchRoute.HYBRID
+    if AgentCapability.FINANCIAL_FACTS in capabilities:
+        return ResearchRoute.STRUCTURED_ONLY
+    if AgentCapability.MACRO_SERIES in capabilities:
+        return ResearchRoute.API_ONLY
+    if AgentCapability.DOCUMENTS in capabilities:
+        return ResearchRoute.RAG_ONLY
+    return previous_plan.route if previous_plan is not None else ResearchRoute.UNSUPPORTED
 
 
 def _answer_session_context(state: AgentState) -> dict[str, object]:
@@ -1555,6 +1650,7 @@ def _replay_financial_follow_up_plan(
                     company_id,
                     metric,
                     period,
+                    template_calculation.operation if template_calculation is not None else None,
                 ),
             )
         )
@@ -1606,6 +1702,7 @@ def _replayed_financial_request(
     company_id: uuid.UUID,
     metric: str,
     period: tuple[date, date] | None,
+    operation: CalculationOperation | None,
 ) -> FinancialFactQuery:
     updates: dict[str, object] = {
         "company_ids": (company_id,),
@@ -1613,7 +1710,7 @@ def _replayed_financial_request(
         "metrics": (metric,),
     }
     if period is not None:
-        period_start, period_end = period
+        period_start, period_end = _financial_source_period(period, operation)
         updates.update(
             {
                 "period_start": period_start,
@@ -1623,6 +1720,24 @@ def _replayed_financial_request(
             }
         )
     return template.model_copy(update=updates)
+
+
+def _financial_source_period(
+    period: tuple[date, date],
+    operation: CalculationOperation | None,
+) -> tuple[date, date]:
+    period_start, period_end = period
+    if operation == "year_over_year_growth":
+        # YoY calculations need the prior-year baseline, while the plotted points
+        # still begin at the user's requested start period.
+        return _same_day_previous_year(period_start), period_end
+    return period
+
+
+def _same_day_previous_year(value: date) -> date:
+    with suppress(ValueError):
+        return value.replace(year=value.year - 1)
+    return value.replace(year=value.year - 1, day=28)
 
 
 def _replayed_macro_branches(
@@ -1663,7 +1778,6 @@ def _requests_plan_replay(question: str, analysis: QuestionAnalysis) -> bool:
         and not replay_capabilities.intersection(analysis.required_capabilities)
     ):
         return False
-    normalized = question.casefold()
     if _requested_chart_type(question) is not None:
         return True
     if _requests_period_override(question, analysis):
@@ -1683,6 +1797,11 @@ def _requests_plan_replay(question: str, analysis: QuestionAnalysis) -> bool:
         )
     ):
         return True
+    return _question_references_previous_work(question)
+
+
+def _question_references_previous_work(question: str) -> bool:
+    normalized = question.casefold()
     return any(
         marker in normalized
         for marker in (
@@ -1699,7 +1818,17 @@ def _requests_plan_replay(question: str, analysis: QuestionAnalysis) -> bool:
             "цей графік",
             "попередній графік",
             "на цих дан",
+            "на цих самих дан",
+            "цих самих дан",
+            "тих самих дан",
         )
+    )
+
+
+def _question_requests_chart(question: str) -> bool:
+    normalized = question.casefold()
+    return _requested_chart_type(question) is not None or any(
+        marker in normalized for marker in ("chart", "graph", "plot", "графік", "граф", "діаграм")
     )
 
 
@@ -1816,7 +1945,7 @@ def _fallback_recent_artifact_period_plan(
     period = _period_override(question)
     if period is None:
         return None
-    period_start, period_end = period
+    source_period_start, source_period_end = _financial_source_period(period, operation)
     branches: list[ExecutionBranch] = []
     growth_refs: list[str] = []
     for index, company_id in enumerate(company_ids, start=1):
@@ -1828,8 +1957,8 @@ def _fallback_recent_artifact_period_plan(
                 request=FinancialFactQuery(
                     company_ids=(company_id,),
                     metrics=(metric,),
-                    period_start=period_start,
-                    period_end=period_end,
+                    period_start=source_period_start,
+                    period_end=source_period_end,
                     period_types=("quarter",),
                     limit=DEFAULT_CHART_QUARTERLY_FACT_LIMIT,
                 ),
@@ -2445,7 +2574,7 @@ def _generate_chart_spec(state: AgentState) -> dict[str, object]:
         specification = generate_chart_specification(
             dataset,
             chart_type=chart.chart_type,
-            title=chart.title,
+            title=_chart_title(chart, dataset, plan),
             x_label=chart.x_label,
         )
     except (ValueError, TypeError):
@@ -2478,6 +2607,26 @@ def _generate_chart_spec(state: AgentState) -> dict[str, object]:
         }
     )
     return update
+
+
+def _chart_title(
+    chart: ChartBranch,
+    dataset: ValidatedChartDataset,
+    plan: ExecutionPlan,
+) -> str:
+    if "deterministic_follow_up_replay_plan" not in plan.reason_codes:
+        return chart.title
+    if len(dataset.series) == 1:
+        return dataset.series[0].label
+    return _comparison_chart_title(dataset)
+
+
+def _comparison_chart_title(dataset: ValidatedChartDataset) -> str:
+    labels = [series.label for series in dataset.series]
+    if labels and all(" revenue " in f" {label.casefold()} " for label in labels):
+        suffix = "YoY" if all("yoy" in label.casefold() for label in labels) else "comparison"
+        return f"Revenue {suffix} comparison"
+    return "Comparison chart"
 
 
 def _route_after_chart(state: AgentState) -> Literal["merge_evidence", "finalize_response"]:

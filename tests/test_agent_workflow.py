@@ -19,6 +19,8 @@ from company_lens.agent import (
     AgentErrorCategory,
     AgentErrorSeverity,
     AgentRunStatus,
+    BranchOutcome,
+    BranchStatus,
     ExecutionPlan,
     ExecutionPolicy,
     FinancialFactsBranch,
@@ -36,6 +38,7 @@ from company_lens.agent import (
 from company_lens.agent.model import ModelProviderError
 from company_lens.agent.schemas import (
     CalculationBranch,
+    CalculationBranchResult,
     ChartBranch,
     CompanyMentionExtraction,
     DocumentRetrievalBranch,
@@ -47,8 +50,10 @@ from company_lens.agent.schemas import (
 )
 from company_lens.agent.workflow import (
     _fallback_multi_company_growth_chart_plan,
+    _generate_chart_spec,
     _merge_follow_up_if_needed,
     _merge_follow_up_resolution,
+    _parse_question,
     _plan_request,
     _prepare_company_data,
     _resolve_entities,
@@ -56,6 +61,7 @@ from company_lens.agent.workflow import (
     build_research_graph,
     create_initial_agent_state,
 )
+from company_lens.analytics.schemas import CalculationPoint, CalculationResult
 from company_lens.financials.schemas import (
     FinancialFactObservation,
     FinancialFactQuery,
@@ -2423,7 +2429,7 @@ def test_period_override_follow_up_reuses_recent_chart_artifact_without_model_pl
         (COMPANY_ID,),
         (NETFLIX_ID,),
     ]
-    assert all(branch.request.period_start == date(2023, 1, 1) for branch in financial_branches)
+    assert all(branch.request.period_start == date(2022, 1, 1) for branch in financial_branches)
     assert all(branch.request.period_end == date(2025, 12, 31) for branch in financial_branches)
     assert [
         branch.operation for branch in plan.branches if isinstance(branch, CalculationBranch)
@@ -2491,6 +2497,129 @@ def test_follow_up_replays_previous_growth_chart_for_new_company_without_model_p
     assert isinstance(reconciled, QuestionAnalysis)
     assert reconciled.route is ResearchRoute.CALCULATION
     assert AgentCapability.DOCUMENTS not in reconciled.required_capabilities
+
+
+def test_follow_up_replay_chart_title_uses_new_series_label() -> None:
+    facts = FinancialFactsBranch(
+        branch_id="replay_1_revenue_facts",
+        request=FinancialFactQuery(company_ids=(ZOOM_ID,), metrics=("revenue",)),
+    )
+    calculation = CalculationBranch(
+        branch_id="replay_1_revenue_calc",
+        operation="year_over_year_growth",
+        input_refs=(facts.branch_id,),
+        depends_on=(facts.branch_id,),
+    )
+    stale_chart = ChartBranch(
+        branch_id="replay_chart",
+        chart_type="line",
+        dataset_ref=calculation.branch_id,
+        depends_on=(calculation.branch_id,),
+        title="Microsoft revenue YoY growth - last 8 quarters",
+    )
+    state = create_initial_agent_state(
+        "Зроби те саме для Zoom",
+        session_id="session-replay-title",
+    )
+    state["execution_plan"] = ExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=(facts, calculation, stale_chart),
+        reason_codes=("deterministic_follow_up_replay_plan",),
+    )
+    state["calculations"] = (
+        CalculationBranchResult(
+            branch_id="replay_1_revenue_calc",
+            result=CalculationResult(
+                operation="year_over_year_growth",
+                values=(
+                    CalculationPoint(
+                        label="Zoom Communications, Inc. revenue 2026-04-30",
+                        value=Decimal("5.47"),
+                        observed_at=date(2026, 4, 30),
+                    ),
+                ),
+                inputs=(),
+                formula="(current / prior_year - 1) * 100",
+                unit="percent",
+                sources=("https://sec.example/zoom",),
+            ),
+        ),
+    )
+    state["branch_outcomes"] = (
+        BranchOutcome(
+            branch_id=calculation.branch_id,
+            kind=calculation.kind,
+            status=BranchStatus.COMPLETED,
+            attempts=1,
+        ),
+    )
+
+    update = _generate_chart_spec(state)
+
+    chart = update["chart_spec"]
+    assert chart.title == "Zoom Communications, Inc. revenue YoY"
+
+
+def test_parse_failure_uses_follow_up_replay_analysis_for_same_data_chart() -> None:
+    previous_plan = _previous_revenue_growth_chart_plan(MICROSOFT_ID)
+    previous_resolved = ResolvedQuery(
+        query="plot microsoft revenue growth",
+        company_ids=(MICROSOFT_ID,),
+        metrics=("revenue",),
+    )
+    memory = SessionMemory(
+        last_resolved_query=previous_resolved,
+        recent_resolved_queries=(previous_resolved,),
+        last_execution_plan=previous_plan,
+    )
+    model = ParseFailureModelProvider(
+        analysis=QuestionAnalysis(
+            normalized_question="unused",
+            route=ResearchRoute.UNSUPPORTED,
+        ),
+        plan=ExecutionPlan(route=ResearchRoute.UNSUPPORTED),
+    )
+    state = create_initial_agent_state(
+        "Побудуй bar chart на цих самих даних",
+        session_id="session-parse-fallback-same-data",
+    )
+    state["session_memory"] = memory
+
+    parse_update = _parse_question(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, PeerAnnualFinancialTools())),
+    )
+
+    assert "status" not in parse_update
+    assert "errors" not in parse_update
+    analysis = parse_update["analysis"]
+    assert isinstance(analysis, QuestionAnalysis)
+    assert analysis.is_follow_up is True
+    assert analysis.chart_requested is True
+    assert analysis.route is ResearchRoute.CALCULATION
+    assert "chart_type_override" in analysis.reason_codes
+
+    state.update(parse_update)
+    merged = _merge_follow_up_if_needed(
+        ResolvedQuery(
+            query="Побудуй bar chart на цих самих даних",
+            metrics=("revenue",),
+        ),
+        analysis,
+        memory,
+    )
+    state["resolved_query"] = merged
+    plan_update = _plan_request(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, PeerAnnualFinancialTools())),
+    )
+
+    assert ModelPurpose.PLAN not in model.purposes
+    plan = plan_update["execution_plan"]
+    assert isinstance(plan, ExecutionPlan)
+    chart = plan.branches[-1]
+    assert isinstance(chart, ChartBranch)
+    assert chart.chart_type == "bar"
 
 
 def test_follow_up_replays_previous_chart_with_chart_type_override() -> None:
