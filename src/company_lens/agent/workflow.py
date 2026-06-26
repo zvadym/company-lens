@@ -4884,6 +4884,7 @@ def _select_financial_observations(
         return quarters[-2:]
     annual = tuple(item for item in ordered if item.period_type == "annual")
     if len(annual) >= 2:
+        annual = _deduplicate_annual_observations_for_growth(annual)
         if requested_fiscal_years:
             first_year = min(requested_fiscal_years) - 1
             last_year = max(requested_fiscal_years)
@@ -4903,6 +4904,25 @@ def _select_financial_observations(
     if not has_matching_pair:
         raise ValueError("Year-over-year growth requires matching reporting periods.")
     return comparable
+
+
+def _deduplicate_annual_observations_for_growth(
+    observations: Sequence[FinancialFactObservation],
+) -> tuple[FinancialFactObservation, ...]:
+    by_period: dict[tuple[object, ...], FinancialFactObservation] = {}
+    for item in observations:
+        # Annual facts are often restated in later filings and may appear once with FY and once
+        # with an empty fiscal_period. YoY charts need one value per plotted period_end.
+        key = (item.company_id, item.metric, item.unit, item.period_end)
+        existing = by_period.get(key)
+        if existing is None or _financial_filing_key(item) > _financial_filing_key(existing):
+            by_period[key] = item
+    return tuple(
+        sorted(
+            by_period.values(),
+            key=lambda item: (item.period_end, *_financial_filing_key(item)),
+        )
+    )
 
 
 def _financial_filing_key(item: FinancialFactObservation) -> tuple[date, str, str]:

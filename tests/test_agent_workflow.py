@@ -503,6 +503,45 @@ class QuarterlyMissingAnnualFallbackTools(FakeResearchTools):
         )
 
 
+class QuarterlyMissingDuplicatedAnnualFallbackTools(QuarterlyMissingAnnualFallbackTools):
+    def query_financial_facts(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
+        if request.period_types == ("quarter",):
+            return super().query_financial_facts(request)
+        self.calls["financial"] += 1
+        self.financial_requests.append(request)
+        rows = (
+            (2022, Decimal("64"), "FY", date(2023, 2, 1)),
+            (2023, Decimal("80"), "FY", date(2024, 2, 1)),
+            (2023, Decimal("80"), None, date(2025, 7, 1)),
+            (2024, Decimal("100"), "FY", date(2025, 2, 1)),
+            (2024, Decimal("100"), None, date(2026, 7, 1)),
+            (2025, Decimal("125"), "FY", date(2026, 2, 1)),
+        )
+        observations = tuple(
+            _financial_observation(date(year, 12, 31), value).model_copy(
+                update={
+                    "id": uuid.uuid5(
+                        uuid.NAMESPACE_DNS,
+                        f"duplicated-annual-{year}-{fiscal_period}-{filed_date.isoformat()}",
+                    ),
+                    "company_name": "PEPSICO INC",
+                    "ticker": "PEP",
+                    "metric": request.metrics[0],
+                    "fiscal_period": fiscal_period,
+                    "filed_date": filed_date,
+                    "accession_number": filed_date.isoformat(),
+                    "source_url": f"https://sec.example/pep/{filed_date.isoformat()}",
+                }
+            )
+            for year, value, fiscal_period, filed_date in rows
+        )
+        return FinancialFactQueryResult(
+            query=request,
+            observations=observations,
+            available_units=("USD",),
+        )
+
+
 class PeerAnnualFinancialTools(FakeResearchTools):
     def resolve_entities(self, query: str) -> ResolvedQuery:
         self.calls["resolve"] += 1
@@ -3633,6 +3672,72 @@ def test_quarterly_missing_financial_facts_fall_back_to_annual_series() -> None:
     assert result["final_answer"] is not None
     assert "latest value was 25% at 2025-12-31" in result["final_answer"]
     assert result["answer_validation"].valid is True
+
+
+def test_annual_fallback_deduplicates_restated_periods_before_charting() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="Plot Pepsico R&D expense growth over the last eight quarters.",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+    )
+    facts = FinancialFactsBranch(
+        branch_id="financial_rnd_qtr",
+        request=FinancialFactQuery(
+            company_ids=(COMPANY_ID,),
+            metrics=("research_and_development_expense",),
+            period_types=("quarter",),
+            limit=24,
+        ),
+    )
+    growth = CalculationBranch(
+        branch_id="rnd_yoy_growth",
+        operation="year_over_year_growth",
+        input_refs=(facts.branch_id,),
+        depends_on=(facts.branch_id,),
+    )
+    chart = ChartBranch(
+        branch_id="chart",
+        chart_type="line",
+        dataset_ref=growth.branch_id,
+        depends_on=(growth.branch_id,),
+        title="Pepsico R&D expense YoY growth",
+    )
+    model = AnswerTimeoutModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.CALCULATION,
+            branches=(facts, growth, chart),
+        ),
+    )
+    tools = QuarterlyMissingDuplicatedAnnualFallbackTools()
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, tools)).run(
+        "Побудуй line chart YoY R&D expense growth для Pepsico за останні 8 кварталів.",
+        session_id="session-annual-fallback-duplicate-chart",
+        policy=ExecutionPolicy(max_retries_per_node=0),
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert tools.calls["financial"] == 2
+    assert result["chart_spec"] is not None
+    assert [point.x for point in result["chart_spec"].data] == [
+        date(2023, 12, 31),
+        date(2024, 12, 31),
+        date(2025, 12, 31),
+    ]
+    calculation = result["calculations"][0].result
+    assert [point.observed_at for point in calculation.values] == [
+        date(2023, 12, 31),
+        date(2024, 12, 31),
+        date(2025, 12, 31),
+    ]
+    assert len(calculation.inputs) == 4
+    assert not any(error.code == "invalid_chart_dataset" for error in result["errors"])
 
 
 def test_financial_missing_after_annual_fallback_abstains_with_explanation() -> None:
