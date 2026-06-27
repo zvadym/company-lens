@@ -21,6 +21,34 @@ from company_lens.macro.schemas import FredObservation, FredSeriesMetadata, Fred
 from company_lens.retrieval.adaptive_schemas import ResolvedQuery
 
 
+class _FakeSecClient:
+    def __init__(self, ticker_map: dict[str, SecCompany]) -> None:
+        self._ticker_map = ticker_map
+
+    def __enter__(self) -> _FakeSecClient:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        pass
+
+    def fetch_ticker_map(self) -> dict[str, SecCompany]:
+        return self._ticker_map
+
+
+def _sql_tools_with_sec_map(
+    monkeypatch: pytest.MonkeyPatch,
+    ticker_map: dict[str, SecCompany],
+) -> SqlResearchTools:
+    monkeypatch.setattr(
+        "company_lens.agent.tools.build_sec_client_from_settings",
+        lambda settings: _FakeSecClient(ticker_map),
+    )
+    return SqlResearchTools(
+        session_factory=sessionmaker(bind=create_engine("sqlite+pysqlite:///:memory:")),
+        settings=Settings(sec_user_agent="company-lens-test contact@example.com"),
+    )
+
+
 def test_sql_research_tools_owns_a_distinct_session_per_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -200,6 +228,133 @@ def test_sql_research_tools_verifies_llm_alias_candidate_ticker_with_sec_map(
     assert entities[0].mention == "Google"
     assert entities[0].kind == "public_company"
     assert entities[0].candidates[0].canonical_value == "GOOG"
+
+
+def test_sql_research_tools_returns_ambiguous_sec_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = _sql_tools_with_sec_map(
+        monkeypatch,
+        {
+            "ACMA": SecCompany(
+                ticker="ACMA",
+                cik="0000000001",
+                name="Acme Holdings Inc.",
+            ),
+            "ACMB": SecCompany(
+                ticker="ACMB",
+                cik="0000000002",
+                name="Acme Software Inc.",
+            ),
+        },
+    )
+
+    entities = tools.resolve_public_company_mentions((CompanyMentionCandidate(mention="Acme"),))
+
+    assert len(entities) == 1
+    assert entities[0].status == "ambiguous"
+    assert [candidate.canonical_value for candidate in entities[0].candidates] == [
+        "ACMA",
+        "ACMB",
+    ]
+
+
+def test_sql_research_tools_resolves_specific_legal_name_above_prefix_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = _sql_tools_with_sec_map(
+        monkeypatch,
+        {
+            "ACMA": SecCompany(
+                ticker="ACMA",
+                cik="0000000001",
+                name="Acme Holdings Inc.",
+            ),
+            "ACMB": SecCompany(
+                ticker="ACMB",
+                cik="0000000002",
+                name="Acme Software Inc.",
+            ),
+        },
+    )
+
+    entities = tools.resolve_public_company_mentions(
+        (
+            CompanyMentionCandidate(
+                mention="Acme Holdings Inc.",
+                legal_name="Acme Holdings Inc.",
+            ),
+        )
+    )
+
+    assert len(entities) == 1
+    assert entities[0].status == "unresolved"
+    assert entities[0].candidates[0].canonical_value == "ACMA"
+    assert entities[0].candidates[0].match_kind == "sec_legal_name_extracted"
+
+
+def test_sql_research_tools_keeps_ambiguous_prefix_even_with_llm_ticker_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = _sql_tools_with_sec_map(
+        monkeypatch,
+        {
+            "BNO": SecCompany(
+                ticker="BNO",
+                cik="0001472494",
+                name="United States Brent Oil Fund LP",
+            ),
+            "UAL": SecCompany(
+                ticker="UAL",
+                cik="0000100517",
+                name="United Airlines Holdings Inc.",
+            ),
+        },
+    )
+
+    entities = tools.resolve_public_company_mentions(
+        (
+            CompanyMentionCandidate(
+                mention="United",
+                ticker="BNO",
+                legal_name="United States Brent Oil Fund LP",
+            ),
+        )
+    )
+
+    assert len(entities) == 1
+    assert entities[0].status == "ambiguous"
+    assert [candidate.canonical_value for candidate in entities[0].candidates] == [
+        "UAL",
+        "BNO",
+    ]
+
+
+def test_sql_research_tools_blocks_common_chart_word_as_plain_ticker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = _sql_tools_with_sec_map(
+        monkeypatch,
+        {
+            "BAR": SecCompany(
+                ticker="BAR",
+                cik="0001690437",
+                name="GraniteShares Gold Trust",
+            )
+        },
+    )
+
+    assert tools.resolve_public_company_mentions((CompanyMentionCandidate(mention="bar"),)) == ()
+    assert (
+        tools.resolve_public_company_mentions(
+            (CompanyMentionCandidate(mention="bar", ticker="BAR"),)
+        )
+        == ()
+    )
+
+    entities = tools.resolve_public_company_mentions((CompanyMentionCandidate(mention="$BAR"),))
+    assert len(entities) == 1
+    assert entities[0].candidates[0].canonical_value == "BAR"
 
 
 def test_sql_research_tools_ingests_missing_fred_series_on_demand(
