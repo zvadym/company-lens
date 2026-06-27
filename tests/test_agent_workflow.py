@@ -1253,6 +1253,177 @@ def test_resolve_entities_does_not_inherit_previous_company_for_unknown_extracte
     assert tools.calls["resolve_public_company_mentions"] == 1
 
 
+def test_resolve_entities_does_not_inherit_previous_company_for_ambiguous_target() -> None:
+    class AmbiguousCompanyTools(FakeResearchTools):
+        def resolve_entities(self, query: str) -> ResolvedQuery:
+            self.calls["resolve"] += 1
+            return ResolvedQuery(query=query, metrics=("revenue",))
+
+        def resolve_public_company_mentions(
+            self,
+            candidates: Sequence[CompanyMentionCandidate],
+        ) -> tuple[EntityResolution, ...]:
+            self.calls["resolve_public_company_mentions"] += 1
+            assert tuple(candidate.mention for candidate in candidates) == ("Acme",)
+            return (
+                EntityResolution(
+                    kind="public_company",
+                    mention="Acme",
+                    status="ambiguous",
+                    candidates=(
+                        EntityCandidate(
+                            canonical_value="ACMA",
+                            display_value="Acme Holdings Inc.",
+                            match_kind="sec_company_extracted",
+                        ),
+                        EntityCandidate(
+                            canonical_value="ACMB",
+                            display_value="Acme Software Inc.",
+                            match_kind="sec_company_extracted",
+                        ),
+                    ),
+                ),
+            )
+
+    analysis = QuestionAnalysis(
+        normalized_question="now do the same for Acme",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+        is_follow_up=True,
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.CALCULATION),
+        company_extraction=CompanyMentionExtraction(
+            companies=(CompanyMentionCandidate(mention="Acme"),),
+            reason_codes=("explicit_company_target",),
+        ),
+    )
+    tools = AmbiguousCompanyTools()
+    state = create_initial_agent_state(
+        "а тепер те саме для Acme",
+        session_id="session-follow-up-ambiguous-company",
+    )
+    state["analysis"] = analysis
+    state["session_memory"] = SessionMemory(
+        last_resolved_query=ResolvedQuery(
+            query="Compare Cloudflare revenue growth",
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+        )
+    )
+
+    update = _resolve_entities(state, Runtime(context=ResearchAgentRuntime(model, tools)))
+
+    resolved = cast(ResolvedQuery, update["resolved_query"])
+    public_company = next(entity for entity in resolved.entities if entity.kind == "public_company")
+    assert resolved.company_ids == ()
+    assert public_company.mention == "Acme"
+    assert public_company.status == "ambiguous"
+    assert [candidate.canonical_value for candidate in public_company.candidates] == [
+        "ACMA",
+        "ACMB",
+    ]
+    assert tools.calls["resolve_public_company_mentions"] == 1
+
+
+def test_ambiguous_company_follow_up_asks_for_clarification_before_planning() -> None:
+    class AmbiguousUnitedTools(FakeResearchTools):
+        def resolve_non_company_entities(self, query: str) -> ResolvedQuery:
+            self.calls["resolve_non_company"] += 1
+            return ResolvedQuery(query=query, metrics=("revenue",))
+
+        def resolve_public_company_mentions(
+            self,
+            candidates: Sequence[CompanyMentionCandidate],
+        ) -> tuple[EntityResolution, ...]:
+            self.calls["resolve_public_company_mentions"] += 1
+            assert tuple(candidate.mention for candidate in candidates) == ("United",)
+            return (
+                EntityResolution(
+                    kind="public_company",
+                    mention="United",
+                    status="ambiguous",
+                    candidates=(
+                        EntityCandidate(
+                            canonical_value="UAL",
+                            display_value="United Airlines Holdings Inc.",
+                            match_kind="sec_company_extracted",
+                        ),
+                        EntityCandidate(
+                            canonical_value="BNO",
+                            display_value="United States Brent Oil Fund LP",
+                            match_kind="sec_company_extracted",
+                        ),
+                    ),
+                ),
+            )
+
+        def query_financial_facts(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
+            raise AssertionError("ambiguous company should not reach financial facts")
+
+    analysis = QuestionAnalysis(
+        normalized_question="now do the same for United",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+        is_follow_up=True,
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.CALCULATION),
+        company_extraction=CompanyMentionExtraction(
+            companies=(
+                CompanyMentionCandidate(
+                    mention="United Acquisition Corp. I",
+                    ticker="UAC",
+                    legal_name="United Acquisition Corp. I",
+                ),
+            ),
+            reason_codes=("explicit_company_target",),
+        ),
+    )
+    tools = AmbiguousUnitedTools()
+    state = create_initial_agent_state(
+        "Now do the same for United",
+        session_id="session-follow-up-united-clarification",
+    )
+    state["analysis"] = analysis
+    state["session_memory"] = SessionMemory(
+        last_resolved_query=ResolvedQuery(
+            query="Compare Cloudflare revenue growth",
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+        )
+    )
+
+    resolve_update = _resolve_entities(state, Runtime(context=ResearchAgentRuntime(model, tools)))
+    state.update(resolve_update)
+    prepare_update = _prepare_company_data(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, tools)),
+    )
+    state.update(prepare_update)
+    plan_update = _plan_request(state, Runtime(context=ResearchAgentRuntime(model, tools)))
+
+    resolved = cast(ResolvedQuery, state["resolved_query"])
+    answer = cast(str, plan_update["draft_answer"])
+    assert plan_update["status"] is AgentRunStatus.ABSTAINED
+    assert any(error.code == "ambiguous_company" for error in plan_update["errors"])
+    assert resolved.company_ids == ()
+    assert "Please clarify which company" in answer
+    assert "United Airlines Holdings Inc. (UAL)" in answer
+    assert "United States Brent Oil Fund LP (BNO)" in answer
+    assert ModelPurpose.PLAN not in model.purposes
+    assert tools.calls["prepare"] == 0
+    assert tools.calls["financial"] == 0
+
+
 def test_chart_type_follow_up_does_not_treat_bar_as_company() -> None:
     class BarTickerTools(FakeResearchTools):
         def resolve_entities(self, query: str) -> ResolvedQuery:

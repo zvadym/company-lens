@@ -41,6 +41,7 @@ from company_lens.agent.schemas import (
     CalculationOperation,
     ChartBranch,
     CitationReference,
+    CompanyMentionCandidate,
     CompanyMentionExtraction,
     CompanyTarget,
     CompanyTargetSource,
@@ -112,7 +113,11 @@ from company_lens.observability.telemetry import (
     record_retrieval,
     record_validation,
 )
-from company_lens.retrieval.adaptive_schemas import EntityResolution, ResolvedQuery
+from company_lens.retrieval.adaptive_schemas import (
+    EntityCandidate,
+    EntityResolution,
+    ResolvedQuery,
+)
 from company_lens.retrieval.embeddings import DEFAULT_OPENAI_INDEX_VERSION
 from company_lens.security import prompt_injection_flags, sanitize_untrusted_text
 
@@ -750,16 +755,119 @@ def _resolve_extracted_company_mentions(
     )
     if error is not None or extraction is None:
         return base_resolved
-    if not extraction.companies:
+    companies = _explicit_company_mentions_from_extraction(state["question"], extraction.companies)
+    if not companies:
         return base_resolved
-    resolved_entities = runtime.context.tools.resolve_public_company_mentions(extraction.companies)
+    resolved_entities = runtime.context.tools.resolve_public_company_mentions(companies)
     if resolved_entities:
         return _resolved_query_with_extra_entities(base_resolved, resolved_entities)
     unresolved_mentions = tuple(
         EntityResolution(kind="public_company", mention=company.mention, status="unresolved")
-        for company in extraction.companies
+        for company in companies
     )
     return _resolved_query_with_extra_entities(base_resolved, unresolved_mentions)
+
+
+def _explicit_company_mentions_from_extraction(
+    question: str,
+    candidates: tuple[CompanyMentionCandidate, ...],
+) -> tuple[CompanyMentionCandidate, ...]:
+    explicit: list[CompanyMentionCandidate] = []
+    seen: set[tuple[str, str | None, str | None, str | None]] = set()
+    for candidate in candidates:
+        mention = _explicit_company_mention(question, candidate)
+        if mention is None:
+            continue
+        normalized = candidate.model_copy(update={"mention": mention})
+        key = (
+            normalized.mention.casefold(),
+            normalized.ticker,
+            normalized.cik,
+            normalized.legal_name.casefold() if normalized.legal_name else None,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        explicit.append(normalized)
+    return tuple(explicit)
+
+
+def _explicit_company_mention(
+    question: str,
+    candidate: CompanyMentionCandidate,
+) -> str | None:
+    if _phrase_in_question(question, candidate.mention):
+        return candidate.mention
+    if candidate.ticker is not None and _ticker_in_question(question, candidate.ticker):
+        return candidate.ticker
+    for value in (candidate.legal_name, candidate.mention):
+        if value is None:
+            continue
+        prefix = _explicit_prefix_in_question(question, value)
+        if prefix is not None:
+            return prefix
+    return None
+
+
+def _phrase_in_question(question: str, phrase: str) -> bool:
+    normalized_phrase = _normalized_company_phrase(phrase)
+    if not normalized_phrase:
+        return False
+    normalized_question = f" {_normalized_company_phrase(question)} "
+    return f" {normalized_phrase} " in normalized_question
+
+
+def _ticker_in_question(question: str, ticker: str) -> bool:
+    normalized_ticker = ticker.strip().upper().removeprefix("$")
+    if not normalized_ticker:
+        return False
+    if len(normalized_ticker) == 1:
+        return bool(
+            re.search(
+                rf"(?<![A-Za-z0-9])\${re.escape(normalized_ticker)}(?![A-Za-z0-9])",
+                question,
+                flags=re.IGNORECASE,
+            )
+        )
+    return bool(
+        re.search(
+            rf"(?<![A-Za-z0-9])\$?{re.escape(normalized_ticker)}(?![A-Za-z0-9])",
+            question,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _explicit_prefix_in_question(question: str, value: str) -> str | None:
+    raw_tokens = re.findall(r"\w+", value)
+    normalized_tokens = [_normalized_company_phrase(token) for token in raw_tokens]
+    if not normalized_tokens:
+        return None
+    for length in range(min(len(normalized_tokens), 4), 0, -1):
+        prefix = " ".join(normalized_tokens[:length])
+        if prefix in _EXPLICIT_COMPANY_PREFIX_STOPWORDS:
+            continue
+        if _phrase_in_question(question, prefix):
+            return " ".join(raw_tokens[:length])
+    return None
+
+
+def _normalized_company_phrase(value: str) -> str:
+    return " ".join(re.sub(r"[^\w]+", " ", value.casefold()).split())
+
+
+_EXPLICIT_COMPANY_PREFIX_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "company",
+    "corp",
+    "corporation",
+    "inc",
+    "llc",
+    "ltd",
+    "the",
+}
 
 
 def _should_extract_company_mentions(
@@ -1313,6 +1421,52 @@ def _financial_readiness_answer(
     )
 
 
+def _ambiguous_company_entities(resolved: ResolvedQuery) -> tuple[EntityResolution, ...]:
+    return tuple(
+        entity
+        for entity in resolved.entities
+        if entity.kind in {"company", "public_company"} and entity.status == "ambiguous"
+    )
+
+
+def _ambiguous_company_answer(
+    frame: ResearchFrame,
+    entities: tuple[EntityResolution, ...],
+) -> str:
+    entity = entities[0]
+    mention = entity.mention
+    candidates = _ambiguous_company_candidate_lines(entity)
+    if _looks_ukrainian(frame.question):
+        return (
+            f"Уточніть, будь ласка, яку компанію ви маєте на увазі під `{mention}`.\n\n"
+            f"Я знайшов кілька SEC matches:\n{candidates}\n\n"
+            "Відповідайте ticker або повною юридичною назвою, і я запущу той самий "
+            "аналіз для вибраної компанії."
+        )
+    return (
+        f"Please clarify which company you mean by `{mention}`.\n\n"
+        f"I found multiple SEC matches:\n{candidates}\n\n"
+        "Reply with the ticker or full legal name, and I'll run the same analysis for "
+        "that company."
+    )
+
+
+def _ambiguous_company_candidate_lines(entity: EntityResolution) -> str:
+    if not entity.candidates:
+        return "- Multiple SEC-listed companies"
+    return "\n".join(
+        f"- {_ambiguous_company_candidate_label(candidate)}" for candidate in entity.candidates
+    )
+
+
+def _ambiguous_company_candidate_label(candidate: EntityCandidate) -> str:
+    display = candidate.display_value
+    canonical = candidate.canonical_value.strip()
+    if canonical and canonical != display and _uuid_or_none(canonical) is None:
+        return f"{display} ({canonical})"
+    return display
+
+
 def _missing_company_answer(frame: ResearchFrame) -> str:
     company = _readiness_company_label(frame)
     if _looks_ukrainian(frame.question):
@@ -1359,6 +1513,30 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         resolved=resolved,
         memory=memory,
     )
+    ambiguous_companies = _ambiguous_company_entities(resolved)
+    if ambiguous_companies:
+        ambiguity_error = _agent_error(
+            "plan_request",
+            "ambiguous_company",
+            "The company mention matched multiple SEC companies and requires clarification.",
+            category=AgentErrorCategory.VALIDATION,
+            severity=AgentErrorSeverity.TERMINAL,
+        )
+        return {
+            "status": AgentRunStatus.ABSTAINED,
+            "errors": (ambiguity_error,),
+            "draft_answer": _ambiguous_company_answer(frame, ambiguous_companies),
+            "research_frame": frame,
+            "trajectory": (
+                _event(
+                    "plan_request",
+                    TrajectoryStatus.COMPLETED,
+                    "Question requires company clarification before planning.",
+                    started,
+                    details={"ambiguous_companies": len(ambiguous_companies)},
+                ),
+            ),
+        }
     if _requires_financial_company(analysis) and not resolved.company_ids:
         missing_company_error = _agent_error(
             "plan_request",
@@ -4388,6 +4566,8 @@ def _on_demand_tickers(resolved: ResolvedQuery) -> tuple[str, ...]:
     tickers: list[str] = []
     for entity in resolved.entities:
         if entity.kind != "public_company":
+            continue
+        if entity.status == "ambiguous":
             continue
         for candidate in entity.candidates:
             ticker = candidate.canonical_value.strip().upper()

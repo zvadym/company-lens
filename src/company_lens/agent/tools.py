@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Protocol
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -29,6 +30,7 @@ from company_lens.retrieval.adaptive import AdaptiveRetrievalService
 from company_lens.retrieval.adaptive_schemas import (
     AdaptiveRetrievalRequest,
     AdaptiveRetrievalResponse,
+    EntityCandidate,
     EntityResolution,
     ResolvedQuery,
 )
@@ -324,16 +326,9 @@ def _match_extracted_public_company_mentions(
 ) -> tuple[EntityResolution, ...]:
     matches: list[EntityResolution] = []
     for candidate in candidates:
-        company, match_kind = _verified_sec_company(candidate, ticker_map)
-        if company is not None:
-            matches.append(
-                public_company_resolution(
-                    mention=candidate.mention,
-                    ticker=company.ticker,
-                    display_name=company.name,
-                    match_kind=match_kind,
-                )
-            )
+        entity = _sec_company_resolution(candidate, ticker_map)
+        if entity is not None:
+            matches.append(entity)
     return _dedupe_public_company_entities(tuple(matches))
 
 
@@ -352,17 +347,154 @@ def _clean_company_candidates(
     return tuple(unique.values())
 
 
-def _verified_sec_company(
+@dataclass(frozen=True)
+class _RankedSecCompany:
+    company: SecCompany
+    score: int
+    match_kind: str
+
+
+_CLEAR_SEC_MATCH_MARGIN = 15
+_COMMON_NON_COMPANY_TERMS = {
+    "area",
+    "bar",
+    "bars",
+    "cash",
+    "chart",
+    "charts",
+    "graph",
+    "graphs",
+    "growth",
+    "income",
+    "line",
+    "lines",
+    "margin",
+    "plot",
+    "plots",
+    "profit",
+    "rate",
+    "rates",
+    "revenue",
+    "sales",
+    "scatter",
+    "table",
+}
+
+
+def _sec_company_resolution(
     candidate: CompanyMentionCandidate,
     ticker_map: dict[str, SecCompany],
-) -> tuple[SecCompany | None, str]:
+) -> EntityResolution | None:
+    ambiguous_name_matches = _ambiguous_sec_name_matches(candidate, ticker_map)
+    if ambiguous_name_matches:
+        return _ambiguous_sec_company_resolution(candidate.mention, ambiguous_name_matches)
+
+    ranked = _rank_sec_company_candidates(candidate, ticker_map)
+    if not ranked:
+        return None
+
+    top = ranked[0]
+    runner_up = ranked[1] if len(ranked) > 1 else None
+    if runner_up is None or top.score >= runner_up.score + _CLEAR_SEC_MATCH_MARGIN:
+        return public_company_resolution(
+            mention=candidate.mention,
+            ticker=top.company.ticker,
+            display_name=top.company.name,
+            match_kind=top.match_kind,
+        )
+
+    return _ambiguous_sec_company_resolution(candidate.mention, ranked)
+
+
+def _ambiguous_sec_company_resolution(
+    mention: str,
+    ranked: tuple[_RankedSecCompany, ...],
+) -> EntityResolution:
+    candidates = _unique_ambiguous_sec_matches(ranked)
+    return EntityResolution(
+        kind="public_company",
+        mention=mention,
+        status="ambiguous",
+        candidates=tuple(
+            EntityCandidate(
+                canonical_value=match.company.ticker.upper(),
+                display_value=match.company.name,
+                match_kind=match.match_kind,
+            )
+            for match in candidates[:5]
+        ),
+    )
+
+
+def _unique_ambiguous_sec_matches(
+    ranked: tuple[_RankedSecCompany, ...],
+) -> tuple[_RankedSecCompany, ...]:
+    unique: list[_RankedSecCompany] = []
+    seen_labels: set[str] = set()
+    for match in ranked:
+        label = _company_label(match.company.name)
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
+        unique.append(match)
+    return tuple(unique) if len(unique) >= 2 else ranked
+
+
+def _ambiguous_sec_name_matches(
+    candidate: CompanyMentionCandidate,
+    ticker_map: dict[str, SecCompany],
+) -> tuple[_RankedSecCompany, ...]:
+    if _mention_is_explicit_ticker(candidate.mention, ticker_map):
+        return ()
+    if _normalize(candidate.mention) in _COMMON_NON_COMPANY_TERMS or _blocks_name_match(
+        candidate, candidate.mention
+    ):
+        return ()
+    ranked = _rank_sec_name_candidates(
+        candidate.mention,
+        ticker_map,
+        exact_score=75,
+        prefix_score=60,
+        match_kind="sec_company_extracted",
+    )
+    if len(ranked) < 2:
+        return ()
+    top, runner_up = ranked[0], ranked[1]
+    if top.score >= runner_up.score + _CLEAR_SEC_MATCH_MARGIN:
+        return ()
+    return ranked
+
+
+def _rank_sec_company_candidates(
+    candidate: CompanyMentionCandidate,
+    ticker_map: dict[str, SecCompany],
+) -> tuple[_RankedSecCompany, ...]:
+    ranked: dict[str, _RankedSecCompany] = {}
+
+    def add(company: SecCompany | None, score: int, match_kind: str) -> None:
+        if company is None:
+            return
+        key = company.ticker.upper()
+        existing = ranked.get(key)
+        match = _RankedSecCompany(company=company, score=score, match_kind=match_kind)
+        if existing is None or match.score > existing.score:
+            ranked[key] = match
+
     hinted_ticker = _normalized_ticker(candidate.ticker)
-    if hinted_ticker is not None and (company := ticker_map.get(hinted_ticker)) is not None:
-        return company, "sec_ticker_extracted"
+    if not _blocks_plain_ticker_match(candidate):
+        add(
+            ticker_map.get(hinted_ticker) if hinted_ticker is not None else None,
+            100,
+            "sec_ticker_extracted",
+        )
 
     mention_ticker = _normalized_ticker(candidate.mention)
-    if mention_ticker is not None and (company := ticker_map.get(mention_ticker)) is not None:
-        return company, "sec_mention_ticker_extracted"
+    if not _blocks_plain_ticker_match(candidate):
+        add(
+            ticker_map.get(mention_ticker) if mention_ticker is not None else None,
+            95 if candidate.mention.strip().startswith("$") else 90,
+            "sec_mention_ticker_extracted",
+        )
 
     cik = _normalized_cik(candidate.cik)
     if cik is not None:
@@ -370,37 +502,96 @@ def _verified_sec_company(
             (company for company in ticker_map.values() if company.cik.zfill(10) == cik),
             key=lambda item: item.ticker,
         )
-        if matches:
-            return matches[0], "sec_cik_extracted"
+        for company in matches:
+            add(company, 100, "sec_cik_extracted")
 
-    for value, match_kind in (
-        (candidate.legal_name, "sec_legal_name_extracted"),
-        (candidate.mention, "sec_company_extracted"),
+    for value, exact_score, prefix_score, match_kind in (
+        (candidate.legal_name, 85, 70, "sec_legal_name_extracted"),
+        (candidate.mention, 75, 60, "sec_company_extracted"),
     ):
-        company = _unique_company_name_match(value, ticker_map)
-        if company is not None:
-            return company, match_kind
+        if value is None or _blocks_name_match(candidate, value):
+            continue
+        for match in _rank_sec_name_candidates(
+            value,
+            ticker_map,
+            exact_score=exact_score,
+            prefix_score=prefix_score,
+            match_kind=match_kind,
+        ):
+            add(match.company, match.score, match.match_kind)
 
-    return None, "sec_unverified"
+    return tuple(sorted(ranked.values(), key=lambda item: (-item.score, item.company.ticker)))
 
 
-def _unique_company_name_match(
-    value: str | None,
+def _rank_sec_name_candidates(
+    value: str,
     ticker_map: dict[str, SecCompany],
-) -> SecCompany | None:
-    if value is None:
+    *,
+    exact_score: int,
+    prefix_score: int,
+    match_kind: str,
+) -> tuple[_RankedSecCompany, ...]:
+    ranked: list[_RankedSecCompany] = []
+    for company in ticker_map.values():
+        score = _sec_name_match_score(value, company, exact_score, prefix_score)
+        if score is not None:
+            ranked.append(_RankedSecCompany(company=company, score=score, match_kind=match_kind))
+    return tuple(
+        sorted(
+            ranked,
+            key=lambda item: (
+                -item.score,
+                _company_label(item.company.name),
+                item.company.ticker,
+            ),
+        )
+    )
+
+
+def _sec_name_match_score(
+    value: str,
+    company: SecCompany,
+    exact_score: int,
+    prefix_score: int,
+) -> int | None:
+    normalized_value = _company_label(value)
+    label = _company_label(company.name)
+    if not normalized_value or not label:
         return None
+    if normalized_value == label:
+        return exact_score
+    if _extracted_mention_matches_label(normalized_value, label):
+        return prefix_score
+    return None
+
+
+def _blocks_plain_ticker_match(candidate: CompanyMentionCandidate) -> bool:
+    if candidate.mention.strip().startswith("$"):
+        return False
+    if candidate.cik or candidate.legal_name:
+        return False
+    normalized = _normalize(candidate.mention)
+    return normalized in _COMMON_NON_COMPANY_TERMS
+
+
+def _mention_is_explicit_ticker(
+    mention: str,
+    ticker_map: dict[str, SecCompany],
+) -> bool:
+    stripped = mention.strip()
+    ticker = _normalized_ticker(stripped)
+    if ticker is None or ticker not in ticker_map:
+        return False
+    if stripped.startswith("$"):
+        return True
+    return len(ticker) > 1 and _normalize(stripped) not in _COMMON_NON_COMPANY_TERMS
+
+
+def _blocks_name_match(candidate: CompanyMentionCandidate, value: str) -> bool:
+    if candidate.cik or candidate.legal_name:
+        return False
     normalized_value = _normalize(value)
-    if not normalized_value:
-        return None
-    matches = {
-        company.ticker.upper(): company
-        for company in ticker_map.values()
-        if _extracted_mention_matches_label(normalized_value, _company_label(company.name))
-    }
-    if len(matches) != 1:
-        return None
-    return next(iter(matches.values()))
+    return normalized_value in _COMMON_NON_COMPANY_TERMS
 
 
 def _normalized_ticker(value: str | None) -> str | None:
