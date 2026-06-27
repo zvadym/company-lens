@@ -81,6 +81,9 @@ class NoDataTools:
     def resolve_entities(self, query: str) -> ResolvedQuery:
         return ResolvedQuery(query=query)
 
+    def resolve_non_company_entities(self, query: str) -> ResolvedQuery:
+        return self.resolve_entities(query)
+
     def prepare_companies(
         self,
         *,

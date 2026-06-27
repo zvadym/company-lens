@@ -85,7 +85,10 @@ def _dated_year_over_year_points(
         assert current.observed_at is not None
         with suppress(ValueError):
             prior_date = current.observed_at.replace(year=current.observed_at.year - 1)
-            previous = by_date.get(prior_date)
+            previous = by_date.get(prior_date) or _nearest_prior_year_observation(
+                observations,
+                prior_date,
+            )
             if previous is None:
                 continue
             current_value, previous_value = _values((current, previous))
@@ -98,6 +101,23 @@ def _dated_year_over_year_points(
                 )
             )
     return points
+
+
+def _nearest_prior_year_observation(
+    observations: Sequence[NumericObservation],
+    target: date,
+) -> NumericObservation | None:
+    candidates = tuple(
+        (item.observed_at, item)
+        for item in observations
+        if item.observed_at is not None and item.observed_at.year == target.year
+    )
+    if not candidates:
+        return None
+    closest_date, closest = min(candidates, key=lambda item: abs((item[0] - target).days))
+    if abs((closest_date - target).days) > 7:
+        return None
+    return closest
 
 
 def compound_annual_growth_rate(

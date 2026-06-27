@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Sequence
 from typing import Protocol
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from company_lens.agent.schemas import AgentError, AgentErrorCategory, AgentErrorSeverity
+from company_lens.agent.schemas import (
+    AgentError,
+    AgentErrorCategory,
+    AgentErrorSeverity,
+    CompanyMentionCandidate,
+)
 from company_lens.config import Settings
 from company_lens.financials.schemas import FinancialFactQuery, FinancialFactQueryResult
 from company_lens.financials.service import FinancialFactQueryService
@@ -34,6 +40,13 @@ class ResearchTools(Protocol):
     """Provider-neutral data port used by research graph nodes."""
 
     def resolve_entities(self, query: str) -> ResolvedQuery: ...
+
+    def resolve_non_company_entities(self, query: str) -> ResolvedQuery: ...
+
+    def resolve_public_company_mentions(
+        self,
+        candidates: Sequence[CompanyMentionCandidate],
+    ) -> tuple[EntityResolution, ...]: ...
 
     def prepare_companies(
         self,
@@ -78,7 +91,7 @@ class SqlResearchTools:
         self._settings = settings
 
     def resolve_entities(self, query: str) -> ResolvedQuery:
-        resolved = self._call(lambda session: EntityResolver(session=session).resolve(query))
+        resolved = self._resolve_entities(query)
         if resolved.company_ids or any(
             entity.kind == "public_company" for entity in resolved.entities
         ):
@@ -87,6 +100,23 @@ class SqlResearchTools:
         if not public_entities:
             return resolved
         return resolved.model_copy(update={"entities": (*resolved.entities, *public_entities)})
+
+    def resolve_non_company_entities(self, query: str) -> ResolvedQuery:
+        return self._resolve_entities(query, include_companies=False)
+
+    def resolve_public_company_mentions(
+        self,
+        candidates: Sequence[CompanyMentionCandidate],
+    ) -> tuple[EntityResolution, ...]:
+        cleaned = _clean_company_candidates(candidates)
+        if not cleaned or self._settings is None or not self._settings.sec_user_agent:
+            return ()
+        try:
+            with build_sec_client_from_settings(self._settings) as client:
+                ticker_map = client.fetch_ticker_map()
+        except Exception:
+            return ()
+        return _match_extracted_public_company_mentions(cleaned, ticker_map)
 
     def prepare_companies(
         self,
@@ -189,6 +219,34 @@ class SqlResearchTools:
                 )
             ) from None
 
+    def _resolve_entities(self, query: str, *, include_companies: bool = True) -> ResolvedQuery:
+        try:
+            with self._session_factory.begin() as session:
+                return EntityResolver(session=session).resolve(
+                    query,
+                    include_companies=include_companies,
+                )
+        except ResearchToolError:
+            raise
+        except (ValueError, TypeError):
+            raise ResearchToolError(
+                AgentError(
+                    category=AgentErrorCategory.VALIDATION,
+                    severity=AgentErrorSeverity.TERMINAL,
+                    code="tool_invalid_request",
+                    message="A research tool rejected its typed request.",
+                )
+            ) from None
+        except Exception:
+            raise ResearchToolError(
+                AgentError(
+                    category=AgentErrorCategory.TOOL,
+                    severity=AgentErrorSeverity.RECOVERABLE,
+                    code="tool_execution_failed",
+                    message="A research data operation failed.",
+                )
+            ) from None
+
     def _call[ResultT](self, operation: SessionOperation[ResultT]) -> ResultT:
         try:
             with self._session_factory() as session:
@@ -258,6 +316,135 @@ def _match_public_companies(
         )
         for mention, company, match_kind in matches[:5]
     )
+
+
+def _match_extracted_public_company_mentions(
+    candidates: Sequence[CompanyMentionCandidate],
+    ticker_map: dict[str, SecCompany],
+) -> tuple[EntityResolution, ...]:
+    matches: list[EntityResolution] = []
+    for candidate in candidates:
+        company, match_kind = _verified_sec_company(candidate, ticker_map)
+        if company is not None:
+            matches.append(
+                public_company_resolution(
+                    mention=candidate.mention,
+                    ticker=company.ticker,
+                    display_name=company.name,
+                    match_kind=match_kind,
+                )
+            )
+    return _dedupe_public_company_entities(tuple(matches))
+
+
+def _clean_company_candidates(
+    candidates: Sequence[CompanyMentionCandidate],
+) -> tuple[CompanyMentionCandidate, ...]:
+    unique: dict[tuple[str, str | None, str | None, str | None], CompanyMentionCandidate] = {}
+    for candidate in candidates:
+        key = (
+            candidate.mention.casefold(),
+            candidate.ticker.casefold() if candidate.ticker else None,
+            candidate.cik,
+            candidate.legal_name.casefold() if candidate.legal_name else None,
+        )
+        unique.setdefault(key, candidate)
+    return tuple(unique.values())
+
+
+def _verified_sec_company(
+    candidate: CompanyMentionCandidate,
+    ticker_map: dict[str, SecCompany],
+) -> tuple[SecCompany | None, str]:
+    hinted_ticker = _normalized_ticker(candidate.ticker)
+    if hinted_ticker is not None and (company := ticker_map.get(hinted_ticker)) is not None:
+        return company, "sec_ticker_extracted"
+
+    mention_ticker = _normalized_ticker(candidate.mention)
+    if mention_ticker is not None and (company := ticker_map.get(mention_ticker)) is not None:
+        return company, "sec_mention_ticker_extracted"
+
+    cik = _normalized_cik(candidate.cik)
+    if cik is not None:
+        matches = sorted(
+            (company for company in ticker_map.values() if company.cik.zfill(10) == cik),
+            key=lambda item: item.ticker,
+        )
+        if matches:
+            return matches[0], "sec_cik_extracted"
+
+    for value, match_kind in (
+        (candidate.legal_name, "sec_legal_name_extracted"),
+        (candidate.mention, "sec_company_extracted"),
+    ):
+        company = _unique_company_name_match(value, ticker_map)
+        if company is not None:
+            return company, match_kind
+
+    return None, "sec_unverified"
+
+
+def _unique_company_name_match(
+    value: str | None,
+    ticker_map: dict[str, SecCompany],
+) -> SecCompany | None:
+    if value is None:
+        return None
+    normalized_value = _normalize(value)
+    if not normalized_value:
+        return None
+    matches = {
+        company.ticker.upper(): company
+        for company in ticker_map.values()
+        if _extracted_mention_matches_label(normalized_value, _company_label(company.name))
+    }
+    if len(matches) != 1:
+        return None
+    return next(iter(matches.values()))
+
+
+def _normalized_ticker(value: str | None) -> str | None:
+    if value is None:
+        return None
+    ticker = value.strip().upper().removeprefix("$")
+    if not ticker or " " in ticker:
+        return None
+    return ticker
+
+
+def _normalized_cik(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped.isdigit() or len(stripped) > 10:
+        return None
+    return stripped.zfill(10)
+
+
+def _extracted_mention_matches_label(mention: str, label: str) -> bool:
+    if not label or len(mention) < 2:
+        return False
+    if mention == label:
+        return True
+    if len(mention) >= 4 and label.startswith(f"{mention} "):
+        return True
+    label_tokens = label.split()
+    mention_tokens = mention.split()
+    return len(mention_tokens) > 1 and label_tokens[: len(mention_tokens)] == mention_tokens
+
+
+def _dedupe_public_company_entities(
+    entities: Sequence[EntityResolution],
+) -> tuple[EntityResolution, ...]:
+    unique: dict[tuple[str, str], EntityResolution] = {}
+    for entity in entities:
+        key = (
+            entity.kind,
+            entity.canonical_value
+            or (entity.candidates[0].canonical_value if entity.candidates else entity.mention),
+        )
+        unique.setdefault(key, entity)
+    return tuple(unique.values())
 
 
 def _missing_fred_series(result: FredSeriesResult) -> tuple[str, ...]:

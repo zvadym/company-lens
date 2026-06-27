@@ -31,6 +31,21 @@ const execution = {
   tool_calls_used: 1,
   trajectory: [],
 };
+const chart = {
+  schema_version: "company-lens.chart.v1",
+  chart_type: "line",
+  title: "Cloudflare revenue growth",
+  x_label: "Date",
+  series: [{ key: "growth", label: "Cloudflare YoY", unit: "percent" }],
+  data: [
+    {
+      x: "2026-03-31",
+      values: { growth: "13.83" },
+      source_urls: ["https://example.com/cloudflare-10q"],
+    },
+  ],
+  sources: ["https://example.com/cloudflare-10q"],
+};
 
 type MockRun = {
   run_id: string;
@@ -41,6 +56,7 @@ type MockRun = {
     agent_status: "completed";
     answer: string;
     citations: typeof citation[];
+    chart: typeof chart | null;
     execution: typeof execution;
     sources: typeof source[];
     warnings: [];
@@ -101,6 +117,7 @@ test("submits a question and renders streamed execution detail", async ({ page }
             agent_status: "completed",
             answer: "Cloudflare cites this filing evidence [evidence-1].",
             citations: [citation],
+            chart,
             execution,
             sources: [source],
             warnings: [],
@@ -109,6 +126,7 @@ test("submits a question and renders streamed execution detail", async ({ page }
             agent_status: "completed",
             answer: "Margins answer.",
             citations: [],
+            chart: null,
             execution,
             sources: [],
             warnings: [],
@@ -209,6 +227,7 @@ test("submits a question and renders streamed execution detail", async ({ page }
         exact: true,
       }),
   ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Cloudflare revenue growth" })).toBeVisible();
   await page.locator(".message-assistant").first()
     .getByRole("link", { name: /show source 1/i })
     .click();

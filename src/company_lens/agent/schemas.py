@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal, NotRequired, Required, TypedDict
 
@@ -126,6 +126,80 @@ class QuestionAnalysis(FrozenModel):
             raise ValueError("unsupported questions cannot request capabilities.")
         if self.chart_requested and AgentCapability.CHART not in self.required_capabilities:
             raise ValueError("chart_requested requires the chart capability.")
+        return self
+
+
+class CompanyMentionCandidate(FrozenModel):
+    mention: str = Field(min_length=1)
+    ticker: str | None = None
+    cik: str | None = None
+    legal_name: str | None = None
+    confidence: Decimal | None = Field(default=None, ge=0, le=1)
+
+    @field_validator("mention", "legal_name")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("company mention fields cannot be blank.")
+        if len(cleaned) > 120:
+            raise ValueError("company mention fields must be concise.")
+        return cleaned
+
+    @field_validator("ticker")
+    @classmethod
+    def normalize_ticker(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        ticker = value.strip().upper().removeprefix("$")
+        if not ticker:
+            return None
+        if " " in ticker or len(ticker) > 16:
+            raise ValueError("ticker hints must be concise symbols.")
+        return ticker
+
+    @field_validator("cik")
+    @classmethod
+    def normalize_cik(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cik = value.strip()
+        if not cik:
+            return None
+        if not cik.isdigit() or len(cik) > 10:
+            raise ValueError("CIK hints must contain up to 10 digits.")
+        return cik.zfill(10)
+
+
+class CompanyMentionExtraction(FrozenModel):
+    companies: tuple[CompanyMentionCandidate, ...] = ()
+    reason_codes: tuple[str, ...] = ()
+
+    @field_validator("companies")
+    @classmethod
+    def dedupe_companies(
+        cls,
+        value: tuple[CompanyMentionCandidate, ...],
+    ) -> tuple[CompanyMentionCandidate, ...]:
+        unique: dict[tuple[str, str | None, str | None, str | None], CompanyMentionCandidate] = {}
+        for item in value:
+            key = (
+                item.mention.casefold(),
+                item.ticker,
+                item.cik,
+                item.legal_name.casefold() if item.legal_name else None,
+            )
+            unique.setdefault(key, item)
+        return tuple(unique.values())
+
+    @model_validator(mode="after")
+    def validate_extraction(self) -> CompanyMentionExtraction:
+        if len(self.reason_codes) != len(set(self.reason_codes)):
+            raise ValueError("reason_codes must be unique.")
+        if any(not _is_reason_code(value) for value in self.reason_codes):
+            raise ValueError("reason_codes must use lowercase snake_case identifiers.")
         return self
 
 
@@ -280,6 +354,39 @@ class ExecutionPlan(FrozenModel):
         return self
 
 
+CompanyTargetStatus = Literal["resolved", "unresolved", "ambiguous"]
+CompanyTargetSource = Literal["current_question", "follow_up_context", "prepared_ticker"]
+FinancialDataReadinessStatus = Literal["available", "partial", "missing"]
+
+
+class CompanyTarget(FrozenModel):
+    mention: str = Field(min_length=1)
+    company_id: uuid.UUID | None = None
+    ticker: str | None = None
+    display_name: str | None = None
+    status: CompanyTargetStatus
+    source: CompanyTargetSource
+
+
+class FinancialDataReadiness(FrozenModel):
+    company_id: uuid.UUID
+    metric: str = Field(min_length=1)
+    status: FinancialDataReadinessStatus
+    observation_count: int = Field(default=0, ge=0)
+    warnings: tuple[str, ...] = ()
+
+
+class ResearchFrame(FrozenModel):
+    question: str = Field(min_length=1)
+    analysis: QuestionAnalysis
+    resolved_query: ResolvedQuery
+    company_targets: tuple[CompanyTarget, ...] = ()
+    inherited_from_previous: bool = False
+    follow_up_operation: CalculationOperation | None = None
+    follow_up_window: int | None = Field(default=None, ge=1)
+    financial_readiness: tuple[FinancialDataReadiness, ...] = ()
+
+
 class SessionMessage(FrozenModel):
     role: Literal["user", "assistant"]
     content: str = Field(min_length=1)
@@ -379,9 +486,29 @@ class CachedSourceResult(FrozenModel):
         return self
 
 
+class SessionArtifactContext(FrozenModel):
+    artifact_id: str
+    run_id: uuid.UUID
+    kind: Literal["chart"] = "chart"
+    user_question: str
+    title: str | None = None
+    chart_type: str | None = None
+    series_labels: tuple[str, ...] = ()
+    company_ids: tuple[uuid.UUID, ...] = ()
+    metrics: tuple[str, ...] = ()
+    calculations: tuple[str, ...] = ()
+    period_start: date | None = None
+    period_end: date | None = None
+    point_count: int | None = None
+    source_branch_ids: tuple[str, ...] = ()
+
+
 class SessionMemory(FrozenModel):
     last_resolved_query: ResolvedQuery | None = None
+    recent_resolved_queries: tuple[ResolvedQuery, ...] = ()
     last_execution_plan: ExecutionPlan | None = None
+    last_chart_spec: ChartSpecification | None = None
+    recent_artifacts: tuple[SessionArtifactContext, ...] = ()
     cached_source_results: tuple[CachedSourceResult, ...] = ()
     evidence: tuple[EvidenceEnvelope, ...] = ()
     updated_at: datetime | None = None
@@ -410,6 +537,7 @@ class AgentState(TypedDict, total=False):
     session_memory: NotRequired[SessionMemory]
     analysis: NotRequired[QuestionAnalysis | None]
     resolved_query: NotRequired[ResolvedQuery | None]
+    research_frame: NotRequired[ResearchFrame | None]
     execution_plan: NotRequired[ExecutionPlan | None]
     active_branch: NotRequired[ExecutionBranch]
     retrieval_results: Annotated[tuple[RetrievalBranchResult, ...], append_tuple]

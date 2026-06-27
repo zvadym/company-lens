@@ -43,14 +43,20 @@ class FakeResponses:
         return self.create_response
 
 
-def test_structured_generation_uses_planning_model_and_stateless_parse() -> None:
+@pytest.mark.parametrize(
+    "purpose",
+    [ModelPurpose.PARSE, ModelPurpose.ENTITY_EXTRACTION, ModelPurpose.PLAN],
+)
+def test_structured_generation_uses_planning_model_and_stateless_parse(
+    purpose: ModelPurpose,
+) -> None:
     responses = FakeResponses()
     provider: ResearchModelProvider = _provider(responses)
 
     result = provider.generate_structured(
         _messages(),
         ParsedIntent,
-        purpose=ModelPurpose.PARSE,
+        purpose=purpose,
     )
 
     assert result.output == ParsedIntent(intent="financial")

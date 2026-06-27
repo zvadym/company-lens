@@ -33,6 +33,7 @@ from company_lens.agent.schemas import (
     AgentCapability,
     AgentRunStatus,
     AgentState,
+    CompanyMentionExtraction,
     ModelExecutionBranch,
     ModelExecutionPlan,
     QuestionAnalysis,
@@ -90,6 +91,8 @@ class QueueModelProvider:
         output: BaseModel
         if output_type is QuestionAnalysis:
             output = self.analyses.pop(0)
+        elif output_type is CompanyMentionExtraction:
+            output = CompanyMentionExtraction()
         elif output_type is ModelExecutionPlan:
             output = self.plans.pop(0)
         else:
@@ -127,6 +130,9 @@ class CountingTools:
                 fiscal_years=(2025,),
             )
         return ResolvedQuery(query=query, fiscal_years=(2024,))
+
+    def resolve_non_company_entities(self, query: str) -> ResolvedQuery:
+        return self.resolve_entities(query)
 
     def prepare_companies(
         self,
