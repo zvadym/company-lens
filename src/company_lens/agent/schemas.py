@@ -129,18 +129,70 @@ class QuestionAnalysis(FrozenModel):
         return self
 
 
+class CompanyMentionCandidate(FrozenModel):
+    mention: str = Field(min_length=1)
+    ticker: str | None = None
+    cik: str | None = None
+    legal_name: str | None = None
+    confidence: Decimal | None = Field(default=None, ge=0, le=1)
+
+    @field_validator("mention", "legal_name")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("company mention fields cannot be blank.")
+        if len(cleaned) > 120:
+            raise ValueError("company mention fields must be concise.")
+        return cleaned
+
+    @field_validator("ticker")
+    @classmethod
+    def normalize_ticker(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        ticker = value.strip().upper().removeprefix("$")
+        if not ticker:
+            return None
+        if " " in ticker or len(ticker) > 16:
+            raise ValueError("ticker hints must be concise symbols.")
+        return ticker
+
+    @field_validator("cik")
+    @classmethod
+    def normalize_cik(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cik = value.strip()
+        if not cik:
+            return None
+        if not cik.isdigit() or len(cik) > 10:
+            raise ValueError("CIK hints must contain up to 10 digits.")
+        return cik.zfill(10)
+
+
 class CompanyMentionExtraction(FrozenModel):
-    mentions: tuple[str, ...] = ()
-    new_company_target: bool = False
+    companies: tuple[CompanyMentionCandidate, ...] = ()
     reason_codes: tuple[str, ...] = ()
 
-    @field_validator("mentions")
+    @field_validator("companies")
     @classmethod
-    def normalize_mentions(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        cleaned = tuple(dict.fromkeys(" ".join(item.split()) for item in value if item.strip()))
-        if any(len(item) > 120 for item in cleaned):
-            raise ValueError("mentions must be concise company names or tickers.")
-        return cleaned
+    def dedupe_companies(
+        cls,
+        value: tuple[CompanyMentionCandidate, ...],
+    ) -> tuple[CompanyMentionCandidate, ...]:
+        unique: dict[tuple[str, str | None, str | None, str | None], CompanyMentionCandidate] = {}
+        for item in value:
+            key = (
+                item.mention.casefold(),
+                item.ticker,
+                item.cik,
+                item.legal_name.casefold() if item.legal_name else None,
+            )
+            unique.setdefault(key, item)
+        return tuple(unique.values())
 
     @model_validator(mode="after")
     def validate_extraction(self) -> CompanyMentionExtraction:

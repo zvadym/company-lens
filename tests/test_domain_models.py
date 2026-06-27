@@ -11,9 +11,6 @@ def test_core_domain_tables_are_registered() -> None:
     expected_tables = {
         "companies",
         "company_aliases",
-        "company_identities",
-        "company_identity_aliases",
-        "company_identity_tickers",
         "company_identifiers",
         "company_tickers",
         "exchanges",

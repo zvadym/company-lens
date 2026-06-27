@@ -40,6 +40,7 @@ from company_lens.agent.schemas import (
     CalculationBranch,
     CalculationBranchResult,
     ChartBranch,
+    CompanyMentionCandidate,
     CompanyMentionExtraction,
     DocumentRetrievalBranch,
     ModelExecutionBranch,
@@ -296,7 +297,7 @@ class FakeResearchTools:
 
     def resolve_public_company_mentions(
         self,
-        mentions: Sequence[str],
+        candidates: Sequence[CompanyMentionCandidate],
     ) -> tuple[EntityResolution, ...]:
         self.calls["resolve_public_company_mentions"] += 1
         return ()
@@ -993,10 +994,10 @@ def test_workflow_prepares_unavailable_public_company_before_planning() -> None:
 
         def resolve_public_company_mentions(
             self,
-            mentions: Sequence[str],
+            candidates: Sequence[CompanyMentionCandidate],
         ) -> tuple[EntityResolution, ...]:
             self.calls["resolve_public_company_mentions"] += 1
-            assert mentions == ("Netflix",)
+            assert tuple(candidate.mention for candidate in candidates) == ("Netflix",)
             return (
                 public_company_resolution(
                     mention="Netflix",
@@ -1047,8 +1048,7 @@ def test_workflow_prepares_unavailable_public_company_before_planning() -> None:
         ),
         texts=("Competition was a reported risk [document:cloudflare-risk].",),
         company_extraction=CompanyMentionExtraction(
-            mentions=("Netflix",),
-            new_company_target=True,
+            companies=(CompanyMentionCandidate(mention="Netflix"),),
             reason_codes=("explicit_company_target",),
         ),
     )
@@ -1109,7 +1109,7 @@ def test_follow_up_with_new_public_company_does_not_inherit_previous_company() -
                     EntityCandidate(
                         canonical_value="GOOG",
                         display_value="Alphabet Inc.",
-                        match_kind="identity:alias:brand",
+                        match_kind="sec_company_name",
                     ),
                 ),
             ),
@@ -1135,10 +1135,10 @@ def test_resolve_entities_extracts_follow_up_public_company_target() -> None:
 
         def resolve_public_company_mentions(
             self,
-            mentions: Sequence[str],
+            candidates: Sequence[CompanyMentionCandidate],
         ) -> tuple[EntityResolution, ...]:
             self.calls["resolve_public_company_mentions"] += 1
-            assert mentions == ("Zoom",)
+            assert tuple(candidate.mention for candidate in candidates) == ("Zoom",)
             return (
                 public_company_resolution(
                     mention="Zoom",
@@ -1161,8 +1161,7 @@ def test_resolve_entities_extracts_follow_up_public_company_target() -> None:
         analysis=analysis,
         plan=ExecutionPlan(route=ResearchRoute.CALCULATION),
         company_extraction=CompanyMentionExtraction(
-            mentions=("Zoom",),
-            new_company_target=True,
+            companies=(CompanyMentionCandidate(mention="Zoom"),),
             reason_codes=("explicit_company_target",),
         ),
     )
@@ -1226,8 +1225,7 @@ def test_resolve_entities_does_not_inherit_previous_company_for_unknown_extracte
         analysis=analysis,
         plan=ExecutionPlan(route=ResearchRoute.CALCULATION),
         company_extraction=CompanyMentionExtraction(
-            mentions=("Globex",),
-            new_company_target=True,
+            companies=(CompanyMentionCandidate(mention="Globex"),),
             reason_codes=("explicit_company_target",),
         ),
     )
@@ -1266,7 +1264,7 @@ def test_chart_type_follow_up_does_not_treat_bar_as_company() -> None:
                         mention="bar",
                         ticker="BAR",
                         display_name="GraniteShares Gold Trust",
-                        match_kind="identity:ticker",
+                        match_kind="sec_company_ticker",
                     ),
                 ),
                 metrics=("revenue",),
@@ -1292,8 +1290,7 @@ def test_chart_type_follow_up_does_not_treat_bar_as_company() -> None:
         analysis=analysis,
         plan=ExecutionPlan(route=ResearchRoute.HYBRID),
         company_extraction=CompanyMentionExtraction(
-            mentions=(),
-            new_company_target=False,
+            companies=(),
             reason_codes=("no_company_mentioned", "bar_is_chart_type"),
         ),
     )
@@ -1351,7 +1348,7 @@ def test_failed_turn_does_not_promote_bad_company_resolution_to_session_memory()
                 mention="bar",
                 ticker="BAR",
                 display_name="GraniteShares Gold Trust",
-                match_kind="identity:ticker",
+                match_kind="sec_company_ticker",
             ),
         ),
         company_ids=(APPLE_ID,),
@@ -1409,7 +1406,7 @@ def test_add_company_bar_chart_follow_up_prepares_ticker_without_unresolved_dupl
                             mention="amzn",
                             ticker="AMZN",
                             display_name="AMAZON COM INC",
-                            match_kind="identity:ticker",
+                            match_kind="sec_company_ticker",
                         ),
                     ),
                     company_ids=(AMAZON_ID,),
@@ -1423,10 +1420,10 @@ def test_add_company_bar_chart_follow_up_prepares_ticker_without_unresolved_dupl
 
         def resolve_public_company_mentions(
             self,
-            mentions: Sequence[str],
+            candidates: Sequence[CompanyMentionCandidate],
         ) -> tuple[EntityResolution, ...]:
             self.calls["resolve_public_company_mentions"] += 1
-            assert mentions == ("amazon",)
+            assert tuple(candidate.mention for candidate in candidates) == ("amazon",)
             return (
                 public_company_resolution(
                     mention="amazon",
@@ -1554,8 +1551,7 @@ def test_add_company_bar_chart_follow_up_prepares_ticker_without_unresolved_dupl
         analysis=analysis,
         plan=plan,
         company_extraction=CompanyMentionExtraction(
-            mentions=("amazon",),
-            new_company_target=True,
+            companies=(CompanyMentionCandidate(mention="amazon"),),
             reason_codes=("explicit_added_company",),
         ),
     )
@@ -1653,10 +1649,10 @@ def test_prepared_follow_up_company_resolves_company_id_from_extracted_ticker() 
 
         def resolve_public_company_mentions(
             self,
-            mentions: Sequence[str],
+            candidates: Sequence[CompanyMentionCandidate],
         ) -> tuple[EntityResolution, ...]:
             self.calls["resolve_public_company_mentions"] += 1
-            assert mentions == ("Zoom",)
+            assert tuple(candidate.mention for candidate in candidates) == ("Zoom",)
             return (
                 public_company_resolution(
                     mention="Zoom",
@@ -1750,8 +1746,7 @@ def test_prepared_follow_up_company_resolves_company_id_from_extracted_ticker() 
             ),
         ),
         company_extraction=CompanyMentionExtraction(
-            mentions=("Zoom",),
-            new_company_target=True,
+            companies=(CompanyMentionCandidate(mention="Zoom"),),
             reason_codes=("explicit_company_target",),
         ),
         texts=("Zoom revenue grew 10% quarter over quarter [calculation:revenue_qoq_growth].",),
@@ -1811,10 +1806,10 @@ def test_ready_follow_up_ticker_resolves_company_id_from_skipped_prepare() -> No
 
         def resolve_public_company_mentions(
             self,
-            mentions: Sequence[str],
+            candidates: Sequence[CompanyMentionCandidate],
         ) -> tuple[EntityResolution, ...]:
             self.calls["resolve_public_company_mentions"] += 1
-            assert mentions == ("Zoom",)
+            assert tuple(candidate.mention for candidate in candidates) == ("Zoom",)
             return (
                 public_company_resolution(
                     mention="Zoom",
@@ -1855,8 +1850,7 @@ def test_ready_follow_up_ticker_resolves_company_id_from_skipped_prepare() -> No
         analysis=analysis,
         plan=ExecutionPlan(route=ResearchRoute.CALCULATION),
         company_extraction=CompanyMentionExtraction(
-            mentions=("Zoom",),
-            new_company_target=True,
+            companies=(CompanyMentionCandidate(mention="Zoom"),),
             reason_codes=("explicit_company_target",),
         ),
     )
@@ -2077,7 +2071,7 @@ def test_plural_company_follow_up_inherits_recent_company_set() -> None:
                         id=NETFLIX_ID,
                         canonical_value=str(NETFLIX_ID),
                         display_value="Alphabet Inc.",
-                        match_kind="identity:alias:brand",
+                        match_kind="sec_company_name",
                     ),
                 ),
             ),
@@ -2217,6 +2211,72 @@ def test_add_series_follow_up_merges_new_company_with_previous_chart_companies()
         "apple",
         "cloudflare",
         "tesla",
+    ]
+    assert merged.metrics == ("revenue",)
+
+
+def test_add_series_follow_up_uses_legacy_last_resolved_query_memory() -> None:
+    cloudflare = ResolvedQuery(
+        query="Compare Cloudflare revenue growth",
+        entities=(
+            EntityResolution(
+                kind="company",
+                mention="cloudflare",
+                status="resolved",
+                canonical_value=str(COMPANY_ID),
+                candidates=(
+                    EntityCandidate(
+                        id=COMPANY_ID,
+                        canonical_value=str(COMPANY_ID),
+                        display_value="Cloudflare",
+                        match_kind="display_name",
+                    ),
+                ),
+            ),
+        ),
+        company_ids=(COMPANY_ID,),
+        metrics=("revenue",),
+    )
+    amazon = ResolvedQuery(
+        query="add Amazon to that chart",
+        entities=(
+            EntityResolution(
+                kind="company",
+                mention="amazon",
+                status="resolved",
+                canonical_value=str(AMAZON_ID),
+                candidates=(
+                    EntityCandidate(
+                        id=AMAZON_ID,
+                        canonical_value=str(AMAZON_ID),
+                        display_value="Amazon.com, Inc.",
+                        match_kind="normalized_legal_name",
+                    ),
+                ),
+            ),
+        ),
+        company_ids=(AMAZON_ID,),
+    )
+    analysis = QuestionAnalysis(
+        normalized_question="add Amazon to the existing comparison chart",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+        is_follow_up=True,
+        reason_codes=("follow_up", "add_series", "comparison_chart"),
+    )
+    memory = SessionMemory(last_resolved_query=cloudflare)
+
+    merged = _merge_follow_up_if_needed(amazon, analysis, memory)
+
+    assert merged.company_ids == (COMPANY_ID, AMAZON_ID)
+    assert [entity.mention for entity in merged.entities if entity.kind == "company"] == [
+        "amazon",
+        "cloudflare",
     ]
     assert merged.metrics == ("revenue",)
 
@@ -3460,8 +3520,7 @@ def test_unresolved_follow_up_company_abstain_has_user_facing_answer() -> None:
         analysis=analysis,
         plan=ExecutionPlan(route=ResearchRoute.CALCULATION),
         company_extraction=CompanyMentionExtraction(
-            mentions=("SAMSUNG",),
-            new_company_target=True,
+            companies=(CompanyMentionCandidate(mention="SAMSUNG"),),
             reason_codes=("explicit_company_target",),
         ),
     )

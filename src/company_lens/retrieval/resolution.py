@@ -6,20 +6,16 @@ import uuid
 from collections import defaultdict
 from datetime import date
 
-from sqlalchemy import inspect, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from company_lens.db.models import (
     Company,
     CompanyAlias,
     CompanyIdentifier,
-    CompanyIdentity,
-    CompanyIdentityAlias,
-    CompanyIdentityTicker,
     CompanyTicker,
     SourceDocument,
 )
-from company_lens.identity.registry import normalize_company_name, normalize_ticker
 from company_lens.retrieval.adaptive_schemas import (
     EntityCandidate,
     EntityResolution,
@@ -113,13 +109,6 @@ class EntityResolver:
             company_entities = self._resolve_companies(cleaned)
             entities.extend(company_entities)
             for entity in company_entities:
-                if entity.status == "resolved" and entity.candidates[0].id is not None:
-                    company_ids.append(entity.candidates[0].id)
-
-            matched_company_ids = set(company_ids)
-            identity_entities = self._resolve_company_identities(cleaned, matched_company_ids)
-            entities.extend(identity_entities)
-            for entity in identity_entities:
                 if entity.status == "resolved" and entity.candidates[0].id is not None:
                     company_ids.append(entity.candidates[0].id)
 
@@ -253,106 +242,6 @@ class EntityResolver:
             )
         return resolutions
 
-    def _resolve_company_identities(
-        self,
-        query: str,
-        matched_company_ids: set[uuid.UUID],
-    ) -> list[EntityResolution]:
-        if not _has_company_identity_registry(self._session):
-            return []
-        identities = self._session.scalars(
-            select(CompanyIdentity).order_by(CompanyIdentity.id)
-        ).all()
-        if not identities:
-            return []
-        labels: defaultdict[str, list[tuple[CompanyIdentity, str]]] = defaultdict(list)
-        for identity in identities:
-            if identity.company_id is not None and identity.company_id in matched_company_ids:
-                continue
-            for value, kind in (
-                (identity.cik, "identity:cik"),
-                (identity.display_name, "identity:display_name"),
-                (identity.legal_name, "identity:legal_name"),
-                (identity.normalized_display_name, "identity:normalized_display_name"),
-                (identity.normalized_legal_name, "identity:normalized_legal_name"),
-            ):
-                if value:
-                    labels[_normalize(value)].append((identity, kind))
-            for ticker in self._session.scalars(
-                select(CompanyIdentityTicker).where(
-                    CompanyIdentityTicker.identity_id == identity.id
-                )
-            ):
-                labels[_normalize(normalize_ticker(ticker.symbol))].append(
-                    (identity, "identity:ticker")
-                )
-            for alias in self._session.scalars(
-                select(CompanyIdentityAlias).where(CompanyIdentityAlias.identity_id == identity.id)
-            ):
-                labels[_normalize(alias.normalized_alias)].append(
-                    (identity, f"identity:alias:{alias.kind}")
-                )
-
-        normalized_query = f" {_normalize(query)} "
-        matched_labels: list[str] = []
-        for label in labels:
-            if not label:
-                continue
-            if re.search(rf"(?<!\w){re.escape(label)}(?!\w)", normalized_query):
-                matched_labels.append(label)
-
-        selected: list[str] = []
-        for label in sorted(matched_labels, key=lambda value: (-len(value), value)):
-            if any(re.search(rf"(?<!\w){re.escape(label)}(?!\w)", longer) for longer in selected):
-                continue
-            selected.append(label)
-
-        resolutions: list[EntityResolution] = []
-        seen_identity_sets: set[tuple[uuid.UUID, ...]] = set()
-        for label in selected:
-            matches = labels[label]
-            identities_for_label = tuple(
-                sorted({identity for identity, _ in matches}, key=lambda identity: str(identity.id))
-            )
-            identity_ids = tuple(identity.id for identity in identities_for_label)
-            if identity_ids in seen_identity_sets:
-                continue
-            seen_identity_sets.add(identity_ids)
-            candidates = tuple(
-                EntityCandidate(
-                    id=identity.company_id,
-                    canonical_value=str(identity.company_id)
-                    if identity.company_id is not None
-                    else _identity_canonical_value(identity),
-                    display_value=identity.display_name,
-                    match_kind=next(
-                        kind for candidate, kind in matches if candidate.id == identity.id
-                    ),
-                )
-                for identity in identities_for_label
-            )
-            local_candidates = [candidate for candidate in candidates if candidate.id is not None]
-            if local_candidates and len(candidates) == 1:
-                resolutions.append(
-                    EntityResolution(
-                        kind="company",
-                        mention=label,
-                        status="resolved",
-                        canonical_value=candidates[0].canonical_value,
-                        candidates=candidates,
-                    )
-                )
-            else:
-                resolutions.append(
-                    EntityResolution(
-                        kind="public_company",
-                        mention=label,
-                        status="ambiguous" if len(candidates) > 1 else "unresolved",
-                        candidates=candidates,
-                    )
-                )
-        return resolutions
-
     def _resolve_accessions(self, accessions: tuple[str, ...]) -> list[EntityResolution]:
         if not accessions:
             return []
@@ -451,28 +340,12 @@ def _normalize(value: str) -> str:
 
 
 def _normalize_company_name(value: str) -> str:
-    tokens = normalize_company_name(value).split()
+    tokens = _normalize(value).split()
     if not tokens:
         return ""
     tokens = _strip_trailing_suffixes(tokens, SECURITY_DESCRIPTOR_SUFFIXES)
     tokens = _strip_trailing_suffixes(tokens, LEGAL_SUFFIXES)
     return " ".join(tokens)
-
-
-def _identity_canonical_value(identity: CompanyIdentity) -> str:
-    primary_ticker = sorted(
-        identity.tickers,
-        key=lambda ticker: (not ticker.is_primary, ticker.symbol),
-    )
-    if primary_ticker:
-        return primary_ticker[0].symbol
-    if identity.cik:
-        return identity.cik
-    return str(identity.id)
-
-
-def _has_company_identity_registry(session: Session) -> bool:
-    return inspect(session.get_bind()).has_table("company_identities")
 
 
 def _strip_trailing_suffixes(

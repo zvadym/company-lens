@@ -721,13 +721,13 @@ def _resolve_extracted_company_mentions(
             role="system",
             content=(
                 "Extract public-company names or stock tickers explicitly present in the current "
-                "user message. This is not canonical resolution: do not infer aliases, do not use "
-                "prior conversation context, and do not add companies that are only implied. Do "
-                "not return ordinary words, metrics, products, chart types, or visualization words "
-                "such as bar, line, area, scatter, table, chart, graph, plot, revenue, growth, "
-                "cash, or rate unless they are clearly being used as a company name or stock "
-                "ticker. Set new_company_target when the current message explicitly introduces, "
-                "replaces, or adds a company target. Use English lowercase_snake_case reason codes."
+                "user message. You may include candidate ticker, CIK, or legal-name hints for "
+                "well-known public-company aliases, but those fields are verification hints only. "
+                "Do not use prior conversation context, and do not add companies that are only "
+                "implied. Do not return ordinary words, metrics, products, chart types, or "
+                "visualization words such as bar, line, area, scatter, table, chart, graph, plot, "
+                "revenue, growth, cash, or rate unless they are clearly being used as a company "
+                "name or stock ticker. Use English lowercase_snake_case reason codes."
             ),
         ),
         ModelMessage(
@@ -736,7 +736,7 @@ def _resolve_extracted_company_mentions(
                 f"Current user message: {state['question']}\n"
                 f"Normalized question: {_normalized_analysis_question(state, analysis)}\n"
                 f"Route: {analysis.route if analysis else 'unknown'}\n"
-                "Return only company mentions from the current user message."
+                "Return only company candidates from the current user message."
             ),
         ),
     )
@@ -750,14 +750,14 @@ def _resolve_extracted_company_mentions(
     )
     if error is not None or extraction is None:
         return base_resolved
-    if not extraction.mentions:
+    if not extraction.companies:
         return base_resolved
-    resolved_entities = runtime.context.tools.resolve_public_company_mentions(extraction.mentions)
+    resolved_entities = runtime.context.tools.resolve_public_company_mentions(extraction.companies)
     if resolved_entities:
         return _resolved_query_with_extra_entities(base_resolved, resolved_entities)
     unresolved_mentions = tuple(
-        EntityResolution(kind="public_company", mention=mention, status="unresolved")
-        for mention in extraction.mentions
+        EntityResolution(kind="public_company", mention=company.mention, status="unresolved")
+        for company in extraction.companies
     )
     return _resolved_query_with_extra_entities(base_resolved, unresolved_mentions)
 
@@ -4640,7 +4640,10 @@ def _recent_artifact_resolved_context(memory: SessionMemory) -> ResolvedQuery:
 def _recent_company_ids(memory: SessionMemory) -> tuple[uuid.UUID, ...]:
     seen: set[uuid.UUID] = set()
     company_ids: list[uuid.UUID] = []
-    for query in memory.recent_resolved_queries:
+    queries = memory.recent_resolved_queries
+    if memory.last_resolved_query is not None and memory.last_resolved_query not in queries:
+        queries = (*queries, memory.last_resolved_query)
+    for query in queries:
         for company_id in query.company_ids:
             if company_id in seen:
                 continue

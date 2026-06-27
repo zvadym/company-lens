@@ -256,7 +256,11 @@ class OpenAIResearchModelProvider:
         )
 
     def _configuration(self, purpose: ModelPurpose) -> tuple[str, ReasoningEffort, int]:
-        if purpose in {ModelPurpose.PARSE, ModelPurpose.PLAN}:
+        if purpose in {
+            ModelPurpose.PARSE,
+            ModelPurpose.ENTITY_EXTRACTION,
+            ModelPurpose.PLAN,
+        }:
             return (
                 self._planning_model,
                 self._planning_reasoning_effort,

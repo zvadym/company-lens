@@ -124,7 +124,6 @@ class Company(Base, TimestampMixin):
         back_populates="company",
         cascade="all, delete-orphan",
     )
-    identity: Mapped[CompanyIdentity | None] = relationship(back_populates="company")
     documents: Mapped[list[SourceDocument]] = relationship(back_populates="company")
     facts: Mapped[list[FinancialFact]] = relationship(back_populates="company")
 
@@ -188,95 +187,6 @@ class CompanyTicker(Base, TimestampMixin):
 
     company: Mapped[Company] = relationship(back_populates="tickers")
     exchange: Mapped[Exchange] = relationship(back_populates="tickers")
-
-
-class CompanyIdentity(Base, TimestampMixin):
-    __tablename__ = "company_identities"
-    __table_args__ = (
-        UniqueConstraint("company_id", name="uq_company_identity_company_id"),
-        UniqueConstraint("cik", name="uq_company_identity_cik"),
-        Index("ix_company_identities_normalized_display_name", "normalized_display_name"),
-        Index("ix_company_identities_normalized_legal_name", "normalized_legal_name"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    company_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("companies.id"))
-    cik: Mapped[str | None] = mapped_column(String(10))
-    legal_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    normalized_legal_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    normalized_display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    source: Mapped[str] = mapped_column(String(64), nullable=False)
-    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
-    source_metadata: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
-
-    company: Mapped[Company | None] = relationship(back_populates="identity")
-    tickers: Mapped[list[CompanyIdentityTicker]] = relationship(
-        back_populates="identity",
-        cascade="all, delete-orphan",
-    )
-    aliases: Mapped[list[CompanyIdentityAlias]] = relationship(
-        back_populates="identity",
-        cascade="all, delete-orphan",
-    )
-
-
-class CompanyIdentityTicker(Base, TimestampMixin):
-    __tablename__ = "company_identity_tickers"
-    __table_args__ = (
-        UniqueConstraint(
-            "identity_id",
-            "normalized_symbol",
-            "source",
-            "valid_from",
-            name="uq_company_identity_ticker_source_period",
-        ),
-        Index("ix_company_identity_tickers_normalized_symbol", "normalized_symbol"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    identity_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("company_identities.id"),
-        nullable=False,
-    )
-    symbol: Mapped[str] = mapped_column(String(32), nullable=False)
-    normalized_symbol: Mapped[str] = mapped_column(String(32), nullable=False)
-    exchange_code: Mapped[str | None] = mapped_column(String(32))
-    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    source: Mapped[str] = mapped_column(String(64), nullable=False)
-    valid_from: Mapped[date | None] = mapped_column(Date)
-    valid_to: Mapped[date | None] = mapped_column(Date)
-    source_metadata: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
-
-    identity: Mapped[CompanyIdentity] = relationship(back_populates="tickers")
-
-
-class CompanyIdentityAlias(Base, TimestampMixin):
-    __tablename__ = "company_identity_aliases"
-    __table_args__ = (
-        UniqueConstraint(
-            "identity_id",
-            "normalized_alias",
-            "kind",
-            "source",
-            name="uq_company_identity_alias_kind_source",
-        ),
-        Index("ix_company_identity_aliases_normalized_alias", "normalized_alias"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    identity_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("company_identities.id"),
-        nullable=False,
-    )
-    alias: Mapped[str] = mapped_column(String(255), nullable=False)
-    normalized_alias: Mapped[str] = mapped_column(String(255), nullable=False)
-    kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    source: Mapped[str] = mapped_column(String(64), nullable=False)
-    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
-    source_metadata: Mapped[JsonObject] = mapped_column(JSON_TYPE, nullable=False, default=dict)
-
-    identity: Mapped[CompanyIdentity] = relationship(back_populates="aliases")
 
 
 class IngestionRun(Base):
