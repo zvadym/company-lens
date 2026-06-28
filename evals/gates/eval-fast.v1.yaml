@@ -1,0 +1,14 @@
+name: eval-fast
+version: 1
+# Fast gates are strict because fixture-backed deterministic checks should not be flaky.
+minimums:
+  case_pass_rate: 1.0
+  company_accuracy: 1.0
+  metric_accuracy: 1.0
+  operation_accuracy: 1.0
+  route_accuracy: 1.0
+  required_tool_recall: 1.0
+  prohibited_tool_pass_rate: 1.0
+  follow_up_safety_accuracy: 1.0
+maximums:
+  missing_result_rate: 0.0

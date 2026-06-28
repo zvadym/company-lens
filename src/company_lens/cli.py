@@ -31,6 +31,11 @@ from company_lens.agent.schemas import AgentRunStatus, ExecutionPolicy
 from company_lens.config import Settings, get_settings
 from company_lens.db.models import CompanyTicker, DocumentKind, IngestionFailure
 from company_lens.db.session import build_session_factory
+from company_lens.evals.deterministic import (
+    evaluate_golden_results,
+    format_markdown_report,
+    load_regression_gate,
+)
 from company_lens.evals.golden import golden_dataset_summary, validate_golden_dataset
 from company_lens.financials.schemas import FinancialFactQuery
 from company_lens.financials.service import FinancialFactQueryService
@@ -345,6 +350,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     golden_parser.add_argument("--pretty", action="store_true", help="Indent JSON output.")
 
+    eval_parser = subparsers.add_parser(
+        "evaluate-golden-results",
+        help="Score observed golden-case results with deterministic checks.",
+    )
+    eval_parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=Path("evals/datasets/golden/follow_up.v1.yaml"),
+        help="Path to golden dataset YAML.",
+    )
+    eval_parser.add_argument(
+        "--results",
+        type=Path,
+        required=True,
+        help="Path to observed golden results JSON.",
+    )
+    eval_parser.add_argument(
+        "--gate",
+        type=Path,
+        default=None,
+        help="Optional versioned regression gate YAML.",
+    )
+    eval_parser.add_argument(
+        "--markdown-output",
+        type=Path,
+        default=None,
+        help="Optional path for a human-readable Markdown report.",
+    )
+    eval_parser.add_argument("--pretty", action="store_true", help="Indent JSON output.")
+
     research_parser = subparsers.add_parser(
         "research",
         help="Run and manage persistent LangGraph research sessions.",
@@ -451,6 +486,8 @@ def _dispatch_command(args: argparse.Namespace) -> int:
         return _run_benchmark_retrieval(args)
     if args.command == "validate-golden-dataset":
         return _run_validate_golden_dataset(args)
+    if args.command == "evaluate-golden-results":
+        return _run_evaluate_golden_results(args)
     if args.command == "research":
         return _run_research(args)
     if args.command == "research-worker":
@@ -955,6 +992,22 @@ def _run_validate_golden_dataset(args: argparse.Namespace) -> int:
     # Print a small machine-readable summary rather than echoing the full case payload.
     print(json.dumps(golden_dataset_summary(dataset), indent=2 if args.pretty else None))
     return 0
+
+
+def _run_evaluate_golden_results(args: argparse.Namespace) -> int:
+    try:
+        gate = load_regression_gate(args.gate) if args.gate is not None else None
+        report = evaluate_golden_results(args.dataset, args.results, gate=gate)
+        if args.markdown_output is not None:
+            args.markdown_output.write_text(
+                format_markdown_report(report) + "\n",
+                encoding="utf-8",
+            )
+    except (OSError, ValueError) as exc:
+        print(f"Golden result evaluation failed: {exc}")
+        return 1
+    print(report.model_dump_json(indent=2 if args.pretty else None))
+    return 0 if report.passed else 1
 
 
 def _find_failed_tickers(session: Session) -> tuple[str, ...]:
