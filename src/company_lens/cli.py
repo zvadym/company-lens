@@ -31,6 +31,7 @@ from company_lens.agent.schemas import AgentRunStatus, ExecutionPolicy
 from company_lens.config import Settings, get_settings
 from company_lens.db.models import CompanyTicker, DocumentKind, IngestionFailure
 from company_lens.db.session import build_session_factory
+from company_lens.evals.golden import golden_dataset_summary, validate_golden_dataset
 from company_lens.financials.schemas import FinancialFactQuery
 from company_lens.financials.service import FinancialFactQueryService
 from company_lens.ingestion.artifacts import ArtifactStore
@@ -331,6 +332,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     benchmark_parser.add_argument("--output-json", type=Path, default=None)
 
+    # Keep validation available without requiring an evaluator runtime or database connection.
+    golden_parser = subparsers.add_parser(
+        "validate-golden-dataset",
+        help="Validate a framework-neutral golden evaluation dataset.",
+    )
+    golden_parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=Path("evals/datasets/golden/follow_up.v1.yaml"),
+        help="Path to golden dataset YAML.",
+    )
+    golden_parser.add_argument("--pretty", action="store_true", help="Indent JSON output.")
+
     research_parser = subparsers.add_parser(
         "research",
         help="Run and manage persistent LangGraph research sessions.",
@@ -435,6 +449,8 @@ def _dispatch_command(args: argparse.Namespace) -> int:
         return _run_adaptive_retrieve(args)
     if args.command == "benchmark-retrieval":
         return _run_benchmark_retrieval(args)
+    if args.command == "validate-golden-dataset":
+        return _run_validate_golden_dataset(args)
     if args.command == "research":
         return _run_research(args)
     if args.command == "research-worker":
@@ -927,6 +943,17 @@ def _run_benchmark_retrieval(args: argparse.Namespace) -> int:
     print_benchmark_report(report)
     if args.output_json is not None:
         write_json_report(report, args.output_json)
+    return 0
+
+
+def _run_validate_golden_dataset(args: argparse.Namespace) -> int:
+    try:
+        dataset = validate_golden_dataset(args.dataset)
+    except (OSError, ValueError) as exc:
+        print(f"Golden dataset validation failed: {exc}")
+        return 1
+    # Print a small machine-readable summary rather than echoing the full case payload.
+    print(json.dumps(golden_dataset_summary(dataset), indent=2 if args.pretty else None))
     return 0
 
 

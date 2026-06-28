@@ -1,0 +1,134 @@
+name: company-lens-follow-up-golden
+version: 1
+# This slice focuses on memory behaviour before broad single-turn coverage is added.
+description: >
+  Multi-turn golden cases for follow-up research questions. These cases test whether
+  CompanyLens safely reuses prior task context while updating, adding, or rejecting
+  company targets from the current user turn.
+cases:
+  # The current turn changes output form only, so the previous task context is safe to reuse.
+  - id: followup_safe_inheritance_chart_001
+    category: follow_up
+    conversation:
+      - role: user
+        content: Show Cloudflare revenue growth over the last four quarters.
+      - role: user
+        content: Make it a chart.
+    expected:
+      companies:
+        - mention: Cloudflare
+          status: resolved
+          ticker: NET
+          source: follow_up_context
+      metrics:
+        - revenue
+      follow_up:
+        inherit:
+          - companies
+          - metrics
+        add:
+          - chart
+        must_not_resolve_terms_as_company:
+          - chart
+      route:
+        expected_route: calculation
+        required_tools:
+          - query_financial_facts
+          - calculate_metrics
+          - generate_chart_spec
+
+  # The current turn supplies a new company target while keeping the prior task shape.
+  - id: followup_replace_company_preserve_task_001
+    category: follow_up
+    conversation:
+      - role: user
+        content: Show Cloudflare revenue growth over the last four quarters.
+      - role: user
+        content: Do the same for Datadog.
+    expected:
+      companies:
+        - mention: Datadog
+          status: resolved
+          ticker: DDOG
+          source: current_question
+      metrics:
+        - revenue
+      follow_up:
+        inherit:
+          - metrics
+        replace_companies:
+          from:
+            - Cloudflare
+          to:
+            - Datadog
+        prohibited_companies:
+          - Cloudflare
+        must_not_reuse_previous_company: true
+      route:
+        expected_route: calculation
+        required_tools:
+          - query_financial_facts
+          - calculate_metrics
+
+  # "Add" should extend the previous comparison instead of replacing it with one company.
+  - id: followup_add_company_to_comparison_001
+    category: follow_up
+    conversation:
+      - role: user
+        content: Compare Cloudflare and Datadog revenue growth over the last eight quarters.
+      - role: user
+        content: Add MongoDB too.
+    expected:
+      companies:
+        - mention: Cloudflare
+          status: resolved
+          ticker: NET
+          source: follow_up_context
+        - mention: Datadog
+          status: resolved
+          ticker: DDOG
+          source: follow_up_context
+        - mention: MongoDB
+          status: resolved
+          ticker: MDB
+          source: current_question
+      metrics:
+        - revenue
+      follow_up:
+        inherit:
+          - companies
+          - metrics
+        add_companies:
+          - MongoDB
+      route:
+        expected_route: calculation
+        required_tools:
+          - query_financial_facts
+          - calculate_metrics
+
+  # A new unresolved company mention must block prior-company reuse.
+  - id: followup_unresolved_company_no_previous_reuse_001
+    category: follow_up
+    conversation:
+      - role: user
+        content: Show Netflix revenue growth.
+      - role: user
+        content: Do the same for Globex.
+    expected:
+      companies:
+        - mention: Globex
+          status: unresolved
+          source: current_question
+      metrics:
+        - revenue
+      follow_up:
+        inherit:
+          - metrics
+        prohibited_companies:
+          - Netflix
+        must_not_reuse_previous_company: true
+      route:
+        expected_route: unsupported
+        prohibited_tools:
+          - query_financial_facts
+          - calculate_metrics
