@@ -155,6 +155,7 @@ class OpenAIResearchModelProvider:
                         "reasoning_effort": reasoning_effort,
                         "max_output_tokens": max_output_tokens,
                     },
+                    tags=("llm", "openai", purpose.value),
                 )
         except Exception as exc:
             raise _map_provider_error(exc) from None
@@ -233,6 +234,7 @@ class OpenAIResearchModelProvider:
                         "reasoning_effort": reasoning_effort,
                         "max_output_tokens": max_output_tokens,
                     },
+                    tags=("llm", "openai", purpose.value),
                 )
         except Exception as exc:
             raise _map_provider_error(exc) from None

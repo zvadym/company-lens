@@ -11,7 +11,7 @@ from company_lens.ingestion.sec_sections import detect_high_value_sections
 from company_lens.observability import telemetry
 from company_lens.observability.context import bind_context
 from company_lens.observability.logging import JsonFormatter
-from company_lens.observability.telemetry import record_generation
+from company_lens.observability.telemetry import record_embedding, record_generation
 from company_lens.reliability import (
     CircuitBreaker,
     CircuitOpenError,
@@ -164,6 +164,28 @@ def test_generation_trace_content_metadata_omits_raw_input_and_output(monkeypatc
     assert LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT not in span.attributes
 
 
+def test_generation_observation_records_trace_tags(monkeypatch) -> None:
+    span = _FakeSpan()
+    _disable_generation_metrics(monkeypatch)
+    monkeypatch.setattr(telemetry.trace, "get_current_span", lambda *_args, **_kwargs: span)
+
+    record_generation(
+        model="gpt-test",
+        purpose="answer",
+        input_tokens=10,
+        output_tokens=5,
+        total_tokens=15,
+        trace_content="metadata",
+        tags=("llm", "openai", "answer"),
+    )
+
+    assert span.attributes[LangfuseOtelSpanAttributes.TRACE_TAGS] == [
+        "llm",
+        "openai",
+        "answer",
+    ]
+
+
 def test_generation_trace_content_redacted_records_preview_without_secrets(monkeypatch) -> None:
     span = _FakeSpan()
     _disable_generation_metrics(monkeypatch)
@@ -210,12 +232,62 @@ def test_generation_trace_content_full_records_payload(monkeypatch) -> None:
     assert "full answer" in span.attributes[LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT]
 
 
+def test_embedding_observation_records_usage_without_static_cost(monkeypatch) -> None:
+    span = _FakeSpan()
+    _disable_generation_metrics(monkeypatch)
+    monkeypatch.setattr(telemetry.trace, "get_current_span", lambda *_args, **_kwargs: span)
+
+    record_embedding(
+        model="text-embedding-3-small",
+        input_tokens=123,
+        input_count=2,
+        dimensions=384,
+        metadata={"company_name": "Cloudflare", "ticker": "NET"},
+        tags=("embedding", "indexing", "openai"),
+    )
+
+    assert span.attributes[LangfuseOtelSpanAttributes.OBSERVATION_TYPE] == "embedding"
+    assert span.attributes[LangfuseOtelSpanAttributes.OBSERVATION_MODEL] == (
+        "text-embedding-3-small"
+    )
+    assert '"input": 123' in span.attributes[
+        LangfuseOtelSpanAttributes.OBSERVATION_USAGE_DETAILS
+    ]
+    assert "Cloudflare" in span.attributes[LangfuseOtelSpanAttributes.OBSERVATION_METADATA]
+    assert span.attributes[LangfuseOtelSpanAttributes.TRACE_TAGS] == [
+        "embedding",
+        "indexing",
+        "openai",
+    ]
+    assert LangfuseOtelSpanAttributes.OBSERVATION_COST_DETAILS not in span.attributes
+
+
+def test_langfuse_export_filter_keeps_meaningful_observations_and_drops_noise() -> None:
+    assert telemetry._should_export_langfuse_span(  # noqa: SLF001
+        _FakeReadableSpan({LangfuseOtelSpanAttributes.OBSERVATION_TYPE: "generation"})
+    )
+    assert telemetry._should_export_langfuse_span(  # noqa: SLF001
+        _FakeReadableSpan({"company_lens.operation.kind": "model"})
+    )
+    assert not telemetry._should_export_langfuse_span(  # noqa: SLF001
+        _FakeReadableSpan({"db.system": "postgresql", "db.statement": "SELECT 1"})
+    )
+    assert not telemetry._should_export_langfuse_span(  # noqa: SLF001
+        _FakeReadableSpan({"http.method": "GET", "http.route": "/api/v1/health"})
+    )
+
+
 class _FakeSpan:
     def __init__(self) -> None:
         self.attributes: dict[str, object] = {}
 
     def set_attribute(self, key: str, value: object) -> None:
         self.attributes[key] = value
+
+
+class _FakeReadableSpan:
+    def __init__(self, attributes: dict[str, object]) -> None:
+        self.attributes = attributes
 
 
 def _disable_generation_metrics(monkeypatch) -> None:

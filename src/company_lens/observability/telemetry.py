@@ -6,6 +6,8 @@ import re
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from typing import Any, Literal
 from weakref import WeakSet
 
@@ -42,6 +44,17 @@ _SECRET_PATTERNS = (
 )
 
 
+@dataclass(frozen=True)
+class EmbeddingObservationContext:
+    metadata: Mapping[str, Any]
+    tags: tuple[str, ...] = ()
+
+
+_EMBEDDING_OBSERVATION_CONTEXT: ContextVar[EmbeddingObservationContext] = ContextVar(
+    "company_lens_embedding_observation_context"
+)
+
+
 def configure_telemetry(settings: Settings) -> None:
     global _configured, _langfuse
     if _configured or not settings.telemetry_enabled:
@@ -74,7 +87,7 @@ def configure_telemetry(settings: Settings) -> None:
             base_url=settings.langfuse_base_url,
             environment=settings.environment,
             release=settings.service_version,
-            should_export_span=lambda _span: True,
+            should_export_span=_should_export_langfuse_span,
         )
         logger.info("Langfuse trace exporter configured", extra={"event": "telemetry.configured"})
     _configured = True
@@ -156,6 +169,68 @@ def record_model_usage(
     span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
 
 
+@contextmanager
+def bind_embedding_observation(
+    *,
+    metadata: Mapping[str, Any],
+    tags: tuple[str, ...] = (),
+) -> Iterator[EmbeddingObservationContext]:
+    token: Token[EmbeddingObservationContext] = _EMBEDDING_OBSERVATION_CONTEXT.set(
+        EmbeddingObservationContext(metadata=metadata, tags=tags)
+    )
+    try:
+        yield _EMBEDDING_OBSERVATION_CONTEXT.get()
+    finally:
+        _EMBEDDING_OBSERVATION_CONTEXT.reset(token)
+
+
+def current_embedding_observation() -> EmbeddingObservationContext:
+    try:
+        return _EMBEDDING_OBSERVATION_CONTEXT.get()
+    except LookupError:
+        return EmbeddingObservationContext(metadata={})
+
+
+def record_embedding(
+    *,
+    model: str,
+    input_tokens: int,
+    input_count: int,
+    dimensions: int,
+    metadata: Mapping[str, Any] | None = None,
+    tags: tuple[str, ...] = (),
+) -> None:
+    record_model_usage(
+        model=model,
+        purpose="embedding",
+        input_tokens=input_tokens,
+        output_tokens=0,
+    )
+    span = trace.get_current_span()
+    usage_details = {"input": input_tokens}
+    embedding_metadata: dict[str, Any] = {
+        "purpose": "embedding",
+        "input_count": input_count,
+        "dimensions": dimensions,
+    }
+    if metadata:
+        embedding_metadata.update(metadata)
+
+    span.set_attribute("gen_ai.usage.total_tokens", input_tokens)
+    span.set_attribute("company_lens.embedding.input_count", input_count)
+    span.set_attribute("company_lens.embedding.dimensions", dimensions)
+    if tags:
+        span.set_attribute("langfuse.trace.tags", list(tags))
+
+    langfuse_attributes = _langfuse_embedding_attributes(
+        model=model,
+        usage_details=usage_details,
+        metadata=embedding_metadata,
+    )
+    for key, value in langfuse_attributes.items():
+        span.set_attribute(key, value)
+
+
 def record_generation(
     *,
     model: str,
@@ -168,6 +243,7 @@ def record_generation(
     output_payload: Any | None = None,
     response_id: str | None = None,
     model_parameters: Mapping[str, str | int | float | bool] | None = None,
+    tags: tuple[str, ...] = (),
     cost_usd: float = 0,
 ) -> None:
     record_model_usage(
@@ -184,6 +260,8 @@ def record_generation(
         "total": total_tokens,
     }
     span.set_attribute("gen_ai.usage.total_tokens", total_tokens)
+    if tags:
+        span.set_attribute("langfuse.trace.tags", list(tags))
     langfuse_attributes = _langfuse_generation_attributes(
         model=model,
         purpose=purpose,
@@ -240,6 +318,18 @@ def _initialize_instruments() -> None:
     _validation_results = meter.create_counter("company_lens.validation.count")
 
 
+def _should_export_langfuse_span(span: Any) -> bool:
+    attributes = getattr(span, "attributes", None)
+    if not isinstance(attributes, Mapping):
+        return False
+    if any(str(key).startswith("langfuse.") for key in attributes):
+        return True
+    kind = attributes.get("company_lens.operation.kind")
+    if kind in {"model", "embedding"}:
+        return True
+    return bool(attributes.get("gen_ai.system"))
+
+
 def _langfuse_generation_attributes(
     *,
     model: str,
@@ -281,6 +371,25 @@ def _langfuse_generation_attributes(
             _content_payload(output_payload, trace_content)
         )
     return attributes
+
+
+def _langfuse_embedding_attributes(
+    *,
+    model: str,
+    usage_details: Mapping[str, int],
+    metadata: Mapping[str, Any],
+) -> dict[str, str]:
+    try:
+        from langfuse import LangfuseOtelSpanAttributes
+    except ImportError:
+        return {}
+
+    return {
+        LangfuseOtelSpanAttributes.OBSERVATION_TYPE: "embedding",
+        LangfuseOtelSpanAttributes.OBSERVATION_MODEL: model,
+        LangfuseOtelSpanAttributes.OBSERVATION_USAGE_DETAILS: _json_attribute(usage_details),
+        LangfuseOtelSpanAttributes.OBSERVATION_METADATA: _json_attribute(metadata),
+    }
 
 
 def _content_payload(value: Any, trace_content: TraceContentPolicy) -> Any:

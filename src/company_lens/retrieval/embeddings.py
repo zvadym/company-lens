@@ -8,7 +8,11 @@ from typing import Any, Literal, Protocol
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, RateLimitError
 
-from company_lens.observability.telemetry import observe_operation
+from company_lens.observability.telemetry import (
+    current_embedding_observation,
+    observe_operation,
+    record_embedding,
+)
 from company_lens.processing.text import TOKEN_ENCODING
 from company_lens.reliability import CircuitBreaker, RetryPolicy, call_with_resilience
 
@@ -110,8 +114,10 @@ class OpenAIEmbedder:
             return []
         if any(not text for text in inputs):
             raise ValueError("OpenAI embedding inputs must not be empty.")
+        input_tokens = 0
         for index, text in enumerate(inputs):
             token_count = len(TOKEN_ENCODING.encode(text))
+            input_tokens += token_count
             if token_count > OPENAI_EMBEDDING_MAX_INPUT_TOKENS:
                 raise EmbeddingInputTooLongError(
                     input_index=index,
@@ -126,6 +132,7 @@ class OpenAIEmbedder:
                 "gen_ai.system": "openai",
                 "gen_ai.request.model": self.model_name,
                 "company_lens.embedding.input_count": len(inputs),
+                "gen_ai.usage.input_tokens": input_tokens,
             },
         ):
             response = call_with_resilience(
@@ -139,6 +146,15 @@ class OpenAIEmbedder:
                 retry_policy=self._retry_policy,
                 circuit_breaker=self._circuit_breaker,
                 retry_if=_retryable_openai_error,
+            )
+            observation = current_embedding_observation()
+            record_embedding(
+                model=_response_model(response, self.model_name),
+                input_tokens=_embedding_input_tokens(response, fallback=input_tokens),
+                input_count=len(inputs),
+                dimensions=self.dimensions,
+                metadata=observation.metadata,
+                tags=observation.tags,
             )
         ordered = sorted(response.data, key=lambda item: item.index)
         vectors = [list(item.embedding) for item in ordered]
@@ -204,3 +220,21 @@ def _retryable_openai_error(exc: Exception) -> bool:
     return isinstance(exc, (APITimeoutError, APIConnectionError, RateLimitError)) or (
         isinstance(exc, APIStatusError) and exc.status_code >= 500
     )
+
+
+def _response_model(response: Any, fallback: str) -> str:
+    model = getattr(response, "model", None)
+    return model if isinstance(model, str) and model else fallback
+
+
+def _embedding_input_tokens(response: Any, *, fallback: int) -> int:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return fallback
+    prompt_tokens = getattr(usage, "prompt_tokens", None)
+    if prompt_tokens is None and isinstance(usage, dict):
+        prompt_tokens = usage.get("prompt_tokens")
+    try:
+        return max(0, int(prompt_tokens if prompt_tokens is not None else fallback))
+    except (TypeError, ValueError):
+        return fallback

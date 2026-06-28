@@ -1,15 +1,36 @@
 from __future__ import annotations
 
+import uuid
+from dataclasses import dataclass
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from company_lens.db.models import ChunkEmbedding, DocumentChunk, EmbeddingIndex
+from company_lens.db.models import (
+    ChunkEmbedding,
+    Company,
+    DocumentChunk,
+    DocumentVersion,
+    EmbeddingIndex,
+    SourceDocument,
+)
+from company_lens.observability.telemetry import bind_embedding_observation
 from company_lens.retrieval.embeddings import Embedder, LocalFeatureHashingEmbedder
 from company_lens.retrieval.schemas import (
     EmbeddingFailure,
     EmbeddingIndexingRequest,
     EmbeddingIndexingResult,
 )
+
+
+@dataclass(frozen=True)
+class _ChunkEmbeddingContext:
+    company_id: uuid.UUID | None
+    company_name: str | None
+    cik: str | None
+    tickers: tuple[str, ...]
+    source_document_id: uuid.UUID | None
+    document_version_id: uuid.UUID
 
 
 class EmbeddingIndexingService:
@@ -50,7 +71,16 @@ class EmbeddingIndexingService:
                     continue
                 pending.append((chunk, existing))
 
-            embedded, batch_failures = self._embed_with_isolation(pending)
+            embedded: list[tuple[DocumentChunk, ChunkEmbedding | None, list[float]]] = []
+            batch_failures: list[EmbeddingFailure] = []
+            for company_pending in self._pending_by_company(pending):
+                group_embedded, group_failures = self._embed_with_isolation(
+                    company_pending,
+                    request=request,
+                    embedding_index=embedding_index,
+                )
+                embedded.extend(group_embedded)
+                batch_failures.extend(group_failures)
             failures.extend(batch_failures)
             try:
                 batch_indexed = 0
@@ -100,6 +130,9 @@ class EmbeddingIndexingService:
     def _embed_with_isolation(
         self,
         pending: list[tuple[DocumentChunk, ChunkEmbedding | None]],
+        *,
+        request: EmbeddingIndexingRequest,
+        embedding_index: EmbeddingIndex,
     ) -> tuple[
         list[tuple[DocumentChunk, ChunkEmbedding | None, list[float]]],
         list[EmbeddingFailure],
@@ -107,7 +140,15 @@ class EmbeddingIndexingService:
         if not pending:
             return [], []
         try:
-            vectors = self._embedder.embed_texts([chunk.text for chunk, _ in pending])
+            with bind_embedding_observation(
+                metadata=self._embedding_metadata(
+                    pending,
+                    request=request,
+                    embedding_index=embedding_index,
+                ),
+                tags=_embedding_tags(self._embedder.provider),
+            ):
+                vectors = self._embedder.embed_texts([chunk.text for chunk, _ in pending])
             return [
                 (chunk, existing, vector)
                 for (chunk, existing), vector in zip(pending, vectors, strict=True)
@@ -123,8 +164,16 @@ class EmbeddingIndexingService:
                     )
                 ]
             midpoint = len(pending) // 2
-            left_embedded, left_failures = self._embed_with_isolation(pending[:midpoint])
-            right_embedded, right_failures = self._embed_with_isolation(pending[midpoint:])
+            left_embedded, left_failures = self._embed_with_isolation(
+                pending[:midpoint],
+                request=request,
+                embedding_index=embedding_index,
+            )
+            right_embedded, right_failures = self._embed_with_isolation(
+                pending[midpoint:],
+                request=request,
+                embedding_index=embedding_index,
+            )
             return left_embedded + right_embedded, left_failures + right_failures
 
     def _get_or_create_index(self, request: EmbeddingIndexingRequest) -> EmbeddingIndex:
@@ -165,3 +214,100 @@ class EmbeddingIndexingService:
         if request.limit is not None:
             statement = statement.limit(request.limit)
         return list(self._session.scalars(statement).all())
+
+    def _pending_by_company(
+        self,
+        pending: list[tuple[DocumentChunk, ChunkEmbedding | None]],
+    ) -> list[list[tuple[DocumentChunk, ChunkEmbedding | None]]]:
+        groups: dict[uuid.UUID | None, list[tuple[DocumentChunk, ChunkEmbedding | None]]] = {}
+        for item in pending:
+            context = self._chunk_context(item[0])
+            groups.setdefault(context.company_id, []).append(item)
+        return list(groups.values())
+
+    def _embedding_metadata(
+        self,
+        pending: list[tuple[DocumentChunk, ChunkEmbedding | None]],
+        *,
+        request: EmbeddingIndexingRequest,
+        embedding_index: EmbeddingIndex,
+    ) -> dict[str, object]:
+        contexts = [self._chunk_context(chunk) for chunk, _existing in pending]
+        company_ids = {context.company_id for context in contexts if context.company_id is not None}
+        company_names = sorted(
+            {
+                context.company_name
+                for context in contexts
+                if context.company_name is not None and context.company_name
+            }
+        )
+        tickers = sorted({ticker for context in contexts for ticker in context.tickers})
+        source_document_ids = sorted(
+            {
+                str(context.source_document_id)
+                for context in contexts
+                if context.source_document_id is not None
+            }
+        )
+        document_version_ids = sorted({str(context.document_version_id) for context in contexts})
+        input_tokens = sum(int(chunk.token_count or 0) for chunk, _existing in pending)
+        metadata: dict[str, object] = {
+            "index_name": request.index_name,
+            "index_version": request.index_version,
+            "embedding_index_id": str(embedding_index.id),
+            "chunk_count": len(pending),
+            "source_document_count": len(source_document_ids),
+            "document_version_count": len(document_version_ids),
+            "source_document_ids": source_document_ids,
+            "document_version_ids": document_version_ids,
+            "estimated_input_tokens": input_tokens,
+            "force_rebuild": request.force,
+        }
+        if len(company_ids) == 1:
+            context = contexts[0]
+            metadata.update(
+                {
+                    "company_id": str(context.company_id) if context.company_id else None,
+                    "company_name": context.company_name,
+                    "cik": context.cik,
+                    "tickers": tickers,
+                    "ticker": tickers[0] if len(tickers) == 1 else None,
+                }
+            )
+        else:
+            metadata.update(
+                {
+                    "company_count": len(company_ids),
+                    "company_names": company_names,
+                    "tickers": tickers,
+                }
+            )
+        return metadata
+
+    def _chunk_context(self, chunk: DocumentChunk) -> _ChunkEmbeddingContext:
+        document_version = chunk.document_version or self._session.get(
+            DocumentVersion, chunk.document_version_id
+        )
+        document: SourceDocument | None = None
+        company: Company | None = None
+        if document_version is not None:
+            document = document_version.document
+        if document is not None and document.company_id is not None:
+            company = document.company
+        tickers = (
+            tuple(sorted({ticker.symbol.upper() for ticker in company.tickers if ticker.symbol}))
+            if company is not None
+            else ()
+        )
+        return _ChunkEmbeddingContext(
+            company_id=company.id if company is not None else None,
+            company_name=company.display_name if company is not None else None,
+            cik=company.cik if company is not None else None,
+            tickers=tickers,
+            source_document_id=document.id if document is not None else None,
+            document_version_id=chunk.document_version_id,
+        )
+
+
+def _embedding_tags(provider: str) -> tuple[str, ...]:
+    return ("embedding", "indexing", provider)

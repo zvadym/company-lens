@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     service_version: str = Field(default="0.1.0", min_length=1)
     telemetry_enabled: bool = Field(default=True)
     metrics_enabled: bool = Field(default=True)
-    trace_content: Literal["metadata", "redacted", "full"] = Field(default="metadata")
+    trace_content: Literal["metadata", "redacted", "full"] = Field(default="redacted")
     langfuse_public_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("COMPANY_LENS_LANGFUSE_PUBLIC_KEY", "LANGFUSE_PUBLIC_KEY"),
