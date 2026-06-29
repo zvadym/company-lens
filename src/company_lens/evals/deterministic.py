@@ -29,6 +29,8 @@ METRIC_NAMES = frozenset(
         "required_tool_recall",
         "prohibited_tool_pass_rate",
         "follow_up_safety_accuracy",
+        "operational_metrics_presence_rate",
+        "operational_budget_pass_rate",
         "missing_result_rate",
     }
 )
@@ -77,6 +79,55 @@ class ObservedTrajectoryEvent(EvaluationModel):
         return cleaned
 
 
+class ObservedNodeLatency(EvaluationModel):
+    node: str = Field(min_length=1)
+    duration_ms: int = Field(ge=0)
+
+    @field_validator("node")
+    @classmethod
+    def normalize_node(cls, value: str) -> str:
+        return _clean_identifier(value, field_name="node")
+
+
+class ObservedNodeAttempt(EvaluationModel):
+    node: str = Field(min_length=1)
+    attempts: int = Field(ge=1)
+
+    @field_validator("node")
+    @classmethod
+    def normalize_node(cls, value: str) -> str:
+        return _clean_identifier(value, field_name="node")
+
+
+class ObservedOperationalMetrics(EvaluationModel):
+    total_latency_ms: int | None = Field(default=None, ge=0)
+    time_to_first_event_ms: int | None = Field(default=None, ge=0)
+    node_latencies: tuple[ObservedNodeLatency, ...] = ()
+    tool_calls_used: int | None = Field(default=None, ge=0)
+    repair_attempts: int | None = Field(default=None, ge=0)
+    api_calls: int | None = Field(default=None, ge=0)
+    retry_count: int | None = Field(default=None, ge=0)
+    node_attempts: tuple[ObservedNodeAttempt, ...] = ()
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0)
+    policy_max_tool_calls: int | None = Field(default=None, ge=1)
+    policy_max_repair_attempts: int | None = Field(default=None, ge=0)
+    policy_max_retries_per_node: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_token_total(self) -> ObservedOperationalMetrics:
+        if (
+            self.input_tokens is not None
+            and self.output_tokens is not None
+            and self.total_tokens is not None
+            and self.total_tokens != self.input_tokens + self.output_tokens
+        ):
+            raise ValueError("total_tokens must equal input_tokens plus output_tokens")
+        return self
+
+
 class ObservedCaseResult(EvaluationModel):
     case_id: str = Field(pattern=r"^[a-z][a-z0-9_]*_[0-9]{3}$")
     companies: tuple[ObservedCompany, ...] = ()
@@ -85,6 +136,7 @@ class ObservedCaseResult(EvaluationModel):
     route: ExpectedRoute | None = None
     tools: tuple[ExpectedTool, ...] = ()
     trajectory: tuple[ObservedTrajectoryEvent, ...] = ()
+    operational: ObservedOperationalMetrics | None = None
 
     @field_validator("metrics")
     @classmethod
@@ -143,6 +195,8 @@ class EvaluationMetrics(EvaluationModel):
     required_tool_recall: float
     prohibited_tool_pass_rate: float
     follow_up_safety_accuracy: float
+    operational_metrics_presence_rate: float
+    operational_budget_pass_rate: float
     missing_result_rate: float
 
 
@@ -169,11 +223,28 @@ class RegressionGateFailure(EvaluationModel):
     actual: float
 
 
+class OperationalBudget(EvaluationModel):
+    max_total_latency_ms: int | None = Field(default=None, ge=0)
+    max_time_to_first_event_ms: int | None = Field(default=None, ge=0)
+    max_node_latency_ms: int | None = Field(default=None, ge=0)
+    max_tool_calls: int | None = Field(default=None, ge=0)
+    max_repair_attempts: int | None = Field(default=None, ge=0)
+    max_api_calls: int | None = Field(default=None, ge=0)
+    max_retry_count: int | None = Field(default=None, ge=0)
+    max_total_tokens: int | None = Field(default=None, ge=0)
+    max_cost_usd: float | None = Field(default=None, ge=0)
+
+    def configured(self) -> bool:
+        return any(value is not None for value in self.model_dump().values())
+
+
 class RegressionGate(EvaluationModel):
     name: str = Field(min_length=1)
     version: int = Field(ge=1)
     minimums: dict[str, float] = Field(default_factory=dict)
     maximums: dict[str, float] = Field(default_factory=dict)
+    require_operational_metrics: bool = False
+    operational_budgets: OperationalBudget = Field(default_factory=OperationalBudget)
 
     @field_validator("name")
     @classmethod
@@ -253,7 +324,7 @@ def evaluate_dataset(
     extra_results = tuple(sorted(set(observed_by_case) - expected_case_ids))
 
     case_reports = tuple(
-        _evaluate_case(case, observed_by_case.get(case.id)) for case in dataset.cases
+        _evaluate_case(case, observed_by_case.get(case.id), gate=gate) for case in dataset.cases
     )
     metrics = _evaluation_metrics(dataset.cases, case_reports, observed_by_case)
     passed_cases = sum(1 for case_report in case_reports if case_report.passed)
@@ -342,6 +413,8 @@ def _validate_dataset_identity(dataset: GoldenDataset, observed: ObservedGoldenR
 def _evaluate_case(
     case: GoldenDatasetCase,
     observed: ObservedCaseResult | None,
+    *,
+    gate: RegressionGate | None,
 ) -> CaseEvaluation:
     if observed is None:
         checks = _missing_case_checks(case)
@@ -364,6 +437,8 @@ def _evaluate_case(
     }
     if case.expected.follow_up is not None:
         checks["follow_up_safety"] = _check_follow_up(case, observed, failures)
+    if _operational_checks_enabled(observed, gate):
+        checks["operational_budgets"] = _check_operational_budgets(observed, gate, failures)
 
     return CaseEvaluation(
         case_id=case.id,
@@ -548,6 +623,138 @@ def _missing_case_checks(case: GoldenDatasetCase) -> dict[str, bool]:
     return checks
 
 
+def _operational_checks_enabled(
+    observed: ObservedCaseResult,
+    gate: RegressionGate | None,
+) -> bool:
+    if observed.operational is not None:
+        return True
+    return bool(
+        gate is not None
+        and (gate.require_operational_metrics or gate.operational_budgets.configured())
+    )
+
+
+def _check_operational_budgets(
+    observed: ObservedCaseResult,
+    gate: RegressionGate | None,
+    failures: list[str],
+) -> bool:
+    operational = observed.operational
+    if operational is None:
+        failures.append("missing operational metrics")
+        return False
+
+    passed = True
+    budget = gate.operational_budgets if gate is not None else OperationalBudget()
+    passed &= _check_maximum(
+        "total latency",
+        operational.total_latency_ms,
+        budget.max_total_latency_ms,
+        "ms",
+        failures,
+    )
+    passed &= _check_maximum(
+        "time to first event",
+        operational.time_to_first_event_ms,
+        budget.max_time_to_first_event_ms,
+        "ms",
+        failures,
+    )
+    passed &= _check_maximum(
+        "tool calls",
+        operational.tool_calls_used,
+        _explicit_or_policy(budget.max_tool_calls, operational.policy_max_tool_calls),
+        "",
+        failures,
+    )
+    passed &= _check_maximum(
+        "repair attempts",
+        operational.repair_attempts,
+        _explicit_or_policy(
+            budget.max_repair_attempts,
+            operational.policy_max_repair_attempts,
+        ),
+        "",
+        failures,
+    )
+    passed &= _check_maximum(
+        "API calls",
+        operational.api_calls,
+        budget.max_api_calls,
+        "",
+        failures,
+    )
+    passed &= _check_maximum(
+        "retry count",
+        operational.retry_count,
+        budget.max_retry_count,
+        "",
+        failures,
+    )
+    passed &= _check_maximum(
+        "total tokens",
+        operational.total_tokens,
+        budget.max_total_tokens,
+        "",
+        failures,
+    )
+    passed &= _check_maximum(
+        "cost",
+        operational.cost_usd,
+        budget.max_cost_usd,
+        " USD",
+        failures,
+    )
+    if budget.max_node_latency_ms is not None:
+        if not operational.node_latencies:
+            failures.append("missing node latency metrics")
+            passed = False
+        for item in operational.node_latencies:
+            passed &= _check_maximum(
+                f"node {item.node} latency",
+                item.duration_ms,
+                budget.max_node_latency_ms,
+                "ms",
+                failures,
+            )
+    if operational.policy_max_retries_per_node is not None:
+        for attempt in operational.node_attempts:
+            allowed_attempts = operational.policy_max_retries_per_node + 1
+            if attempt.attempts > allowed_attempts:
+                failures.append(
+                    f"node {attempt.node} attempts were {attempt.attempts}, "
+                    f"expected at most {allowed_attempts}"
+                )
+                passed = False
+    return passed
+
+
+def _check_maximum(
+    label: str,
+    actual: int | float | None,
+    maximum: int | float | None,
+    unit: str,
+    failures: list[str],
+) -> bool:
+    if maximum is None:
+        return True
+    if actual is None:
+        failures.append(f"missing {label} metric")
+        return False
+    if actual <= maximum:
+        return True
+    failures.append(f"{label} was {actual}{unit}, expected at most {maximum}{unit}")
+    return False
+
+
+def _explicit_or_policy(
+    explicit: int | float | None,
+    policy: int | float | None,
+) -> int | float | None:
+    return explicit if explicit is not None else policy
+
+
 def _evaluation_metrics(
     cases: tuple[GoldenDatasetCase, ...],
     reports: tuple[CaseEvaluation, ...],
@@ -587,6 +794,16 @@ def _evaluation_metrics(
         required_tool_recall=_ratio(required_hits, required_total),
         prohibited_tool_pass_rate=_ratio(prohibited_clean, prohibited_total),
         follow_up_safety_accuracy=_check_ratio(follow_up_reports, "follow_up_safety"),
+        operational_metrics_presence_rate=_ratio(
+            sum(
+                1
+                for case in cases
+                if (result := observed_by_case.get(case.id)) is not None
+                and result.operational is not None
+            ),
+            len(cases),
+        ),
+        operational_budget_pass_rate=_check_ratio(reports, "operational_budgets"),
         missing_result_rate=_ratio(missing, total_cases),
     )
 
@@ -679,6 +896,13 @@ def _observed_company_key(company: ObservedCompany) -> str:
 
 def _normalize_key(value: str) -> str:
     return _clean_text(value).casefold()
+
+
+def _clean_identifier(value: str, *, field_name: str) -> str:
+    cleaned = value.strip()
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", cleaned):
+        raise ValueError(f"{field_name} must use lowercase snake_case")
+    return cleaned
 
 
 def _clean_text(value: str) -> str:

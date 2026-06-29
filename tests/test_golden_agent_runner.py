@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +11,7 @@ import pytest
 from pydantic import SecretStr
 
 from company_lens import cli
+from company_lens.agent.events import AgentExecutionEvent
 from company_lens.agent.schemas import (
     AgentCapability,
     AgentRunStatus,
@@ -21,6 +22,7 @@ from company_lens.agent.schemas import (
     ExecutionPlan,
     ExecutionPolicy,
     FinancialFactsBranch,
+    NodeAttempt,
     QuestionAnalysis,
     ResearchFrame,
     ResearchRoute,
@@ -41,8 +43,23 @@ class FakeGoldenAgent:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, ExecutionPolicy]] = []
 
-    def run(self, question: str, *, session_id: str, policy: ExecutionPolicy) -> AgentState:
+    def run(
+        self,
+        question: str,
+        *,
+        session_id: str,
+        policy: ExecutionPolicy,
+        observer: Callable[[AgentExecutionEvent], None] | None = None,
+    ) -> AgentState:
         self.calls.append((question, session_id, policy))
+        if observer is not None:
+            observer(
+                AgentExecutionEvent(
+                    event_key="test:first",
+                    event_type="analysis.summary",
+                    data={"route": "calculation"},
+                )
+            )
         company = "Datadog" if "Datadog" in question else "Cloudflare"
         ticker = "DDOG" if company == "Datadog" else "NET"
         source: CompanyTargetSource = (
@@ -82,6 +99,11 @@ def test_golden_agent_runner_executes_follow_up_turns_in_one_session() -> None:
     assert result.operation == "year_over_year_growth"
     assert result.route == "calculation"
     assert result.tools == ("query_financial_facts", "calculate_metrics")
+    assert result.operational is not None
+    assert result.operational.tool_calls_used == 2
+    assert result.operational.retry_count == 1
+    assert result.operational.policy_max_tool_calls == 4
+    assert result.operational.time_to_first_event_ms is not None
     assert [event.node for event in result.trajectory] == [
         "query_financial_facts",
         "calculate_metrics",
@@ -148,6 +170,7 @@ cases:
     assert summary["output"] == str(output_path)
     assert payload["dataset_name"] == "cli-live-golden"
     assert payload["results"][0]["companies"][0]["ticker"] == "NET"
+    assert payload["results"][0]["operational"]["tool_calls_used"] == 2
     assert agent.calls[0][2].max_tool_calls == 4
 
 
@@ -202,18 +225,26 @@ def _completed_state(
             "resolved_query": resolved,
             "research_frame": frame,
             "execution_plan": plan,
+            "tool_calls_used": 2,
+            "repair_attempts": 0,
+            "node_attempts": (
+                NodeAttempt(node="query_financial_facts:facts", attempts=2),
+                NodeAttempt(node="calculate_metrics:growth", attempts=1),
+            ),
             "trajectory": (
                 TrajectoryEvent(
                     node="query_financial_facts",
                     status=TrajectoryStatus.COMPLETED,
                     occurred_at=datetime.now(UTC),
                     summary="Facts queried.",
+                    duration_ms=12,
                 ),
                 TrajectoryEvent(
                     node="calculate_metrics",
                     status=TrajectoryStatus.COMPLETED,
                     occurred_at=datetime.now(UTC),
                     summary="Growth calculated.",
+                    duration_ms=3,
                 ),
             ),
         }

@@ -83,7 +83,7 @@ jobs:
           company-lens evaluate-golden-results \
             --dataset "${{ inputs.dataset }}" \
             --results observed-results.json \
-            --gate evals/gates/eval-fast.v1.yaml \
+            --gate evals/gates/eval-full.v1.yaml \
             --markdown-output evaluation-report.md \
             --pretty
 

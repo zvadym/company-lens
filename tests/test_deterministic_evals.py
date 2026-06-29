@@ -14,6 +14,7 @@ from company_lens.evals.deterministic import (
 GOLDEN_CORE_DATASET = Path("evals/datasets/golden/core.v1.yaml")
 GOLDEN_FOLLOW_UP_DATASET = Path("evals/datasets/golden/follow_up.v1.yaml")
 EVAL_FAST_GATE = Path("evals/gates/eval-fast.v1.yaml")
+EVAL_FULL_GATE = Path("evals/gates/eval-full.v1.yaml")
 
 
 def test_deterministic_core_results_pass_strict_gate(tmp_path: Path) -> None:
@@ -64,6 +65,55 @@ def test_regression_gate_reports_threshold_failures(tmp_path: Path) -> None:
         "case_pass_rate",
         "missing_result_rate",
     }
+
+
+def test_operational_budgets_pass_when_observed_metrics_are_within_limits(
+    tmp_path: Path,
+) -> None:
+    payload = _core_results()
+    payload["results"][0]["operational"] = _operational_metrics()
+    payload["results"] = payload["results"][:1]
+    dataset_path = _write_single_case_dataset(tmp_path)
+    results_path = _write_results(tmp_path, payload)
+    gate = load_regression_gate(EVAL_FULL_GATE)
+
+    report = evaluate_golden_results(dataset_path, results_path, gate=gate)
+
+    assert report.passed is True
+    assert report.metrics.operational_metrics_presence_rate == 1.0
+    assert report.metrics.operational_budget_pass_rate == 1.0
+
+
+def test_operational_budget_failures_are_reported_per_case(tmp_path: Path) -> None:
+    payload = _core_results()
+    operational = _operational_metrics()
+    operational["tool_calls_used"] = 11
+    payload["results"][0]["operational"] = operational
+    payload["results"] = payload["results"][:1]
+    dataset_path = _write_single_case_dataset(tmp_path)
+    results_path = _write_results(tmp_path, payload)
+    gate = load_regression_gate(EVAL_FULL_GATE)
+
+    report = evaluate_golden_results(dataset_path, results_path, gate=gate)
+
+    failed_case = report.cases[0]
+    assert report.passed is False
+    assert failed_case.checks["operational_budgets"] is False
+    assert any("tool calls was 11" in failure for failure in failed_case.failures)
+
+
+def test_operational_gate_requires_metrics_when_configured(tmp_path: Path) -> None:
+    payload = _core_results()
+    payload["results"] = payload["results"][:1]
+    dataset_path = _write_single_case_dataset(tmp_path)
+    results_path = _write_results(tmp_path, payload)
+    gate = load_regression_gate(EVAL_FULL_GATE)
+
+    report = evaluate_golden_results(dataset_path, results_path, gate=gate)
+
+    assert report.passed is False
+    assert report.metrics.operational_metrics_presence_rate == 0.0
+    assert report.cases[0].failures == ("missing operational metrics",)
 
 
 def test_deterministic_evaluator_reports_route_and_tool_failures(tmp_path: Path) -> None:
@@ -163,6 +213,58 @@ def _write_results(tmp_path: Path, payload: dict[str, Any]) -> Path:
     path = tmp_path / "observed-results.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+def _write_single_case_dataset(tmp_path: Path) -> Path:
+    path = tmp_path / "single-case.yaml"
+    path.write_text(
+        """
+name: company-lens-core-golden
+version: 1
+cases:
+  - id: structured_cloudflare_revenue_2025_001
+    category: structured_financial
+    conversation:
+      - role: user
+        content: What was Cloudflare revenue in fiscal 2025?
+    expected:
+      companies:
+        - mention: Cloudflare
+          status: resolved
+          ticker: NET
+          source: current_question
+      metrics:
+        - revenue
+      route:
+        expected_route: structured_only
+        required_tools:
+          - query_financial_facts
+        prohibited_tools:
+          - retrieve_documents
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _operational_metrics() -> dict[str, Any]:
+    return {
+        "total_latency_ms": 100,
+        "time_to_first_event_ms": 10,
+        "node_latencies": [
+            {"node": "query_financial_facts", "duration_ms": 20},
+        ],
+        "tool_calls_used": 1,
+        "repair_attempts": 0,
+        "api_calls": 1,
+        "retry_count": 0,
+        "node_attempts": [
+            {"node": "query_financial_facts", "attempts": 1},
+        ],
+        "policy_max_tool_calls": 10,
+        "policy_max_repair_attempts": 1,
+        "policy_max_retries_per_node": 2,
+    }
 
 
 def _core_results() -> dict[str, Any]:

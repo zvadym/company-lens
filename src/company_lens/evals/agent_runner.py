@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import re
+import time
 import uuid
+from collections.abc import Callable
 from typing import Protocol, cast
 
+from company_lens.agent.events import AgentExecutionEvent
 from company_lens.agent.schemas import (
     AgentState,
     CalculationBranch,
@@ -16,6 +19,9 @@ from company_lens.evals.deterministic import (
     ObservedCaseResult,
     ObservedCompany,
     ObservedGoldenResults,
+    ObservedNodeAttempt,
+    ObservedNodeLatency,
+    ObservedOperationalMetrics,
     ObservedTrajectoryEvent,
 )
 from company_lens.evals.golden import (
@@ -28,7 +34,14 @@ from company_lens.retrieval.adaptive_schemas import ResolvedQuery
 
 
 class GoldenResearchAgent(Protocol):
-    def run(self, question: str, *, session_id: str, policy: ExecutionPolicy) -> AgentState: ...
+    def run(
+        self,
+        question: str,
+        *,
+        session_id: str,
+        policy: ExecutionPolicy,
+        observer: Callable[[AgentExecutionEvent], None] | None = None,
+    ) -> AgentState: ...
 
 
 def run_golden_agent_dataset(
@@ -91,14 +104,36 @@ def _run_case(
         raise ValueError(f"{case.id} contains assistant turns, which the live runner cannot seed")
 
     state: AgentState | None = None
+    started = time.perf_counter()
+    first_event_ms: int | None = None
+
+    def observe(_: AgentExecutionEvent) -> None:
+        nonlocal first_event_ms
+        if first_event_ms is None:
+            first_event_ms = _elapsed_ms(started)
+
     for turn in user_turns:
-        state = agent.run(turn.content, session_id=session_id, policy=policy)
+        state = agent.run(turn.content, session_id=session_id, policy=policy, observer=observe)
     if state is None:
         raise ValueError(f"{case.id} does not contain a user turn")
-    return observed_result_from_state(case.id, state)
+    return observed_result_from_state(
+        case.id,
+        state,
+        operational=_operational_metrics(
+            state,
+            policy=policy,
+            total_latency_ms=_elapsed_ms(started),
+            time_to_first_event_ms=first_event_ms,
+        ),
+    )
 
 
-def observed_result_from_state(case_id: str, state: AgentState) -> ObservedCaseResult:
+def observed_result_from_state(
+    case_id: str,
+    state: AgentState,
+    *,
+    operational: ObservedOperationalMetrics | None = None,
+) -> ObservedCaseResult:
     frame = state.get("research_frame")
     resolved = _resolved_query(state, frame)
     plan = state.get("execution_plan")
@@ -111,6 +146,7 @@ def observed_result_from_state(case_id: str, state: AgentState) -> ObservedCaseR
         route=route,
         tools=_observed_tools(plan),
         trajectory=_observed_trajectory(state),
+        operational=operational,
     )
 
 
@@ -194,6 +230,47 @@ def _observed_trajectory(state: AgentState) -> tuple[ObservedTrajectoryEvent, ..
         )
         for event in state.get("trajectory", ())
     )
+
+
+def _operational_metrics(
+    state: AgentState,
+    *,
+    policy: ExecutionPolicy,
+    total_latency_ms: int,
+    time_to_first_event_ms: int | None,
+) -> ObservedOperationalMetrics:
+    node_attempts = tuple(
+        ObservedNodeAttempt(node=_node_name(item.node), attempts=item.attempts)
+        for item in state.get("node_attempts", ())
+    )
+    # Provider-level API accounting is not in AgentState yet; graph tool calls are the
+    # strictest available proxy for CI budget enforcement.
+    tool_calls_used = state.get("tool_calls_used", 0)
+    return ObservedOperationalMetrics(
+        total_latency_ms=total_latency_ms,
+        time_to_first_event_ms=time_to_first_event_ms,
+        node_latencies=tuple(
+            ObservedNodeLatency(node=event.node, duration_ms=event.duration_ms)
+            for event in state.get("trajectory", ())
+            if event.duration_ms is not None
+        ),
+        tool_calls_used=tool_calls_used,
+        repair_attempts=state.get("repair_attempts", 0),
+        api_calls=tool_calls_used,
+        retry_count=sum(max(0, item.attempts - 1) for item in node_attempts),
+        node_attempts=node_attempts,
+        policy_max_tool_calls=policy.max_tool_calls,
+        policy_max_repair_attempts=policy.max_repair_attempts,
+        policy_max_retries_per_node=policy.max_retries_per_node,
+    )
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, round((time.perf_counter() - started) * 1000))
+
+
+def _node_name(value: str) -> str:
+    return value.split(":", 1)[0]
 
 
 def _case_session_id(prefix: str, run_token: str, case_id: str) -> str:
