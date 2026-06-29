@@ -140,7 +140,7 @@ def observed_result_from_state(
     frame = state.get("research_frame")
     resolved = _resolved_query(state, frame)
     plan = state.get("execution_plan")
-    route = _observed_route(state, plan)
+    route = _observed_route(state, frame, resolved, plan)
     return ObservedCaseResult(
         case_id=case_id,
         companies=_observed_companies(frame, resolved),
@@ -187,12 +187,34 @@ def _observed_companies(
     )
 
 
-def _observed_route(state: AgentState, plan: ExecutionPlan | None) -> ExpectedRoute | None:
+def _observed_route(
+    state: AgentState,
+    frame: ResearchFrame | None,
+    resolved: ResolvedQuery | None,
+    plan: ExecutionPlan | None,
+) -> ExpectedRoute | None:
+    if plan is None and _has_unresolved_company_target(frame, resolved):
+        return ResearchRoute.UNSUPPORTED.value
     route: ResearchRoute | None = plan.route if plan is not None else None
     if route is None:
         analysis = state.get("analysis")
         route = analysis.route if analysis is not None else None
     return route.value if route is not None else None
+
+
+def _has_unresolved_company_target(
+    frame: ResearchFrame | None,
+    resolved: ResolvedQuery | None,
+) -> bool:
+    if frame is not None and frame.company_targets:
+        return any(target.status != "resolved" for target in frame.company_targets)
+    if resolved is None:
+        return False
+    return any(
+        entity.status != "resolved"
+        for entity in resolved.entities
+        if entity.kind in {"company", "public_company"}
+    )
 
 
 def _observed_operation(frame: ResearchFrame | None, plan: ExecutionPlan | None) -> str | None:

@@ -28,6 +28,7 @@ from company_lens.retrieval.embeddings import (
     EmbeddingInputTooLongError,
     LocalFeatureHashingEmbedder,
     OpenAIEmbedder,
+    build_embedder,
 )
 from company_lens.retrieval.indexing import EmbeddingIndexingService
 from company_lens.retrieval.schemas import (
@@ -90,6 +91,28 @@ def test_openai_embedder_rejects_oversized_input_before_api_call() -> None:
 
     with pytest.raises(EmbeddingInputTooLongError, match="maximum is 8192"):
         embedder.embed_texts(["token " * 9000])
+
+
+def test_openai_embedder_normalizes_api_key_before_client_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeOpenAIClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+            self.embeddings = SimpleNamespace()
+
+    monkeypatch.setattr("company_lens.retrieval.embeddings.OpenAI", FakeOpenAIClient)
+
+    build_embedder("openai", openai_api_key="\n test-key \r")
+
+    assert captured["api_key"] == "test-key"
+
+
+def test_openai_embedder_rejects_blank_api_key_without_injected_client() -> None:
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        OpenAIEmbedder(api_key=" \n\t ")
 
 
 def test_indexing_isolates_one_invalid_chunk_from_the_batch(session: Session) -> None:

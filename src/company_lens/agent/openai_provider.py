@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from openai import (
     APIConnectionError,
@@ -68,7 +68,8 @@ class OpenAIResearchModelProvider:
         trace_content: TraceContentPolicy = "metadata",
         client: Any | None = None,
     ) -> None:
-        if not api_key:
+        normalized_api_key = api_key.strip()
+        if not normalized_api_key:
             raise ValueError("An OpenAI API key is required.")
         if (
             planning_max_output_tokens <= 0
@@ -98,7 +99,7 @@ class OpenAIResearchModelProvider:
         self._single_attempt = RetryPolicy(max_attempts=1)
         self._trace_content = trace_content
         self._client = client or OpenAI(
-            api_key=api_key,
+            api_key=normalized_api_key,
             timeout=timeout_seconds,
             max_retries=max_retries,
         )
@@ -124,12 +125,16 @@ class OpenAIResearchModelProvider:
             ):
                 response = call_with_resilience(
                     lambda: self._client.responses.parse(
-                        model=model,
-                        input=input_items,
-                        text_format=output_type,
-                        reasoning=Reasoning(effort=reasoning_effort),
-                        max_output_tokens=max_output_tokens,
-                        store=False,
+                        **cast(
+                            Any,
+                            _structured_response_kwargs(
+                                model=model,
+                                input_items=input_items,
+                                output_type=output_type,
+                                reasoning_effort=reasoning_effort,
+                                max_output_tokens=max_output_tokens,
+                            ),
+                        )
                     ),
                     provider="openai",
                     retry_policy=self._single_attempt,
@@ -203,12 +208,16 @@ class OpenAIResearchModelProvider:
             ):
                 response = call_with_resilience(
                     lambda: self._client.responses.create(
-                        model=model,
-                        input=input_items,
-                        reasoning=Reasoning(effort=reasoning_effort),
-                        max_output_tokens=max_output_tokens,
-                        store=False,
-                        timeout=request_timeout,
+                        **cast(
+                            Any,
+                            _text_response_kwargs(
+                                model=model,
+                                input_items=input_items,
+                                reasoning_effort=reasoning_effort,
+                                max_output_tokens=max_output_tokens,
+                                request_timeout=request_timeout,
+                            ),
+                        )
                     ),
                     provider="openai",
                     retry_policy=self._single_attempt,
@@ -327,6 +336,46 @@ def _message_input(messages: Sequence[ModelMessage]) -> ResponseInputParam:
         EasyInputMessageParam(role=message.role, content=message.content) for message in messages
     ]
     return result
+
+
+def _structured_response_kwargs(
+    *,
+    model: str,
+    input_items: ResponseInputParam,
+    output_type: type[StructuredOutputT],
+    reasoning_effort: ReasoningEffort,
+    max_output_tokens: int,
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "model": model,
+        "input": input_items,
+        "text_format": output_type,
+        "max_output_tokens": max_output_tokens,
+        "store": False,
+    }
+    if reasoning_effort != "none":
+        kwargs["reasoning"] = Reasoning(effort=reasoning_effort)
+    return kwargs
+
+
+def _text_response_kwargs(
+    *,
+    model: str,
+    input_items: ResponseInputParam,
+    reasoning_effort: ReasoningEffort,
+    max_output_tokens: int,
+    request_timeout: float,
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "model": model,
+        "input": input_items,
+        "max_output_tokens": max_output_tokens,
+        "store": False,
+        "timeout": request_timeout,
+    }
+    if reasoning_effort != "none":
+        kwargs["reasoning"] = Reasoning(effort=reasoning_effort)
+    return kwargs
 
 
 def _messages_payload(messages: Sequence[ModelMessage]) -> list[dict[str, str]]:

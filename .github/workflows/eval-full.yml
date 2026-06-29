@@ -10,11 +10,11 @@ on:
       max_cases:
         description: Maximum number of selected cases to run.
         required: true
-        default: "5"
+        default: "100"
       model:
         description: OpenAI model used for planning, repair, and answer generation.
         required: true
-        default: gpt-5.4-mini
+        default: gpt-4.1-mini
       max_tool_calls:
         description: Per-case agent tool-call budget.
         required: true
@@ -50,6 +50,9 @@ jobs:
       COMPANY_LENS_OPENAI_PLANNING_MODEL: ${{ inputs.model }}
       COMPANY_LENS_OPENAI_ANSWER_MODEL: ${{ inputs.model }}
       COMPANY_LENS_OPENAI_REPAIR_MODEL: ${{ inputs.model }}
+      COMPANY_LENS_OPENAI_PLANNING_REASONING_EFFORT: "none"
+      COMPANY_LENS_OPENAI_ANSWER_REASONING_EFFORT: "none"
+      COMPANY_LENS_OPENAI_REPAIR_REASONING_EFFORT: "none"
       COMPANY_LENS_SEC_USER_AGENT: ${{ inputs.sec_user_agent }}
       COMPANY_LENS_ENVIRONMENT: github-actions
       COMPANY_LENS_SERVICE_VERSION: ${{ github.sha }}
@@ -71,11 +74,65 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -e ".[dev]"
 
+      - name: Normalize API secrets
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          required = {"OPENAI_API_KEY"}
+          secret_names = (
+              "OPENAI_API_KEY",
+              "FRED_API_KEY",
+              "COMPANY_LENS_LANGFUSE_PUBLIC_KEY",
+              "COMPANY_LENS_LANGFUSE_SECRET_KEY",
+          )
+          env_file = Path(os.environ["GITHUB_ENV"])
+          with env_file.open("a", encoding="utf-8") as handle:
+              for name in secret_names:
+                  # UI-entered environment secrets can include trailing newlines,
+                  # which are illegal inside HTTP authorization headers.
+                  normalized = (
+                      os.environ.get(name, "")
+                      .replace("\r", "")
+                      .replace("\n", "")
+                      .strip()
+                  )
+                  if name in required and not normalized:
+                      raise SystemExit(f"{name} is required for full LLM evaluation.")
+                  if normalized:
+                      handle.write(f"{name}={normalized}\n")
+          PY
+
+      - name: Check OpenAI model access
+        run: |
+          python - <<'PY'
+          import os
+          from openai import OpenAI
+
+          model = os.environ["COMPANY_LENS_OPENAI_PLANNING_MODEL"]
+          client = OpenAI(api_key=os.environ["OPENAI_API_KEY"].strip(), max_retries=0)
+          response = client.responses.create(
+              model=model,
+              input="Reply with the exact word: ok",
+              max_output_tokens=16,
+              store=False,
+          )
+          print({"model": getattr(response, "model", model), "response_id": response.id})
+          PY
+
       - name: Run database migrations
         run: alembic upgrade head
 
       - name: Initialize research persistence
         run: company-lens research setup --pretty
+
+      - name: Prepare core evaluation data
+        run: |
+          company-lens ingest-company-facts --ticker NET
+          company-lens ingest-sec --ticker NET --form 10-K
+          company-lens process-documents --kind sec_filing --limit 4
+          company-lens index-embeddings --embedding-provider openai --batch-size 100
 
       - name: Run live agent on golden cases
         run: |

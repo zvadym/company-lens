@@ -76,6 +76,22 @@ def test_client_errors_do_not_expose_api_key() -> None:
     assert "HTTP 400" in str(error.value)
 
 
+def test_client_normalizes_api_key_before_request() -> None:
+    seen_api_key: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_api_key.append(str(request.url.params["api_key"]))
+        return httpx.Response(200, json={"seriess": []})
+
+    with (
+        FredClient(api_key="\n test-key \r", transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(FredClientError, match="no metadata"),
+    ):
+        client.fetch_series("FEDFUNDS")
+
+    assert seen_api_key == ["test-key"]
+
+
 def test_ingestion_is_idempotent_and_query_reads_cached_data(
     session: Session,
     fred_client: FredClient,

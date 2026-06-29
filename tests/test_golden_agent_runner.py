@@ -31,7 +31,10 @@ from company_lens.agent.schemas import (
 )
 from company_lens.agent.workflow import create_initial_agent_state
 from company_lens.config import Settings
-from company_lens.evals.agent_runner import run_golden_agent_dataset
+from company_lens.evals.agent_runner import (
+    observed_result_from_state,
+    run_golden_agent_dataset,
+)
 from company_lens.evals.golden import load_golden_dataset
 from company_lens.financials.schemas import FinancialFactQuery
 from company_lens.observability.telemetry import record_generation
@@ -188,6 +191,49 @@ cases:
     assert payload["results"][0]["operational"]["tool_calls_used"] == 2
     assert payload["results"][0]["operational"]["total_tokens"] == 15
     assert agent.calls[0][2].max_tool_calls == 4
+
+
+def test_observed_route_is_unsupported_for_ambiguous_target_without_plan() -> None:
+    question = "Show revenue growth for United."
+    analysis = QuestionAnalysis(
+        normalized_question=question,
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS, AgentCapability.CALCULATIONS),
+    )
+    resolved = ResolvedQuery(query=question, metrics=("revenue",))
+    frame = ResearchFrame(
+        question=question,
+        analysis=analysis,
+        resolved_query=resolved,
+        company_targets=(
+            CompanyTarget(
+                mention="United",
+                ticker="UAC",
+                status="ambiguous",
+                source="current_question",
+            ),
+        ),
+    )
+    state = create_initial_agent_state(
+        question,
+        session_id="test-session",
+        policy=ExecutionPolicy(max_tool_calls=4),
+    )
+    state.update(
+        {
+            "status": AgentRunStatus.COMPLETED,
+            "analysis": analysis,
+            "resolved_query": resolved,
+            "research_frame": frame,
+            "execution_plan": None,
+        }
+    )
+
+    result = observed_result_from_state("ambiguous_united_revenue_growth_001", state)
+
+    assert result.route == "unsupported"
+    assert result.companies[0].status == "ambiguous"
+    assert result.companies[0].ticker == "UAC"
 
 
 def _completed_state(

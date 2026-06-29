@@ -454,18 +454,15 @@ def _check_companies(
     observed: ObservedCaseResult,
     failures: list[str],
 ) -> bool:
-    expected_by_key = {
-        _expected_company_key(company): company for company in case.expected.companies
-    }
-    observed_by_key = {_observed_company_key(company): company for company in observed.companies}
-
     passed = True
-    for key, expected in expected_by_key.items():
-        actual = observed_by_key.get(key)
+    matched_observed_indexes: set[int] = set()
+    for expected in case.expected.companies:
+        actual_index, actual = _find_observed_company(expected, observed.companies)
         if actual is None:
             failures.append(f"missing company target {expected.mention}")
             passed = False
             continue
+        matched_observed_indexes.add(actual_index)
         if actual.status != expected.status:
             failures.append(
                 f"company {expected.mention} status was {actual.status}, expected {expected.status}"
@@ -477,7 +474,11 @@ def _check_companies(
             )
             passed = False
 
-    unexpected = sorted(set(observed_by_key) - set(expected_by_key))
+    unexpected = sorted(
+        _observed_company_display_key(company)
+        for index, company in enumerate(observed.companies)
+        if index not in matched_observed_indexes
+    )
     if unexpected:
         failures.append(f"unexpected company targets: {', '.join(unexpected)}")
         passed = False
@@ -564,7 +565,6 @@ def _check_follow_up(
 
     passed = True
     observed_mentions = {_normalize_key(company.mention) for company in observed.companies}
-    observed_keys = {_observed_company_key(company) for company in observed.companies}
 
     # Follow-up checks guard the risky path where old conversation state can override a new target.
     prohibited = {_normalize_key(company) for company in follow_up.prohibited_companies}
@@ -599,9 +599,12 @@ def _check_follow_up(
             )
             passed = False
 
-    expected_keys = {_expected_company_key(company) for company in case.expected.companies}
-    if not expected_keys.issubset(observed_keys):
-        missing = sorted(expected_keys - observed_keys)
+    missing = sorted(
+        expected.mention
+        for expected in case.expected.companies
+        if _find_observed_company(expected, observed.companies)[1] is None
+    )
+    if missing:
         failures.append(f"missing expected follow-up targets: {', '.join(missing)}")
         passed = False
 
@@ -882,15 +885,41 @@ def _executed_steps(observed: ObservedCaseResult) -> set[str]:
     return steps
 
 
-def _expected_company_key(company: ExpectedCompany) -> str:
-    if company.ticker:
-        return company.ticker.upper()
-    return _normalize_key(company.mention)
+def _find_observed_company(
+    expected: ExpectedCompany,
+    observed_companies: tuple[ObservedCompany, ...],
+) -> tuple[int, ObservedCompany | None]:
+    expected_keys = _expected_company_keys(expected)
+    candidates = [
+        (index, observed)
+        for index, observed in enumerate(observed_companies)
+        if expected_keys & _observed_company_keys(observed)
+    ]
+    for index, observed in candidates:
+        # Prefer the candidate that already satisfies status/source so duplicate mentions
+        # still surface the extra unmatched company as unexpected.
+        if observed.status == expected.status and observed.source == expected.source:
+            return index, observed
+    return candidates[0] if candidates else (-1, None)
 
 
-def _observed_company_key(company: ObservedCompany) -> str:
+def _expected_company_keys(company: ExpectedCompany) -> set[str]:
+    keys = {_normalize_key(company.mention)}
     if company.ticker:
-        return company.ticker.upper()
+        keys.add(_normalize_key(company.ticker))
+    return keys
+
+
+def _observed_company_keys(company: ObservedCompany) -> set[str]:
+    keys = {_normalize_key(company.mention)}
+    if company.ticker:
+        keys.add(_normalize_key(company.ticker))
+    return keys
+
+
+def _observed_company_display_key(company: ObservedCompany) -> str:
+    if company.ticker:
+        return _normalize_key(company.ticker)
     return _normalize_key(company.mention)
 
 
