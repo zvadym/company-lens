@@ -105,6 +105,39 @@ def test_rag_only_plan_failure_uses_deterministic_retrieval_fallback() -> None:
     assert branch.request.query == question
 
 
+def test_rag_only_fallback_tolerates_extra_parser_capability() -> None:
+    question = "How did Cloudflare risk factors change from 2024 to 2025?"
+    analysis = QuestionAnalysis(
+        normalized_question=question,
+        route=ResearchRoute.RAG_ONLY,
+        required_capabilities=(
+            AgentCapability.DOCUMENTS,
+            AgentCapability.CALCULATIONS,
+        ),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.RAG_ONLY),
+    )
+    state = create_initial_agent_state(question, session_id="session-rag-extra-capability")
+    state["analysis"] = analysis
+    state["resolved_query"] = ResolvedQuery(query=question, company_ids=(COMPANY_ID,))
+
+    update = _plan_request(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, FakeResearchTools())),
+    )
+
+    plan = update["execution_plan"]
+    reconciled = update["analysis"]
+    assert isinstance(plan, ExecutionPlan)
+    assert isinstance(reconciled, QuestionAnalysis)
+    assert plan.reason_codes == ("deterministic_document_retrieval_plan",)
+    assert plan.route is ResearchRoute.RAG_ONLY
+    assert reconciled.required_capabilities == (AgentCapability.DOCUMENTS,)
+    assert isinstance(plan.branches[0], DocumentRetrievalBranch)
+
+
 def test_previous_chart_period_question_answers_from_session_memory_without_rag() -> None:
     analysis = QuestionAnalysis(
         normalized_question="what period was that chart and how many reports",

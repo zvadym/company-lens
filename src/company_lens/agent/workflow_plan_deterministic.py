@@ -80,7 +80,9 @@ def _deterministic_document_retrieval_plan(
 ) -> ExecutionPlan | None:
     if analysis.route is not ResearchRoute.RAG_ONLY:
         return None
-    if set(analysis.required_capabilities) != {AgentCapability.DOCUMENTS}:
+    # Cross-document wording can make the parser add extra capabilities, but
+    # a RAG-only route still needs at least one document source branch.
+    if AgentCapability.DOCUMENTS not in analysis.required_capabilities:
         return None
     if not resolved.company_ids:
         return None
