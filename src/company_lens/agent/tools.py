@@ -414,20 +414,24 @@ def _clear_sec_mention_name_resolution(
     candidate: CompanyMentionCandidate,
     ticker_map: dict[str, SecCompany],
 ) -> EntityResolution | None:
-    if candidate.cik or (candidate.legal_name and not candidate.ticker):
-        return None
     if _mention_is_explicit_ticker(candidate.mention, ticker_map):
         return None
     if _normalize(candidate.mention) in _COMMON_NON_COMPANY_TERMS or _blocks_name_match(
         candidate, candidate.mention
     ):
         return None
+    mention_match_kind = (
+        "sec_legal_name_extracted"
+        if candidate.legal_name
+        and _company_label(candidate.legal_name) == _company_label(candidate.mention)
+        else "sec_company_extracted"
+    )
     ranked = _rank_sec_name_candidates(
         candidate.mention,
         ticker_map,
         exact_score=100,
         prefix_score=80,
-        match_kind="sec_company_extracted",
+        match_kind=mention_match_kind,
     )
     if not ranked:
         return None
