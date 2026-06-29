@@ -292,6 +292,41 @@ def test_sql_research_tools_prefers_clear_name_when_ticker_hint_has_legal_name(
     assert entities[0].candidates[0].canonical_value == "NET"
 
 
+def test_sql_research_tools_prefers_clear_name_over_conflicting_cik_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = _sql_tools_with_sec_map(
+        monkeypatch,
+        {
+            "NET": SecCompany(
+                ticker="NET",
+                cik="0001477333",
+                name="Cloudflare, Inc.",
+            ),
+            "MDT": SecCompany(
+                ticker="MDT",
+                cik="0000064670",
+                name="Medtronic plc",
+            ),
+        },
+    )
+
+    entities = tools.resolve_public_company_mentions(
+        (
+            CompanyMentionCandidate(
+                mention="Cloudflare",
+                ticker="MDT",
+                cik="0000064670",
+                legal_name="Medtronic plc",
+            ),
+        )
+    )
+
+    assert len(entities) == 1
+    assert entities[0].status == "unresolved"
+    assert entities[0].candidates[0].canonical_value == "NET"
+
+
 def test_sql_research_tools_returns_ambiguous_sec_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
