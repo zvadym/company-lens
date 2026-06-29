@@ -385,6 +385,10 @@ def _sec_company_resolution(
     candidate: CompanyMentionCandidate,
     ticker_map: dict[str, SecCompany],
 ) -> EntityResolution | None:
+    clear_mention_match = _clear_sec_mention_name_resolution(candidate, ticker_map)
+    if clear_mention_match is not None:
+        return clear_mention_match
+
     ambiguous_name_matches = _ambiguous_sec_name_matches(candidate, ticker_map)
     if ambiguous_name_matches:
         return _ambiguous_sec_company_resolution(candidate.mention, ambiguous_name_matches)
@@ -404,6 +408,42 @@ def _sec_company_resolution(
         )
 
     return _ambiguous_sec_company_resolution(candidate.mention, ranked)
+
+
+def _clear_sec_mention_name_resolution(
+    candidate: CompanyMentionCandidate,
+    ticker_map: dict[str, SecCompany],
+) -> EntityResolution | None:
+    if candidate.cik or candidate.legal_name:
+        return None
+    if _mention_is_explicit_ticker(candidate.mention, ticker_map):
+        return None
+    if _normalize(candidate.mention) in _COMMON_NON_COMPANY_TERMS or _blocks_name_match(
+        candidate, candidate.mention
+    ):
+        return None
+    ranked = _rank_sec_name_candidates(
+        candidate.mention,
+        ticker_map,
+        exact_score=100,
+        prefix_score=80,
+        match_kind="sec_company_extracted",
+    )
+    if not ranked:
+        return None
+    top = ranked[0]
+    runner_up = ranked[1] if len(ranked) > 1 else None
+    # A clear extracted name should beat a contradictory LLM ticker hint.
+    if top.score < 100 or (
+        runner_up is not None and top.score < runner_up.score + _CLEAR_SEC_MATCH_MARGIN
+    ):
+        return None
+    return public_company_resolution(
+        mention=candidate.mention,
+        ticker=top.company.ticker,
+        display_name=top.company.name,
+        match_kind=top.match_kind,
+    )
 
 
 def _ambiguous_sec_company_resolution(

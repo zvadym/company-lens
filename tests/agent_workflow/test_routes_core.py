@@ -138,6 +138,36 @@ def test_rag_only_fallback_tolerates_extra_parser_capability() -> None:
     assert isinstance(plan.branches[0], DocumentRetrievalBranch)
 
 
+def test_risk_factor_change_fallback_overrides_calculation_route() -> None:
+    question = "How did Cloudflare risk factors change from 2024 to 2025?"
+    analysis = QuestionAnalysis(
+        normalized_question=question,
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(AgentCapability.CALCULATIONS,),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.CALCULATION),
+    )
+    state = create_initial_agent_state(question, session_id="session-risk-change-fallback")
+    state["analysis"] = analysis
+    state["resolved_query"] = ResolvedQuery(query=question, company_ids=(COMPANY_ID,))
+
+    update = _plan_request(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, FakeResearchTools())),
+    )
+
+    plan = update["execution_plan"]
+    reconciled = update["analysis"]
+    assert isinstance(plan, ExecutionPlan)
+    assert isinstance(reconciled, QuestionAnalysis)
+    assert plan.route is ResearchRoute.RAG_ONLY
+    assert reconciled.route is ResearchRoute.RAG_ONLY
+    assert reconciled.required_capabilities == (AgentCapability.DOCUMENTS,)
+    assert isinstance(plan.branches[0], DocumentRetrievalBranch)
+
+
 def test_previous_chart_period_question_answers_from_session_memory_without_rag() -> None:
     analysis = QuestionAnalysis(
         normalized_question="what period was that chart and how many reports",
