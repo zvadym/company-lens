@@ -258,6 +258,9 @@ def _operational_metrics() -> dict[str, Any]:
         "repair_attempts": 0,
         "api_calls": 1,
         "retry_count": 0,
+        "input_tokens": 1000,
+        "output_tokens": 500,
+        "total_tokens": 1500,
         "node_attempts": [
             {"node": "query_financial_facts", "attempts": 1},
         ],

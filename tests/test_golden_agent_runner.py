@@ -34,6 +34,7 @@ from company_lens.config import Settings
 from company_lens.evals.agent_runner import run_golden_agent_dataset
 from company_lens.evals.golden import load_golden_dataset
 from company_lens.financials.schemas import FinancialFactQuery
+from company_lens.observability.telemetry import record_generation
 from company_lens.retrieval.adaptive_schemas import ResolvedQuery
 
 GOLDEN_FOLLOW_UP_DATASET = Path("evals/datasets/golden/follow_up.v1.yaml")
@@ -60,6 +61,15 @@ class FakeGoldenAgent:
                     data={"route": "calculation"},
                 )
             )
+        record_generation(
+            model="gpt-test",
+            purpose="planning",
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=15,
+            trace_content="metadata",
+            cost_usd=0.002,
+        )
         company = "Datadog" if "Datadog" in question else "Cloudflare"
         ticker = "DDOG" if company == "Datadog" else "NET"
         source: CompanyTargetSource = (
@@ -101,7 +111,12 @@ def test_golden_agent_runner_executes_follow_up_turns_in_one_session() -> None:
     assert result.tools == ("query_financial_facts", "calculate_metrics")
     assert result.operational is not None
     assert result.operational.tool_calls_used == 2
+    assert result.operational.api_calls == 2
     assert result.operational.retry_count == 1
+    assert result.operational.input_tokens == 20
+    assert result.operational.output_tokens == 10
+    assert result.operational.total_tokens == 30
+    assert result.operational.cost_usd == 0.004
     assert result.operational.policy_max_tool_calls == 4
     assert result.operational.time_to_first_event_ms is not None
     assert [event.node for event in result.trajectory] == [
@@ -171,6 +186,7 @@ cases:
     assert payload["dataset_name"] == "cli-live-golden"
     assert payload["results"][0]["companies"][0]["ticker"] == "NET"
     assert payload["results"][0]["operational"]["tool_calls_used"] == 2
+    assert payload["results"][0]["operational"]["total_tokens"] == 15
     assert agent.calls[0][2].max_tool_calls == 4
 
 

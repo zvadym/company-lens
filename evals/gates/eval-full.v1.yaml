@@ -23,3 +23,5 @@ operational_budgets:
   max_repair_attempts: 1
   max_api_calls: 10
   max_retry_count: 10
+  # This is per case; tune down after a few real manual runs establish a baseline.
+  max_total_tokens: 200000

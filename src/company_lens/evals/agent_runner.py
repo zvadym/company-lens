@@ -30,6 +30,7 @@ from company_lens.evals.golden import (
     GoldenDataset,
     GoldenDatasetCase,
 )
+from company_lens.observability.telemetry import ModelUsageRecord, collect_model_usage
 from company_lens.retrieval.adaptive_schemas import ResolvedQuery
 
 
@@ -112,8 +113,9 @@ def _run_case(
         if first_event_ms is None:
             first_event_ms = _elapsed_ms(started)
 
-    for turn in user_turns:
-        state = agent.run(turn.content, session_id=session_id, policy=policy, observer=observe)
+    with collect_model_usage() as model_usage:
+        for turn in user_turns:
+            state = agent.run(turn.content, session_id=session_id, policy=policy, observer=observe)
     if state is None:
         raise ValueError(f"{case.id} does not contain a user turn")
     return observed_result_from_state(
@@ -124,6 +126,7 @@ def _run_case(
             policy=policy,
             total_latency_ms=_elapsed_ms(started),
             time_to_first_event_ms=first_event_ms,
+            model_usage=tuple(model_usage),
         ),
     )
 
@@ -238,13 +241,14 @@ def _operational_metrics(
     policy: ExecutionPolicy,
     total_latency_ms: int,
     time_to_first_event_ms: int | None,
+    model_usage: tuple[ModelUsageRecord, ...] = (),
 ) -> ObservedOperationalMetrics:
     node_attempts = tuple(
         ObservedNodeAttempt(node=_node_name(item.node), attempts=item.attempts)
         for item in state.get("node_attempts", ())
     )
-    # Provider-level API accounting is not in AgentState yet; graph tool calls are the
-    # strictest available proxy for CI budget enforcement.
+    usage = _model_usage_totals(model_usage)
+    # Model usage comes from telemetry; graph tool calls remain the fallback for older fakes.
     tool_calls_used = state.get("tool_calls_used", 0)
     return ObservedOperationalMetrics(
         total_latency_ms=total_latency_ms,
@@ -256,12 +260,30 @@ def _operational_metrics(
         ),
         tool_calls_used=tool_calls_used,
         repair_attempts=state.get("repair_attempts", 0),
-        api_calls=tool_calls_used,
+        api_calls=len(model_usage) if model_usage else tool_calls_used,
         retry_count=sum(max(0, item.attempts - 1) for item in node_attempts),
         node_attempts=node_attempts,
+        input_tokens=usage[0],
+        output_tokens=usage[1],
+        total_tokens=usage[2],
+        cost_usd=usage[3],
         policy_max_tool_calls=policy.max_tool_calls,
         policy_max_repair_attempts=policy.max_repair_attempts,
         policy_max_retries_per_node=policy.max_retries_per_node,
+    )
+
+
+def _model_usage_totals(
+    records: tuple[ModelUsageRecord, ...],
+) -> tuple[int | None, int | None, int | None, float | None]:
+    if not records:
+        return None, None, None, None
+    costs = [record.cost_usd for record in records if record.cost_usd is not None]
+    return (
+        sum(record.input_tokens for record in records),
+        sum(record.output_tokens for record in records),
+        sum(record.total_tokens for record in records),
+        round(sum(costs), 10) if costs else None,
     )
 
 

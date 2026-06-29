@@ -50,8 +50,22 @@ class EmbeddingObservationContext:
     tags: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class ModelUsageRecord:
+    model: str
+    purpose: str
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cost_usd: float | None = None
+
+
 _EMBEDDING_OBSERVATION_CONTEXT: ContextVar[EmbeddingObservationContext] = ContextVar(
     "company_lens_embedding_observation_context"
+)
+_MODEL_USAGE_RECORDS: ContextVar[list[ModelUsageRecord] | None] = ContextVar(
+    "company_lens_model_usage_records",
+    default=None,
 )
 
 
@@ -78,12 +92,15 @@ def configure_telemetry(settings: Settings) -> None:
     metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=readers))
     _initialize_instruments()
 
-    if settings.langfuse_public_key and settings.langfuse_secret_key is not None:
+    langfuse_secret_key = (
+        settings.langfuse_secret_key.get_secret_value() if settings.langfuse_secret_key else None
+    )
+    if settings.langfuse_public_key and langfuse_secret_key:
         from langfuse import Langfuse
 
         _langfuse = Langfuse(
             public_key=settings.langfuse_public_key,
-            secret_key=settings.langfuse_secret_key.get_secret_value(),
+            secret_key=langfuse_secret_key,
             base_url=settings.langfuse_base_url,
             environment=settings.environment,
             release=settings.service_version,
@@ -155,7 +172,13 @@ def observe_operation(
 
 
 def record_model_usage(
-    *, model: str, purpose: str, input_tokens: int, output_tokens: int, cost_usd: float = 0
+    *,
+    model: str,
+    purpose: str,
+    input_tokens: int,
+    output_tokens: int,
+    total_tokens: int | None = None,
+    cost_usd: float | None = None,
 ) -> None:
     attributes = {"model": model, "purpose": purpose}
     if _token_count is not None:
@@ -167,6 +190,53 @@ def record_model_usage(
     span.set_attribute("gen_ai.request.model", model)
     span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
     span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
+    resolved_total_tokens = (
+        total_tokens if total_tokens is not None else input_tokens + output_tokens
+    )
+    span.set_attribute("gen_ai.usage.total_tokens", resolved_total_tokens)
+    _append_model_usage_record(
+        model=model,
+        purpose=purpose,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=resolved_total_tokens,
+        cost_usd=cost_usd,
+    )
+
+
+@contextmanager
+def collect_model_usage() -> Iterator[list[ModelUsageRecord]]:
+    # Eval runs mirror telemetry usage into observed JSON without coupling the agent to OpenAI.
+    records: list[ModelUsageRecord] = []
+    token: Token[list[ModelUsageRecord] | None] = _MODEL_USAGE_RECORDS.set(records)
+    try:
+        yield records
+    finally:
+        _MODEL_USAGE_RECORDS.reset(token)
+
+
+def _append_model_usage_record(
+    *,
+    model: str,
+    purpose: str,
+    input_tokens: int,
+    output_tokens: int,
+    total_tokens: int,
+    cost_usd: float | None,
+) -> None:
+    records = _MODEL_USAGE_RECORDS.get()
+    if records is None:
+        return
+    records.append(
+        ModelUsageRecord(
+            model=model,
+            purpose=purpose,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            cost_usd=cost_usd,
+        )
+    )
 
 
 @contextmanager
@@ -205,6 +275,7 @@ def record_embedding(
         purpose="embedding",
         input_tokens=input_tokens,
         output_tokens=0,
+        total_tokens=input_tokens,
     )
     span = trace.get_current_span()
     usage_details = {"input": input_tokens}
@@ -216,7 +287,6 @@ def record_embedding(
     if metadata:
         embedding_metadata.update(metadata)
 
-    span.set_attribute("gen_ai.usage.total_tokens", input_tokens)
     span.set_attribute("company_lens.embedding.input_count", input_count)
     span.set_attribute("company_lens.embedding.dimensions", dimensions)
     if tags:
@@ -244,13 +314,14 @@ def record_generation(
     response_id: str | None = None,
     model_parameters: Mapping[str, str | int | float | bool] | None = None,
     tags: tuple[str, ...] = (),
-    cost_usd: float = 0,
+    cost_usd: float | None = None,
 ) -> None:
     record_model_usage(
         model=model,
         purpose=purpose,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        total_tokens=total_tokens,
         cost_usd=cost_usd,
     )
     span = trace.get_current_span()
@@ -259,7 +330,6 @@ def record_generation(
         "output": output_tokens,
         "total": total_tokens,
     }
-    span.set_attribute("gen_ai.usage.total_tokens", total_tokens)
     if tags:
         span.set_attribute("langfuse.trace.tags", list(tags))
     langfuse_attributes = _langfuse_generation_attributes(

@@ -9,7 +9,12 @@ from langfuse import LangfuseOtelSpanAttributes
 from company_lens.observability import telemetry
 from company_lens.observability.context import bind_context
 from company_lens.observability.logging import JsonFormatter
-from company_lens.observability.telemetry import record_embedding, record_generation
+from company_lens.observability.telemetry import (
+    ModelUsageRecord,
+    collect_model_usage,
+    record_embedding,
+    record_generation,
+)
 
 
 def test_json_logs_include_bound_correlation_and_run_ids() -> None:
@@ -154,6 +159,47 @@ def test_embedding_observation_records_usage_without_static_cost(monkeypatch) ->
         "openai",
     ]
     assert LangfuseOtelSpanAttributes.OBSERVATION_COST_DETAILS not in span.attributes
+
+
+def test_model_usage_collector_captures_generation_and_embedding(monkeypatch) -> None:
+    span = _FakeSpan()
+    _disable_generation_metrics(monkeypatch)
+    monkeypatch.setattr(telemetry.trace, "get_current_span", lambda *_args, **_kwargs: span)
+
+    with collect_model_usage() as records:
+        record_generation(
+            model="gpt-test",
+            purpose="answer",
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=15,
+            trace_content="metadata",
+            cost_usd=0.01,
+        )
+        record_embedding(
+            model="text-embedding-3-small",
+            input_tokens=123,
+            input_count=2,
+            dimensions=384,
+        )
+
+    assert records == [
+        ModelUsageRecord(
+            model="gpt-test",
+            purpose="answer",
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=15,
+            cost_usd=0.01,
+        ),
+        ModelUsageRecord(
+            model="text-embedding-3-small",
+            purpose="embedding",
+            input_tokens=123,
+            output_tokens=0,
+            total_tokens=123,
+        ),
+    ]
 
 
 def test_langfuse_export_filter_keeps_meaningful_observations_and_drops_noise() -> None:
