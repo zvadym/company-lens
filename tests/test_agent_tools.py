@@ -258,6 +258,40 @@ def test_sql_research_tools_prefers_clear_name_over_conflicting_ticker_hint(
     assert entities[0].candidates[0].canonical_value == "NET"
 
 
+def test_sql_research_tools_prefers_clear_name_when_ticker_hint_has_legal_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = _sql_tools_with_sec_map(
+        monkeypatch,
+        {
+            "NET": SecCompany(
+                ticker="NET",
+                cik="0001477333",
+                name="Cloudflare, Inc.",
+            ),
+            "NCLH": SecCompany(
+                ticker="NCLH",
+                cik="0001513761",
+                name="Norwegian Cruise Line Holdings Ltd.",
+            ),
+        },
+    )
+
+    entities = tools.resolve_public_company_mentions(
+        (
+            CompanyMentionCandidate(
+                mention="Cloudflare",
+                ticker="NCLH",
+                legal_name="Norwegian Cruise Line Holdings Ltd.",
+            ),
+        )
+    )
+
+    assert len(entities) == 1
+    assert entities[0].status == "unresolved"
+    assert entities[0].candidates[0].canonical_value == "NET"
+
+
 def test_sql_research_tools_returns_ambiguous_sec_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
