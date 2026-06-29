@@ -31,12 +31,17 @@ from company_lens.agent.schemas import AgentRunStatus, ExecutionPolicy
 from company_lens.config import Settings, get_settings
 from company_lens.db.models import CompanyTicker, DocumentKind, IngestionFailure
 from company_lens.db.session import build_session_factory
+from company_lens.evals.agent_runner import run_golden_agent_dataset
 from company_lens.evals.deterministic import (
     evaluate_golden_results,
     format_markdown_report,
     load_regression_gate,
 )
-from company_lens.evals.golden import golden_dataset_summary, validate_golden_dataset
+from company_lens.evals.golden import (
+    golden_dataset_summary,
+    load_golden_dataset,
+    validate_golden_dataset,
+)
 from company_lens.financials.schemas import FinancialFactQuery
 from company_lens.financials.service import FinancialFactQueryService
 from company_lens.ingestion.artifacts import ArtifactStore
@@ -380,6 +385,45 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     eval_parser.add_argument("--pretty", action="store_true", help="Indent JSON output.")
 
+    run_eval_parser = subparsers.add_parser(
+        "run-golden-agent",
+        help="Run the live research agent against golden cases and write observed results JSON.",
+    )
+    run_eval_parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=Path("evals/datasets/golden/core.v1.yaml"),
+        help="Path to golden dataset YAML.",
+    )
+    run_eval_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("observed-results.json"),
+        help="Path for observed results JSON.",
+    )
+    run_eval_parser.add_argument(
+        "--case-id",
+        action="append",
+        dest="case_ids",
+        default=None,
+        help="Specific golden case id to run. Can be repeated.",
+    )
+    run_eval_parser.add_argument(
+        "--max-cases",
+        type=int,
+        default=None,
+        help="Maximum number of selected cases to run.",
+    )
+    run_eval_parser.add_argument(
+        "--session-prefix",
+        default="golden-eval",
+        help="Prefix for persisted research sessions created by the runner.",
+    )
+    run_eval_parser.add_argument("--max-tool-calls", type=int, default=10)
+    run_eval_parser.add_argument("--max-retries-per-node", type=int, default=2)
+    run_eval_parser.add_argument("--max-repair-attempts", type=int, default=1)
+    run_eval_parser.add_argument("--pretty", action="store_true", help="Indent JSON output.")
+
     research_parser = subparsers.add_parser(
         "research",
         help="Run and manage persistent LangGraph research sessions.",
@@ -488,6 +532,8 @@ def _dispatch_command(args: argparse.Namespace) -> int:
         return _run_validate_golden_dataset(args)
     if args.command == "evaluate-golden-results":
         return _run_evaluate_golden_results(args)
+    if args.command == "run-golden-agent":
+        return _run_golden_agent(args)
     if args.command == "research":
         return _run_research(args)
     if args.command == "research-worker":
@@ -1008,6 +1054,50 @@ def _run_evaluate_golden_results(args: argparse.Namespace) -> int:
         return 1
     print(report.model_dump_json(indent=2 if args.pretty else None))
     return 0 if report.passed else 1
+
+
+def _run_golden_agent(args: argparse.Namespace) -> int:
+    try:
+        dataset = load_golden_dataset(args.dataset)
+        policy = ExecutionPolicy(
+            max_tool_calls=args.max_tool_calls,
+            max_retries_per_node=args.max_retries_per_node,
+            max_repair_attempts=args.max_repair_attempts,
+        )
+        with open_persistent_research_agent(get_settings()) as agent:
+            observed = run_golden_agent_dataset(
+                dataset,
+                agent,
+                policy=policy,
+                max_cases=args.max_cases,
+                case_ids=tuple(args.case_ids or ()),
+                session_prefix=args.session_prefix,
+            )
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            observed.model_dump_json(indent=2 if args.pretty else None) + "\n",
+            encoding="utf-8",
+        )
+    except (
+        OSError,
+        ValueError,
+        ResearchApplicationConfigurationError,
+        ResearchSessionError,
+    ) as exc:
+        print(f"Golden agent run failed: {exc}")
+        return 1
+    print(
+        json.dumps(
+            {
+                "dataset": observed.dataset_name,
+                "version": observed.dataset_version,
+                "results": len(observed.results),
+                "output": str(args.output),
+            },
+            indent=2 if args.pretty else None,
+        )
+    )
+    return 0
 
 
 def _find_failed_tickers(session: Session) -> tuple[str, ...]:

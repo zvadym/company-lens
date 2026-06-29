@@ -1,0 +1,97 @@
+name: Full LLM Evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: Golden dataset path.
+        required: true
+        default: evals/datasets/golden/core.v1.yaml
+      max_cases:
+        description: Maximum number of selected cases to run.
+        required: true
+        default: "5"
+      model:
+        description: OpenAI model used for planning, repair, and answer generation.
+        required: true
+        default: gpt-5.4-mini
+      max_tool_calls:
+        description: Per-case agent tool-call budget.
+        required: true
+        default: "10"
+      sec_user_agent:
+        description: SEC user-agent string for on-demand data preparation.
+        required: true
+        default: CompanyLens eval contact@example.com
+
+jobs:
+  eval-full:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: company_lens
+          POSTGRES_USER: company_lens
+          POSTGRES_PASSWORD: company_lens
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U company_lens -d company_lens"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      COMPANY_LENS_DATABASE_URL: postgresql+psycopg://company_lens:company_lens@localhost:5432/company_lens
+      COMPANY_LENS_SEMANTIC_JUDGE_ENABLED: "false"
+      COMPANY_LENS_OPENAI_PLANNING_MODEL: ${{ inputs.model }}
+      COMPANY_LENS_OPENAI_ANSWER_MODEL: ${{ inputs.model }}
+      COMPANY_LENS_OPENAI_REPAIR_MODEL: ${{ inputs.model }}
+      COMPANY_LENS_SEC_USER_AGENT: ${{ inputs.sec_user_agent }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run database migrations
+        run: alembic upgrade head
+
+      - name: Initialize research persistence
+        run: company-lens research setup --pretty
+
+      - name: Run live agent on golden cases
+        run: |
+          company-lens run-golden-agent \
+            --dataset "${{ inputs.dataset }}" \
+            --output observed-results.json \
+            --max-cases "${{ inputs.max_cases }}" \
+            --max-tool-calls "${{ inputs.max_tool_calls }}" \
+            --session-prefix "github-eval-${{ github.run_id }}" \
+            --pretty
+
+      - name: Evaluate observed results
+        run: |
+          company-lens evaluate-golden-results \
+            --dataset "${{ inputs.dataset }}" \
+            --results observed-results.json \
+            --gate evals/gates/eval-fast.v1.yaml \
+            --markdown-output evaluation-report.md \
+            --pretty
+
+      - name: Upload evaluation artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-llm-evaluation-${{ github.run_id }}
+          path: |
+            observed-results.json
+            evaluation-report.md
