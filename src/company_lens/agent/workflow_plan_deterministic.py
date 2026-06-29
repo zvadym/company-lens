@@ -78,11 +78,7 @@ def _deterministic_document_retrieval_plan(
     analysis: QuestionAnalysis,
     resolved: ResolvedQuery,
 ) -> ExecutionPlan | None:
-    if analysis.route is not ResearchRoute.RAG_ONLY:
-        return None
-    # Cross-document wording can make the parser add extra capabilities, but
-    # a RAG-only route still needs at least one document source branch.
-    if AgentCapability.DOCUMENTS not in analysis.required_capabilities:
+    if not _needs_deterministic_document_retrieval_plan(question, analysis, resolved):
         return None
     if not resolved.company_ids:
         return None
@@ -97,6 +93,32 @@ def _deterministic_document_retrieval_plan(
         requires_citations=True,
         reason_codes=("deterministic_document_retrieval_plan",),
     )
+
+
+def _needs_deterministic_document_retrieval_plan(
+    question: str,
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+) -> bool:
+    capabilities = set(analysis.required_capabilities)
+    if analysis.route is ResearchRoute.RAG_ONLY and AgentCapability.DOCUMENTS in capabilities:
+        return True
+    if analysis.route is not ResearchRoute.CALCULATION:
+        return False
+    if resolved.metrics or AgentCapability.FINANCIAL_FACTS in capabilities:
+        return False
+    normalized = question.casefold()
+    document_topic = any(
+        phrase in normalized
+        for phrase in ("risk factor", "risk factors", "business risk", "business risks")
+    )
+    comparison = any(
+        phrase in normalized
+        for phrase in ("change", "changed", "compare", "compared", "differ", "from", "between")
+    )
+    # Narrative risk comparisons are document retrieval tasks even when the
+    # parser over-weights comparison wording as a numeric calculation.
+    return document_topic and comparison
 
 
 __all__ = (
