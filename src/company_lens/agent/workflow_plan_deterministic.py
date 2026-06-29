@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _requires_financial_company(analysis: QuestionAnalysis) -> bool:
     return AgentCapability.FINANCIAL_FACTS in analysis.required_capabilities
@@ -70,4 +72,9 @@ def _deterministic_follow_up_plan(
         memory.last_execution_plan,
     )
 
-__all__ = ('_requires_financial_company', '_validated_deterministic_plan_update', '_deterministic_follow_up_plan')  # noqa: E501
+
+__all__ = (
+    "_requires_financial_company",
+    "_validated_deterministic_plan_update",
+    "_deterministic_follow_up_plan",
+)  # noqa: E501

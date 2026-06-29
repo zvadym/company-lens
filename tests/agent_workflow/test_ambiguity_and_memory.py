@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_ambiguous_company_follow_up_asks_for_clarification_before_planning() -> None:
     class AmbiguousUnitedTools(FakeResearchTools):

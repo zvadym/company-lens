@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+from company_lens.agent.workflow_plan_prompts import PLAN_REQUEST_SYSTEM_PROMPT
+
 
 def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> dict[str, object]:
     if state["status"] is not AgentRunStatus.RUNNING:
@@ -126,26 +129,7 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         sort_keys=True,
     )
     messages = (
-        ModelMessage(
-            role="system",
-            content=(
-                "Create a minimal typed execution plan for CompanyLens. Use only resolved company "
-                "IDs. Company metrics use query_financial_facts; economic rates and indicators "
-                "use query_macro_series. A requested change or growth requires a calculation route "
-                "with a source branch and calculate_metrics branch. Source branches must be "
-                "independent. Calculations may depend on financial or macro branches. A chart may "
-                "depend on one numeric branch, but comparison charts must depend on every plotted "
-                "source or calculation branch. The plan route must describe its concrete branches. "
-                "Mark a branch optional only when the question can still be answered without it. "
-                "For follow-up requests, use recent_artifacts to resolve references like same, "
-                "that chart, there, previous, add to it, or a changed period before inventing a "
-                "new task shape. Preserve the referenced artifact's companies, metrics, "
-                "calculation operations, and chart type unless the user explicitly overrides them. "
-                "Do not include explanations beyond short reason codes. "
-                "Use English for all structured fields, internal planning labels, reason codes, "
-                "and tool-oriented summaries."
-            ),
-        ),
+        ModelMessage(role="system", content=PLAN_REQUEST_SYSTEM_PROMPT),
         ModelMessage(role="user", content=planning_context),
     )
     output, attempts, error = _generate_structured_with_retries(
@@ -247,4 +231,6 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
     if reconciled_analysis != analysis:
         update["analysis"] = reconciled_analysis
     return update
-__all__ = ('_plan_request',)
+
+
+__all__ = ("_plan_request",)

@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_ready_follow_up_ticker_resolves_company_id_from_skipped_prepare() -> None:
     class ReadyZoomTools(FakeResearchTools):

@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .shared import *  # noqa: F403
 from .builders import _model_execution_plan
 
 # ruff: noqa: F405
+
 
 class FakeModelProvider:
     def __init__(
@@ -172,4 +174,12 @@ class PlanFailureModelProvider(FakeModelProvider):
             )
         return super().generate_structured(messages, output_type, purpose=purpose)
 
-__all__ = ('FakeModelProvider', 'RawPlanModelProvider', 'RepairTimeoutModelProvider', 'AnswerTimeoutModelProvider', 'ParseFailureModelProvider', 'PlanFailureModelProvider')  # noqa: E501
+
+__all__ = (
+    "FakeModelProvider",
+    "RawPlanModelProvider",
+    "RepairTimeoutModelProvider",
+    "AnswerTimeoutModelProvider",
+    "ParseFailureModelProvider",
+    "PlanFailureModelProvider",
+)  # noqa: E501

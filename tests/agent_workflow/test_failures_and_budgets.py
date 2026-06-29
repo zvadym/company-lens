@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_recoverable_tool_failure_retries_within_global_call_budget() -> None:
     analysis = QuestionAnalysis(

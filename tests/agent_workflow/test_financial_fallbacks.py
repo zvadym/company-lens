@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_quarterly_missing_financial_facts_fall_back_to_annual_series() -> None:
     analysis = QuestionAnalysis(

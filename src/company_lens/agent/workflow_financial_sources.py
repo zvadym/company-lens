@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _retrieve_documents(
     state: AgentState, runtime: Runtime[ResearchAgentRuntime]
@@ -216,4 +218,14 @@ def _append_update_tuple[ItemT](
 ) -> None:
     update[key] = (*cast(tuple[ItemT, ...], update.get(key, ())), *values)
 
-__all__ = ('_retrieve_documents', '_query_financial_facts', '_query_annual_financial_fallback_if_needed', '_annual_financial_fallback_request', '_financial_branch_calculation_operations', '_record_financial_fallback_attempt', '_financial_result_with_warnings', '_append_update_tuple')  # noqa: E501
+
+__all__ = (
+    "_retrieve_documents",
+    "_query_financial_facts",
+    "_query_annual_financial_fallback_if_needed",
+    "_annual_financial_fallback_request",
+    "_financial_branch_calculation_operations",
+    "_record_financial_fallback_attempt",
+    "_financial_result_with_warnings",
+    "_append_update_tuple",
+)  # noqa: E501

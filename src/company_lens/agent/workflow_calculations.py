@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _execute_calculation(branch: CalculationBranch, state: AgentState) -> CalculationResult:
     operation = branch.operation
@@ -214,4 +216,16 @@ def _latest(observations: Sequence[NumericObservation]) -> NumericObservation:
         raise ValueError("Scalar calculation input must contain exactly one observation.")
     return observations[0]
 
-__all__ = ('_execute_calculation', '_normalize_calculation_result', '_numeric_series', '_select_financial_observations', '_deduplicate_annual_observations_for_growth', '_financial_filing_key', '_same_reporting_period', '_two_observations', '_endpoints', '_latest')  # noqa: E501
+
+__all__ = (
+    "_execute_calculation",
+    "_normalize_calculation_result",
+    "_numeric_series",
+    "_select_financial_observations",
+    "_deduplicate_annual_observations_for_growth",
+    "_financial_filing_key",
+    "_same_reporting_period",
+    "_two_observations",
+    "_endpoints",
+    "_latest",
+)  # noqa: E501

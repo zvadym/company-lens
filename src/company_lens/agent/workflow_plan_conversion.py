@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _reconcile_analysis_with_plan(
     analysis: QuestionAnalysis,
@@ -201,4 +203,14 @@ def _represented_capabilities(plan: ExecutionPlan) -> set[AgentCapability]:
         represented.add(mapping[branch.kind])
     return represented
 
-__all__ = ('_reconcile_analysis_with_plan', '_analysis_for_represented_plan', '_canonicalize_plan_route', '_domain_execution_plan', '_domain_execution_branch', '_validate_single_series_request', '_validate_route_shape', '_represented_capabilities')  # noqa: E501
+
+__all__ = (
+    "_reconcile_analysis_with_plan",
+    "_analysis_for_represented_plan",
+    "_canonicalize_plan_route",
+    "_domain_execution_plan",
+    "_domain_execution_branch",
+    "_validate_single_series_request",
+    "_validate_route_shape",
+    "_represented_capabilities",
+)  # noqa: E501

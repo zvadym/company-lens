@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _deterministic_fallback_answer(
     evidence: Sequence[EvidenceEnvelope],
@@ -95,4 +97,9 @@ def _fallback_financial_fact_table(evidence: Sequence[EvidenceEnvelope]) -> list
         )
     return lines
 
-__all__ = ('_deterministic_fallback_answer', '_fallback_financial_facts', '_fallback_financial_fact_table')  # noqa: E501
+
+__all__ = (
+    "_deterministic_fallback_answer",
+    "_fallback_financial_facts",
+    "_fallback_financial_fact_table",
+)  # noqa: E501

@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_multi_company_chart_fallback_plan_uses_each_company_series() -> None:
     analysis = QuestionAnalysis(

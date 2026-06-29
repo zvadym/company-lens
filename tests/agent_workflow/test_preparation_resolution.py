@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_workflow_prepares_unavailable_public_company_before_planning() -> None:
     class OnDemandTools(FakeResearchTools):

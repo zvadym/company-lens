@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _branch_has_evidence(
     state: AgentState,
@@ -63,4 +65,5 @@ def _failed_planned_branches[BranchT: ExecutionBranch](
         )
     )
 
-__all__ = ('_branch_has_evidence', '_has_any_source_evidence', '_failed_planned_branches')
+
+__all__ = ("_branch_has_evidence", "_has_any_source_evidence", "_failed_planned_branches")

@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _route_after_merge(state: AgentState) -> Literal["generate_answer", "finalize_response"]:
     return (
@@ -68,4 +70,5 @@ def _generate_answer(
 def _route_after_answer(state: AgentState) -> Literal["validate_citations", "finalize_response"]:
     return "validate_citations" if state.get("draft_answer") else "finalize_response"
 
-__all__ = ('_route_after_merge', '_generate_answer', '_route_after_answer')
+
+__all__ = ("_route_after_merge", "_generate_answer", "_route_after_answer")

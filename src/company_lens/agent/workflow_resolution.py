@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _normalized_analysis_question(
     state: AgentState,
@@ -73,4 +75,5 @@ def _resolve_entities(
         ),
     }
 
-__all__ = ('_normalized_analysis_question', '_resolve_entities')
+
+__all__ = ("_normalized_analysis_question", "_resolve_entities")

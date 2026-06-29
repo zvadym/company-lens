@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _fallback_multi_company_growth_chart_plan(
     analysis: QuestionAnalysis,
@@ -106,4 +108,9 @@ def _previous_growth_operation(memory: SessionMemory | None) -> CalculationOpera
             return branch.operation
     return None
 
-__all__ = ('_fallback_multi_company_growth_chart_plan', '_needs_multi_company_growth_chart_fallback', '_previous_growth_operation')  # noqa: E501
+
+__all__ = (
+    "_fallback_multi_company_growth_chart_plan",
+    "_needs_multi_company_growth_chart_fallback",
+    "_previous_growth_operation",
+)  # noqa: E501

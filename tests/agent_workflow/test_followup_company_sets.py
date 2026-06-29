@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_follow_up_without_company_mention_still_inherits_previous_company() -> None:
     previous = ResolvedQuery(

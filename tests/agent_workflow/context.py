@@ -14,8 +14,7 @@ _SUPPORT_MODULE_NAMES = (
 )
 
 _support_modules: tuple[ModuleType, ...] = tuple(
-    import_module(f"{__package__}.{module_name}")
-    for module_name in _SUPPORT_MODULE_NAMES
+    import_module(f"{__package__}.{module_name}") for module_name in _SUPPORT_MODULE_NAMES
 )
 _exports: dict[str, object] = {}
 for _support_module in _support_modules:

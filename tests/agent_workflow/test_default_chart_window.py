@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_default_chart_window_plots_quarterly_yoy_growth_series_against_macro() -> None:
     class QuarterlyFinancialAndMacroTools(MonthlyMacroTools):

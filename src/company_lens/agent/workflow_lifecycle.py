@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _start_turn(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> dict[str, object]:
     started = time.monotonic()
@@ -102,4 +104,5 @@ def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -
         update["analysis"] = output
     return update
 
-__all__ = ('_start_turn', '_parse_question')
+
+__all__ = ("_start_turn", "_parse_question")

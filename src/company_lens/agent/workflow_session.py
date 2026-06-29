@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _fallback_follow_up_analysis(
     question: str,
@@ -227,4 +229,15 @@ def _question_requests_chart_rebuild(normalized_question: str) -> bool:
         )
     )
 
-__all__ = ('_fallback_follow_up_analysis', '_fallback_follow_up_route', '_answer_session_context', '_route_after_session_context', '_previous_chart_context_answer', '_selected_chart_artifact', '_legacy_previous_chart_context_answer', '_asks_about_previous_chart_context', '_question_requests_chart_rebuild')  # noqa: E501
+
+__all__ = (
+    "_fallback_follow_up_analysis",
+    "_fallback_follow_up_route",
+    "_answer_session_context",
+    "_route_after_session_context",
+    "_previous_chart_context_answer",
+    "_selected_chart_artifact",
+    "_legacy_previous_chart_context_answer",
+    "_asks_about_previous_chart_context",
+    "_question_requests_chart_rebuild",
+)  # noqa: E501

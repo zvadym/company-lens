@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _validate_citations(
     state: AgentState, runtime: Runtime[ResearchAgentRuntime]
@@ -195,4 +197,10 @@ def _citation_fallback_update(
         ),
     }
 
-__all__ = ('_validate_citations', '_route_after_validation', '_repair_or_abstain', '_citation_fallback_update')  # noqa: E501
+
+__all__ = (
+    "_validate_citations",
+    "_route_after_validation",
+    "_repair_or_abstain",
+    "_citation_fallback_update",
+)  # noqa: E501

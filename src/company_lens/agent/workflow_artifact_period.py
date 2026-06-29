@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _fallback_recent_artifact_period_plan(
     question: str,
@@ -119,4 +121,11 @@ def _artifact_chart_type(
         return cast(ChartKind, artifact.chart_type)
     return "line"
 
-__all__ = ('_fallback_recent_artifact_period_plan', '_requests_period_override', '_period_override', '_artifact_growth_operation', '_artifact_chart_type')  # noqa: E501
+
+__all__ = (
+    "_fallback_recent_artifact_period_plan",
+    "_requests_period_override",
+    "_period_override",
+    "_artifact_growth_operation",
+    "_artifact_chart_type",
+)  # noqa: E501

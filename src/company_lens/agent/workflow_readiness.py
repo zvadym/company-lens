@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _previous_calculation_window(memory: SessionMemory | None) -> int | None:
     if memory is None or memory.last_execution_plan is None:
@@ -198,4 +200,21 @@ def _readiness_company_label(frame: ResearchFrame) -> str:
             return target.mention
     return "the resolved company"
 
-__all__ = ('_previous_calculation_window', '_probe_financial_readiness_if_needed', '_should_probe_financial_readiness', '_financial_readiness_limit', '_minimum_observations_for_operation', '_financial_readiness_status', '_missing_required_financial_readiness', '_financial_readiness_error', '_financial_readiness_answer', '_ambiguous_company_entities', '_ambiguous_company_answer', '_ambiguous_company_candidate_lines', '_ambiguous_company_candidate_label', '_missing_company_answer', '_readiness_company_label')  # noqa: E501
+
+__all__ = (
+    "_previous_calculation_window",
+    "_probe_financial_readiness_if_needed",
+    "_should_probe_financial_readiness",
+    "_financial_readiness_limit",
+    "_minimum_observations_for_operation",
+    "_financial_readiness_status",
+    "_missing_required_financial_readiness",
+    "_financial_readiness_error",
+    "_financial_readiness_answer",
+    "_ambiguous_company_entities",
+    "_ambiguous_company_answer",
+    "_ambiguous_company_candidate_lines",
+    "_ambiguous_company_candidate_label",
+    "_missing_company_answer",
+    "_readiness_company_label",
+)  # noqa: E501

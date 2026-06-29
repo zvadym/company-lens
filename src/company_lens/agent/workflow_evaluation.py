@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _evaluate_context(state: AgentState) -> dict[str, object]:
     started = time.monotonic()
@@ -209,4 +211,13 @@ def _runtime_financial_requires_quarterly_data(
         for branch in plan.branches
     )
 
-__all__ = ('_evaluate_context', '_runtime_financial_missing_answer', '_runtime_financial_missing_company_label', '_runtime_financial_missing_metrics', '_runtime_financial_fallback_note', '_runtime_financial_missing_warnings', '_runtime_financial_requires_quarterly_data')  # noqa: E501
+
+__all__ = (
+    "_evaluate_context",
+    "_runtime_financial_missing_answer",
+    "_runtime_financial_missing_company_label",
+    "_runtime_financial_missing_metrics",
+    "_runtime_financial_fallback_note",
+    "_runtime_financial_missing_warnings",
+    "_runtime_financial_requires_quarterly_data",
+)  # noqa: E501

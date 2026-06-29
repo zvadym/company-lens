@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_answer_generation_uses_human_number_display_values() -> None:
     latest_fact_id = uuid.UUID("99999999-9999-9999-9999-999999999999")

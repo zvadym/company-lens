@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_financial_chart_without_company_abstains_before_planning() -> None:
     class NoCompanyTools(FakeResearchTools):

@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_add_series_follow_up_uses_legacy_last_resolved_query_memory() -> None:
     cloudflare = ResolvedQuery(

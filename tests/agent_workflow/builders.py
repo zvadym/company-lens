@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .shared import *  # noqa: F403
 
 # ruff: noqa: F405
+
 
 def _financial_branch() -> FinancialFactsBranch:
     return FinancialFactsBranch(
@@ -117,4 +119,11 @@ def _financial_observation(period_end: date, value: Decimal) -> FinancialFactObs
         source_url=f"https://sec.example/{period_end.year}",
     )
 
-__all__ = ('_financial_branch', '_macro_branch', '_model_execution_plan', '_previous_revenue_growth_chart_plan', '_financial_observation')  # noqa: E501
+
+__all__ = (
+    "_financial_branch",
+    "_macro_branch",
+    "_model_execution_plan",
+    "_previous_revenue_growth_chart_plan",
+    "_financial_observation",
+)  # noqa: E501

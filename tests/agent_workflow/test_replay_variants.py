@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_parse_failure_uses_follow_up_replay_analysis_for_same_data_chart() -> None:
     previous_plan = _previous_revenue_growth_chart_plan(MICROSOFT_ID)

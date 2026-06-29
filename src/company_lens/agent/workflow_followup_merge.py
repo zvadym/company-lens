@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _merge_follow_up_resolution(
     current: ResolvedQuery,
@@ -176,4 +178,17 @@ def _question_requests_add_series(question: str) -> bool:
     )
     return any(marker in normalized for marker in markers)
 
-__all__ = ('_merge_follow_up_resolution', '_merge_follow_up_if_needed', '_merged_company_ids', '_has_company_like_entity', '_updated_recent_resolved_queries', '_should_inherit_recent_companies', '_should_add_to_existing_company_set', '_references_multiple_prior_companies', '_analysis_requests_comparison', '_analysis_requests_add_series', '_question_requests_add_series')  # noqa: E501
+
+__all__ = (
+    "_merge_follow_up_resolution",
+    "_merge_follow_up_if_needed",
+    "_merged_company_ids",
+    "_has_company_like_entity",
+    "_updated_recent_resolved_queries",
+    "_should_inherit_recent_companies",
+    "_should_add_to_existing_company_set",
+    "_references_multiple_prior_companies",
+    "_analysis_requests_comparison",
+    "_analysis_requests_add_series",
+    "_question_requests_add_series",
+)  # noqa: E501

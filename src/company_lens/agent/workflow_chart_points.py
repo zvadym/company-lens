@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _latest_observation_at_or_before(
     dates: Sequence[date],
@@ -135,4 +137,13 @@ def _default_chart_macro_evidence_keys(
                     allowed.add((macro_branch.branch_id, series_id, matched_at))
     return allowed
 
-__all__ = ('_latest_observation_at_or_before', '_chart_series_points', '_calculation_series_label', '_strip_trailing_iso_date', '_short_operation_label', '_numeric_series_for_chart', '_default_chart_macro_evidence_keys')  # noqa: E501
+
+__all__ = (
+    "_latest_observation_at_or_before",
+    "_chart_series_points",
+    "_calculation_series_label",
+    "_strip_trailing_iso_date",
+    "_short_operation_label",
+    "_numeric_series_for_chart",
+    "_default_chart_macro_evidence_keys",
+)  # noqa: E501

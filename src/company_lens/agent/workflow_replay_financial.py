@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _replay_financial_follow_up_plan(
     question: str,
@@ -147,4 +149,11 @@ def _replayed_macro_branches(
         )
     return macro_branches
 
-__all__ = ('_replay_financial_follow_up_plan', '_replayed_financial_request', '_financial_source_period', '_same_day_previous_year', '_replayed_macro_branches')  # noqa: E501
+
+__all__ = (
+    "_replay_financial_follow_up_plan",
+    "_replayed_financial_request",
+    "_financial_source_period",
+    "_same_day_previous_year",
+    "_replayed_macro_branches",
+)  # noqa: E501

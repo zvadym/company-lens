@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _terminal_model_status(error: AgentError) -> AgentRunStatus:
     return (
@@ -187,4 +189,20 @@ def _skipped(node: str) -> dict[str, object]:
         )
     }
 
-__all__ = ('_terminal_model_status', '_terminal_parse_status', '_parse_failure_answer', '_latest_user_question', '_looks_like_incomplete_comparison', '_suggested_query_rewrites', '_comparison_parts', '_comparison_target', '_provider_refusal', '_validation_error', '_agent_error', '_event', '_failed_event', '_skipped')  # noqa: E501
+
+__all__ = (
+    "_terminal_model_status",
+    "_terminal_parse_status",
+    "_parse_failure_answer",
+    "_latest_user_question",
+    "_looks_like_incomplete_comparison",
+    "_suggested_query_rewrites",
+    "_comparison_parts",
+    "_comparison_target",
+    "_provider_refusal",
+    "_validation_error",
+    "_agent_error",
+    "_event",
+    "_failed_event",
+    "_skipped",
+)  # noqa: E501

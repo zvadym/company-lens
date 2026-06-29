@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _route_after_repair(
     state: AgentState,
@@ -226,4 +228,12 @@ def _planning_artifact_context(memory: SessionMemory | None) -> tuple[dict[str, 
         for artifact in memory.recent_artifacts
     )
 
-__all__ = ('_route_after_repair', '_finalize_response', '_updated_session_memory', '_chart_artifact_context', '_updated_recent_artifacts', '_planning_artifact_context')  # noqa: E501
+
+__all__ = (
+    "_route_after_repair",
+    "_finalize_response",
+    "_updated_session_memory",
+    "_chart_artifact_context",
+    "_updated_recent_artifacts",
+    "_planning_artifact_context",
+)  # noqa: E501

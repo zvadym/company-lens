@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_invalid_citation_is_repaired_once() -> None:
     analysis = QuestionAnalysis(

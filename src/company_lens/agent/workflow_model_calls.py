@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _generate_structured_with_retries[OutputT: BaseModel](
     provider: ResearchModelProvider,
@@ -74,4 +76,5 @@ def _model_node_update(
         update["errors"] = (error,)
     return update
 
-__all__ = ('_generate_structured_with_retries', '_generate_text_with_retries', '_model_node_update')
+
+__all__ = ("_generate_structured_with_retries", "_generate_text_with_retries", "_model_node_update")

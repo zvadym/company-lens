@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_planner_receives_recent_artifact_timeline_context() -> None:
     analysis = QuestionAnalysis(

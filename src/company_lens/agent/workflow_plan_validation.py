@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _normalize_and_validate_plan(
     plan: ExecutionPlan,
@@ -91,4 +93,5 @@ def _normalize_and_validate_plan(
         raise ValueError("Execution plan does not implement all required capabilities.")
     return plan
 
-__all__ = ('_normalize_and_validate_plan',)
+
+__all__ = ("_normalize_and_validate_plan",)

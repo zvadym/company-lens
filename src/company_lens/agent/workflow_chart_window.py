@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _normalize_default_chart_window(
     plan: ExecutionPlan,
@@ -128,4 +130,11 @@ def _default_chart_references(plan: ExecutionPlan) -> tuple[str, ...]:
             refs.append(branch.branch_id)
     return tuple(dict.fromkeys(refs))
 
-__all__ = ('_normalize_default_chart_window', '_explicit_quarter_growth_requested', '_explicit_annual_growth_requested', '_normalize_chart_branch', '_default_chart_references')  # noqa: E501
+
+__all__ = (
+    "_normalize_default_chart_window",
+    "_explicit_quarter_growth_requested",
+    "_explicit_annual_growth_requested",
+    "_normalize_chart_branch",
+    "_default_chart_references",
+)  # noqa: E501

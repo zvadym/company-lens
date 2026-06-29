@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _dispatch_calculation_branches(state: AgentState) -> list[Send] | str:
     if state["status"] in {AgentRunStatus.FAILED, AgentRunStatus.ABSTAINED}:
@@ -224,4 +226,13 @@ def _merge_evidence(state: AgentState) -> dict[str, object]:
         ),
     }
 
-__all__ = ('_dispatch_calculation_branches', '_calculate_metrics', '_generate_chart_spec', '_chart_title', '_comparison_chart_title', '_route_after_chart', '_merge_evidence')  # noqa: E501
+
+__all__ = (
+    "_dispatch_calculation_branches",
+    "_calculate_metrics",
+    "_generate_chart_spec",
+    "_chart_title",
+    "_comparison_chart_title",
+    "_route_after_chart",
+    "_merge_evidence",
+)  # noqa: E501

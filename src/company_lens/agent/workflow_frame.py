@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _resolve_question_entities(
     question: str,
@@ -148,4 +150,15 @@ def _inherited_previous_company_target(
     previous_ids = set(memory.last_resolved_query.company_ids)
     return bool(resolved.company_ids and set(resolved.company_ids).issubset(previous_ids))
 
-__all__ = ('_resolve_question_entities', '_build_research_frame', '_ensure_research_frame', '_company_targets_from_resolved', '_entity_company_id', '_entity_public_ticker', '_uuid_or_none', '_company_target_source', '_inherited_previous_company_target')  # noqa: E501
+
+__all__ = (
+    "_resolve_question_entities",
+    "_build_research_frame",
+    "_ensure_research_frame",
+    "_company_targets_from_resolved",
+    "_entity_company_id",
+    "_entity_public_ticker",
+    "_uuid_or_none",
+    "_company_target_source",
+    "_inherited_previous_company_target",
+)  # noqa: E501

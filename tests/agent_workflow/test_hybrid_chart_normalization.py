@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_peer_revenue_growth_chart_reconciles_hybrid_analysis_to_calculation_route() -> None:
     analysis = QuestionAnalysis(

@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _source_branch_max_attempts(state: AgentState, branch_id: str) -> int:
     plan = state["execution_plan"]
@@ -54,4 +56,10 @@ def _source_request_fingerprint(
     )
     return hashlib.sha256(payload.encode()).hexdigest()
 
-__all__ = ('_source_branch_max_attempts', '_source_branches', '_on_demand_tickers', '_source_request_fingerprint')  # noqa: E501
+
+__all__ = (
+    "_source_branch_max_attempts",
+    "_source_branches",
+    "_on_demand_tickers",
+    "_source_request_fingerprint",
+)  # noqa: E501

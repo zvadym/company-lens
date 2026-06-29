@@ -1,10 +1,12 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .shared import *  # noqa: F403
 from .builders import _financial_observation
 from .fakes_tools import FakeResearchTools
 
 # ruff: noqa: F405
+
 
 class MixedPeriodFinancialTools(FakeResearchTools):
     def query_financial_facts(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
@@ -173,4 +175,11 @@ class PeerAnnualFinancialTools(FakeResearchTools):
             available_units=("USD",),
         )
 
-__all__ = ('MixedPeriodFinancialTools', 'AnnualSeriesFinancialTools', 'QuarterlyMissingAnnualFallbackTools', 'QuarterlyMissingDuplicatedAnnualFallbackTools', 'PeerAnnualFinancialTools')  # noqa: E501
+
+__all__ = (
+    "MixedPeriodFinancialTools",
+    "AnnualSeriesFinancialTools",
+    "QuarterlyMissingAnnualFallbackTools",
+    "QuarterlyMissingDuplicatedAnnualFallbackTools",
+    "PeerAnnualFinancialTools",
+)  # noqa: E501

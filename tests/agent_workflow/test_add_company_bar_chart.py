@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_add_company_bar_chart_follow_up_prepares_ticker_without_unresolved_duplicate() -> None:
     class AddAmazonTools(FakeResearchTools):

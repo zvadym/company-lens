@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _recent_company_context(memory: SessionMemory) -> ResolvedQuery:
     queries = memory.recent_resolved_queries or (memory.last_resolved_query,)
@@ -107,4 +109,11 @@ def _cached_financial_company_ids(memory: SessionMemory) -> tuple[uuid.UUID, ...
             company_ids.append(company_id)
     return tuple(company_ids)
 
-__all__ = ('_recent_company_context', '_recent_artifact_resolved_context', '_recent_company_ids', '_artifact_company_ids', '_cached_financial_company_ids')  # noqa: E501
+
+__all__ = (
+    "_recent_company_context",
+    "_recent_artifact_resolved_context",
+    "_recent_company_ids",
+    "_artifact_company_ids",
+    "_cached_financial_company_ids",
+)  # noqa: E501

@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _chart_references(branch: ChartBranch) -> tuple[str, ...]:
     return tuple(dict.fromkeys(branch.depends_on or (branch.dataset_ref,)))
@@ -138,4 +140,12 @@ def _chart_point_limit(state: AgentState) -> int | None:
         return DEFAULT_CHART_QUARTERS
     return None
 
-__all__ = ('_chart_references', '_chart_dataset_for_branch', '_chart_dataset', '_multi_series_chart_dataset', '_aligned_multi_series_chart_dataset', '_chart_point_limit')  # noqa: E501
+
+__all__ = (
+    "_chart_references",
+    "_chart_dataset_for_branch",
+    "_chart_dataset",
+    "_multi_series_chart_dataset",
+    "_aligned_multi_series_chart_dataset",
+    "_chart_point_limit",
+)  # noqa: E501

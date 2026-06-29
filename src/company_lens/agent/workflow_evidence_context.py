@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _invalid_claim_previews(
     claims: Sequence[ClaimRecord], issues: Sequence[ValidationIssue]
@@ -129,4 +131,11 @@ def _compact_numeric_payload_points(
         points.append({key: item for key, item in record.items() if item is not None})
     return tuple(points)
 
-__all__ = ('_invalid_claim_previews', '_compact_evidence_context', '_display_summary', '_calculation_display_summary', '_compact_numeric_payload_points')  # noqa: E501
+
+__all__ = (
+    "_invalid_claim_previews",
+    "_compact_evidence_context",
+    "_display_summary",
+    "_calculation_display_summary",
+    "_compact_numeric_payload_points",
+)  # noqa: E501

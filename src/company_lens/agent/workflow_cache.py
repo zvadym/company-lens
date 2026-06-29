@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _hydrate_cached_results(state: AgentState) -> dict[str, object]:
     started = time.monotonic()
@@ -103,4 +105,9 @@ def _dispatch_source_branches(state: AgentState) -> list[Send] | str:
             sends.append(Send(branch.kind, {**state, "active_branch": branch}))
     return sends or "evaluate_context"
 
-__all__ = ('_hydrate_cached_results', '_macro_cache_is_stale_for_latest_query', '_dispatch_source_branches')  # noqa: E501
+
+__all__ = (
+    "_hydrate_cached_results",
+    "_macro_cache_is_stale_for_latest_query",
+    "_dispatch_source_branches",
+)  # noqa: E501

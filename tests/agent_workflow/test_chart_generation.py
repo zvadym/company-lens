@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_dated_growth_calculation_can_generate_chart() -> None:
     analysis = QuestionAnalysis(

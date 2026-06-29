@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .shared import *  # noqa: F403
 from .builders import _financial_observation
@@ -6,6 +7,7 @@ from .fakes_financial import AnnualSeriesFinancialTools
 from .fakes_tools import AnnualMacroTools, FakeResearchTools
 
 # ruff: noqa: F405
+
 
 class AnnualFinancialAndMacroTools(AnnualMacroTools, AnnualSeriesFinancialTools):
     pass
@@ -105,4 +107,12 @@ class MonthlyMacroTools(FakeResearchTools):
             ),
         )
 
-__all__ = ('AnnualFinancialAndMacroTools', 'AnnualFinancialAndMonthlyMacroTools', 'FlakyFinancialTools', 'PunctuatedCompanyFinancialTools', 'BrokenMacroTools', 'MonthlyMacroTools')  # noqa: E501
+
+__all__ = (
+    "AnnualFinancialAndMacroTools",
+    "AnnualFinancialAndMonthlyMacroTools",
+    "FlakyFinancialTools",
+    "PunctuatedCompanyFinancialTools",
+    "BrokenMacroTools",
+    "MonthlyMacroTools",
+)  # noqa: E501

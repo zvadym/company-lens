@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+
 
 def test_hybrid_source_branches_run_concurrently_and_merge_stably() -> None:
     analysis = QuestionAnalysis(

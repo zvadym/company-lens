@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _fallback_calculation_period(points: Sequence[tuple[date | None, Decimal, str | None]]) -> str:
     dates = tuple(point[0] for point in points if point[0] is not None)
@@ -139,4 +141,20 @@ def _fallback_decimal(value: Decimal | None) -> str | None:
         return None
     return _display_decimal(value)
 
-__all__ = ('_fallback_calculation_period', '_payload_decimal', '_payload_date', '_fallback_company_name', '_fallback_operation_label', '_fallback_value_with_unit', '_fallback_display_value', '_display_value', '_fallback_decimal_places', '_display_decimal', '_normalize_answer_number_formatting', '_fallback_period', '_fallback_period_value', '_fallback_decimal')  # noqa: E501
+
+__all__ = (
+    "_fallback_calculation_period",
+    "_payload_decimal",
+    "_payload_date",
+    "_fallback_company_name",
+    "_fallback_operation_label",
+    "_fallback_value_with_unit",
+    "_fallback_display_value",
+    "_display_value",
+    "_fallback_decimal_places",
+    "_display_decimal",
+    "_normalize_answer_number_formatting",
+    "_fallback_period",
+    "_fallback_period_value",
+    "_fallback_decimal",
+)  # noqa: E501

@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 # ruff: noqa: F403, F405, I001
 from .shared import *  # noqa: F403
 from .builders import _financial_observation
 
 # ruff: noqa: F405
+
 
 class FakeResearchTools:
     def __init__(self, *, synchronize_sources: bool = False) -> None:
@@ -148,4 +150,5 @@ class AnnualMacroTools(FakeResearchTools):
             ),
         )
 
-__all__ = ('FakeResearchTools', 'AnnualMacroTools')
+
+__all__ = ("FakeResearchTools", "AnnualMacroTools")

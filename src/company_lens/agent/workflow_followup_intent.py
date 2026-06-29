@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _requests_plan_replay(question: str, analysis: QuestionAnalysis) -> bool:
     replay_capabilities = {
@@ -154,4 +156,17 @@ def _replayed_chart_title(
     operation = calculation.operation.replace("_", " ") if calculation is not None else "values"
     return f"{metric.replace('_', ' ').title()} {operation.title()}"
 
-__all__ = ('_requests_plan_replay', '_question_references_previous_work', '_question_requests_chart', '_resolved_period_override', '_requested_chart_type', '_first_financial_branch', '_first_single_input_financial_calculation', '_previous_chart_branch', '_plan_company_ids', '_branch_id_token', '_replayed_chart_title')  # noqa: E501
+
+__all__ = (
+    "_requests_plan_replay",
+    "_question_references_previous_work",
+    "_question_requests_chart",
+    "_resolved_period_override",
+    "_requested_chart_type",
+    "_first_financial_branch",
+    "_first_single_input_financial_calculation",
+    "_previous_chart_branch",
+    "_plan_company_ids",
+    "_branch_id_token",
+    "_replayed_chart_title",
+)  # noqa: E501

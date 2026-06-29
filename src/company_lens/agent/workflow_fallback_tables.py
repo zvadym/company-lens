@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _fallback_multi_company_financial_fact_table(
     evidence: Sequence[EvidenceEnvelope],
@@ -131,4 +133,11 @@ def _fallback_calculation_points(
         )
     return tuple(points)
 
-__all__ = ('_fallback_multi_company_financial_fact_table', '_fallback_financial_fact_cell', '_fallback_sentence', '_fallback_calculation_sentence', '_fallback_calculation_points')  # noqa: E501
+
+__all__ = (
+    "_fallback_multi_company_financial_fact_table",
+    "_fallback_financial_fact_cell",
+    "_fallback_sentence",
+    "_fallback_calculation_sentence",
+    "_fallback_calculation_points",
+)  # noqa: E501

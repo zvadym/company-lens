@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _prepare_company_data(
     state: AgentState, runtime: Runtime[ResearchAgentRuntime]
@@ -159,4 +161,9 @@ def _merge_prepared_ticker_resolutions(
         }
     )
 
-__all__ = ('_prepare_company_data', '_resolve_prepared_tickers', '_merge_prepared_ticker_resolutions')  # noqa: E501
+
+__all__ = (
+    "_prepare_company_data",
+    "_resolve_prepared_tickers",
+    "_merge_prepared_ticker_resolutions",
+)  # noqa: E501

@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+
 
 def _evidence_from_state(state: AgentState) -> tuple[EvidenceEnvelope, ...]:
     evidence: list[EvidenceEnvelope] = []
@@ -193,4 +195,5 @@ def _input_evidence_ids(references: tuple[str, ...], state: AgentState) -> tuple
             evidence_ids.append(f"calculation:{reference}")
     return tuple(dict.fromkeys(evidence_ids))
 
-__all__ = ('_evidence_from_state', '_input_evidence_ids')
+
+__all__ = ("_evidence_from_state", "_input_evidence_ids")
