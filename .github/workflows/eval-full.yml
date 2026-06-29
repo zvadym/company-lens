@@ -27,6 +27,8 @@ on:
 jobs:
   eval-full:
     runs-on: ubuntu-latest
+    # GitHub exposes environment secrets only to jobs that target that environment.
+    environment: Testing
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -52,6 +54,7 @@ jobs:
       COMPANY_LENS_ENVIRONMENT: github-actions
       COMPANY_LENS_SERVICE_VERSION: ${{ github.sha }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       # Optional: when configured, the same model calls are traced in Langfuse.
       COMPANY_LENS_LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
       COMPANY_LENS_LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
