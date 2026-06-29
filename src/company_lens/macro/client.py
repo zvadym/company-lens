@@ -29,9 +29,10 @@ class FredClient:
         retry_attempts: int = 3,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        if not api_key.strip():
+        normalized_api_key = api_key.strip()
+        if not normalized_api_key:
             raise ValueError("A non-empty FRED API key is required.")
-        self._api_key = api_key
+        self._api_key = normalized_api_key
         self._retry_policy = RetryPolicy(max_attempts=max(1, retry_attempts))
         self._circuit_breaker = CircuitBreaker()
         self._url_policy = OutboundUrlPolicy(frozenset({"api.stlouisfed.org"}))

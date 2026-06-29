@@ -92,6 +92,9 @@ class OpenAIEmbedder:
     ) -> None:
         if dimensions <= 0:
             raise ValueError("dimensions must be positive.")
+        normalized_api_key = api_key.strip() if api_key is not None else None
+        if client is None and not normalized_api_key:
+            raise ValueError("OPENAI_API_KEY is required for the OpenAI embedding provider.")
         self.model_name = model_name
         self.dimensions = dimensions
         self._retry_policy = RetryPolicy(max_attempts=max(1, max_retries + 1))
@@ -100,7 +103,7 @@ class OpenAIEmbedder:
             recovery_seconds=circuit_breaker_recovery_seconds,
         )
         self._client = client or OpenAI(
-            api_key=api_key,
+            api_key=normalized_api_key,
             timeout=timeout_seconds,
             max_retries=0,
         )
@@ -186,10 +189,11 @@ def build_embedder(
 ) -> Embedder:
     if provider == "local":
         return LocalFeatureHashingEmbedder(dimensions=dimensions)
-    if not openai_api_key:
+    normalized_api_key = openai_api_key.strip() if openai_api_key is not None else None
+    if not normalized_api_key:
         raise ValueError("OPENAI_API_KEY is required for the OpenAI embedding provider.")
     return OpenAIEmbedder(
-        api_key=openai_api_key,
+        api_key=normalized_api_key,
         model_name=openai_model,
         dimensions=dimensions,
         timeout_seconds=timeout_seconds,

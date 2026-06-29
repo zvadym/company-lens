@@ -14,7 +14,7 @@ from company_lens.agent.model import (
     ModelPurpose,
     ResearchModelProvider,
 )
-from company_lens.agent.openai_provider import OpenAIResearchModelProvider
+from company_lens.agent.openai_provider import OpenAIResearchModelProvider, ReasoningEffort
 from company_lens.agent.schemas import AgentErrorCategory, AgentErrorSeverity
 
 
@@ -91,6 +91,15 @@ def test_semantic_validation_uses_dedicated_judge_configuration() -> None:
     assert responses.parse_calls[0]["max_output_tokens"] == 333
 
 
+def test_structured_generation_omits_reasoning_when_disabled() -> None:
+    responses = FakeResponses()
+    provider = _provider(responses, planning_reasoning_effort="none")
+
+    provider.generate_structured(_messages(), ParsedIntent, purpose=ModelPurpose.PARSE)
+
+    assert "reasoning" not in responses.parse_calls[0]
+
+
 @pytest.mark.parametrize("purpose", [ModelPurpose.ANSWER, ModelPurpose.REPAIR])
 def test_text_generation_uses_answer_model_without_reasoning_output(
     purpose: ModelPurpose,
@@ -115,6 +124,37 @@ def test_text_generation_uses_answer_model_without_reasoning_output(
         assert responses.create_calls[0]["reasoning"] == {"effort": "medium"}
         assert responses.create_calls[0]["max_output_tokens"] == 222
         assert responses.create_calls[0]["timeout"] == 30.0
+
+
+def test_text_generation_omits_reasoning_when_disabled() -> None:
+    responses = FakeResponses()
+    provider = _provider(responses, answer_reasoning_effort="none")
+
+    provider.generate_text(_messages(), purpose=ModelPurpose.ANSWER)
+
+    assert "reasoning" not in responses.create_calls[0]
+
+
+def test_provider_normalizes_api_key_before_client_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeOpenAIClient:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+            self.responses = FakeResponses()
+
+    monkeypatch.setattr("company_lens.agent.openai_provider.OpenAI", FakeOpenAIClient)
+
+    OpenAIResearchModelProvider(api_key="\n test-key \r")
+
+    assert captured["api_key"] == "test-key"
+
+
+def test_provider_rejects_blank_api_key_after_normalization() -> None:
+    with pytest.raises(ValueError, match="OpenAI API key"):
+        OpenAIResearchModelProvider(api_key=" \n\t ")
 
 
 def test_refusal_is_a_typed_result() -> None:
@@ -234,13 +274,20 @@ def test_empty_messages_fail_before_the_provider_call() -> None:
     assert responses.create_calls == []
 
 
-def _provider(responses: FakeResponses) -> OpenAIResearchModelProvider:
+def _provider(
+    responses: FakeResponses,
+    *,
+    planning_reasoning_effort: ReasoningEffort = "low",
+    answer_reasoning_effort: ReasoningEffort = "medium",
+) -> OpenAIResearchModelProvider:
     return OpenAIResearchModelProvider(
         api_key="test-key",
         planning_model="planning-model",
         answer_model="answer-model",
         repair_model="repair-model",
         validation_model="validation-model",
+        planning_reasoning_effort=planning_reasoning_effort,
+        answer_reasoning_effort=answer_reasoning_effort,
         planning_max_output_tokens=111,
         answer_max_output_tokens=222,
         repair_max_output_tokens=444,

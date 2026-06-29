@@ -135,6 +135,61 @@ def test_deterministic_evaluator_reports_route_and_tool_failures(tmp_path: Path)
     )
 
 
+def test_company_matching_accepts_ticker_as_observed_mention(tmp_path: Path) -> None:
+    payload = copy.deepcopy(_core_results())
+    payload["results"][0]["companies"] = [
+        {
+            "mention": "net",
+            "status": "resolved",
+            "source": "current_question",
+        }
+    ]
+    results_path = _write_results(tmp_path, payload)
+
+    report = evaluate_golden_results(GOLDEN_CORE_DATASET, results_path)
+
+    assert report.passed is True
+    assert report.metrics.company_accuracy == 1.0
+
+
+def test_ambiguous_company_matching_allows_candidate_ticker(tmp_path: Path) -> None:
+    payload = copy.deepcopy(_core_results())
+    payload["results"][3]["companies"] = [
+        {
+            "mention": "United",
+            "status": "ambiguous",
+            "ticker": "UAC",
+            "source": "current_question",
+        }
+    ]
+    results_path = _write_results(tmp_path, payload)
+
+    report = evaluate_golden_results(GOLDEN_CORE_DATASET, results_path)
+
+    assert report.passed is True
+    assert report.metrics.company_accuracy == 1.0
+
+
+def test_company_matching_still_reports_unexpected_extra_company(tmp_path: Path) -> None:
+    payload = copy.deepcopy(_core_results())
+    payload["results"][0]["companies"].append(
+        {
+            "mention": "Datadog",
+            "status": "resolved",
+            "ticker": "DDOG",
+            "source": "current_question",
+        }
+    )
+    results_path = _write_results(tmp_path, payload)
+
+    report = evaluate_golden_results(GOLDEN_CORE_DATASET, results_path)
+
+    failed_case = report.cases[0]
+    assert report.passed is False
+    assert failed_case.checks["companies"] is False
+    assert "unexpected company targets: ddog" in failed_case.failures
+
+
 def test_required_tools_can_be_checked_from_trajectory(tmp_path: Path) -> None:
     payload = copy.deepcopy(_core_results())
     first = payload["results"][0]
