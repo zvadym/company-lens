@@ -10,3 +10,5 @@
 - Every commit for issue work must reference the issue as `#ID`.
 - Add succinct code comments for non-obvious logic, invariants, fallbacks, state transitions,
   and domain-specific assumptions. Avoid comments that merely restate what the code already says.
+- When changing a file longer than 250 lines, first try to split cohesive logic into smaller
+  files. If splitting would make the code less safe or less readable, note the reason explicitly.
