@@ -414,7 +414,7 @@ def _clear_sec_mention_name_resolution(
     candidate: CompanyMentionCandidate,
     ticker_map: dict[str, SecCompany],
 ) -> EntityResolution | None:
-    if candidate.cik or candidate.legal_name:
+    if candidate.cik or (candidate.legal_name and not candidate.ticker):
         return None
     if _mention_is_explicit_ticker(candidate.mention, ticker_map):
         return None
