@@ -111,7 +111,9 @@ jobs:
           from openai import OpenAI
 
           model = os.environ["COMPANY_LENS_OPENAI_PLANNING_MODEL"]
-          client = OpenAI(api_key=os.environ["OPENAI_API_KEY"].strip(), max_retries=0)
+          # This preflight is an infrastructure smoke check, so retry transient
+          # provider-side 5xx/connection failures before failing the workflow.
+          client = OpenAI(api_key=os.environ["OPENAI_API_KEY"].strip(), max_retries=2)
           response = client.responses.create(
               model=model,
               input="Reply with the exact word: ok",

@@ -115,6 +115,7 @@ from company_lens.observability.telemetry import (
     record_validation,
 )
 from company_lens.retrieval.adaptive_schemas import (
+    AdaptiveRetrievalRequest,
     EntityCandidate,
     EntityResolution,
     ResolvedQuery,
@@ -131,6 +132,7 @@ DEFAULT_CHART_WINDOW_REASON = "default_chart_window_latest_8_quarters"
 DETERMINISTIC_PLAN_REASON_CODES = frozenset(
     {
         "deterministic_follow_up_replay_plan",
+        "deterministic_document_retrieval_plan",
         "deterministic_multi_company_growth_chart_plan",
         "deterministic_recent_artifact_period_plan",
     }
