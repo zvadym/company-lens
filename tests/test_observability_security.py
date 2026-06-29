@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+from contextlib import contextmanager
 
 from langfuse import LangfuseOtelSpanAttributes
 
@@ -85,6 +86,45 @@ def test_generation_observation_records_trace_tags(monkeypatch) -> None:
         "openai",
         "answer",
     ]
+
+
+def test_observe_operation_propagates_langfuse_session_metadata(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+    _disable_operation_metrics(monkeypatch)
+
+    @contextmanager
+    def fake_propagate(**attributes: object):
+        calls.append(("enter", dict(attributes)))
+        try:
+            yield
+        finally:
+            calls.append(("exit", dict(attributes)))
+
+    monkeypatch.setattr(telemetry, "_propagate_langfuse_attributes", fake_propagate)
+
+    with (
+        bind_context(correlation_id="request-1", run_id="run-1", session_id="session-1"),
+        telemetry.observe_operation("research.run", kind="workflow"),
+    ):
+        pass
+
+    expected = {
+        "session_id": "session-1",
+        "metadata": {"run_id": "run-1", "correlation_id": "request-1"},
+    }
+    assert calls == [("enter", expected), ("exit", expected)]
+
+
+def test_observe_operation_skips_langfuse_propagation_without_trace_context(monkeypatch) -> None:
+    _disable_operation_metrics(monkeypatch)
+
+    def fail_propagate(**_attributes: object):
+        raise AssertionError("Langfuse propagation should not run without trace context.")
+
+    monkeypatch.setattr(telemetry, "_propagate_langfuse_attributes", fail_propagate)
+
+    with telemetry.observe_operation("research.run", kind="workflow"):
+        pass
 
 
 def test_generation_trace_content_redacted_records_preview_without_secrets(monkeypatch) -> None:
@@ -233,3 +273,8 @@ class _FakeReadableSpan:
 def _disable_generation_metrics(monkeypatch) -> None:
     monkeypatch.setattr(telemetry, "_token_count", None)
     monkeypatch.setattr(telemetry, "_model_cost", None)
+
+
+def _disable_operation_metrics(monkeypatch) -> None:
+    monkeypatch.setattr(telemetry, "_operation_count", None)
+    monkeypatch.setattr(telemetry, "_operation_duration", None)

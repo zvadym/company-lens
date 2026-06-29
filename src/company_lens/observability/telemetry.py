@@ -5,7 +5,7 @@ import logging
 import re
 import time
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -19,7 +19,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace import Status, StatusCode
 
 from company_lens.config import Settings
-from company_lens.observability.context import current_context
+from company_lens.observability.context import ObservabilityContext, current_context
 
 logger = logging.getLogger(__name__)
 
@@ -152,9 +152,12 @@ def observe_operation(
         span_attributes.update(attributes)
     started = time.perf_counter()
     status = "success"
-    with trace.get_tracer("company_lens").start_as_current_span(
-        name, attributes=span_attributes
-    ) as span:
+    with (
+        _langfuse_trace_context(context),
+        trace.get_tracer("company_lens").start_as_current_span(
+            name, attributes=span_attributes
+        ) as span,
+    ):
         try:
             yield span
         except Exception as exc:
@@ -169,6 +172,38 @@ def observe_operation(
                 _operation_count.add(1, metric_attributes)
             if _operation_duration is not None:
                 _operation_duration.record(duration_ms, metric_attributes)
+
+
+@contextmanager
+def _langfuse_trace_context(context: ObservabilityContext) -> Iterator[None]:
+    attributes = _langfuse_trace_attributes(context)
+    if not attributes:
+        yield
+        return
+    with _propagate_langfuse_attributes(**attributes):
+        yield
+
+
+def _langfuse_trace_attributes(context: ObservabilityContext) -> dict[str, Any]:
+    attributes: dict[str, Any] = {}
+    metadata: dict[str, str] = {}
+    if context.session_id:
+        attributes["session_id"] = context.session_id
+    if context.run_id:
+        metadata["run_id"] = context.run_id
+    if context.correlation_id:
+        metadata["correlation_id"] = context.correlation_id
+    if metadata:
+        attributes["metadata"] = metadata
+    return attributes
+
+
+def _propagate_langfuse_attributes(**attributes: Any) -> Any:
+    try:
+        from langfuse import propagate_attributes
+    except ImportError:
+        return nullcontext()
+    return propagate_attributes(**attributes)
 
 
 def record_model_usage(

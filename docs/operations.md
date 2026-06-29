@@ -50,6 +50,12 @@ metrics include:
 - `company_lens_model_tokens_total` by model, purpose, and direction;
 - `company_lens_model_cost_USD_total` when an explicit cost is supplied.
 
+Langfuse Sessions use the CompanyLens research `session_id`. To inspect a multi-turn research,
+open Langfuse Sessions and filter for the API response `session_id`. Each trace also carries
+`run_id` and `correlation_id` metadata so a specific API response or worker log line can be matched
+back to the grouped Langfuse session. The same values remain available as `company_lens.*` span
+attributes for OpenTelemetry backends that do not understand Langfuse session metadata.
+
 Langfuse derives model cost from the model and `gen_ai.usage.*` span attributes when its model
 catalog contains the selected model. Pin and emit service, prompt, parser, embedding, and index
 versions for every deployment so traces remain reproducible.
