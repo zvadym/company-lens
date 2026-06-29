@@ -75,6 +75,36 @@ def test_rag_only_route_uses_document_retrieval() -> None:
     assert '"trust": "untrusted_external_data"' in answer_messages[1].content
 
 
+def test_rag_only_plan_failure_uses_deterministic_retrieval_fallback() -> None:
+    question = "How did Cloudflare risk factors change from 2024 to 2025?"
+    analysis = QuestionAnalysis(
+        normalized_question=question,
+        route=ResearchRoute.RAG_ONLY,
+        required_capabilities=(AgentCapability.DOCUMENTS,),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.RAG_ONLY),
+    )
+    state = create_initial_agent_state(question, session_id="session-rag-fallback")
+    state["analysis"] = analysis
+    state["resolved_query"] = ResolvedQuery(query=question, company_ids=(COMPANY_ID,))
+
+    update = _plan_request(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, FakeResearchTools())),
+    )
+
+    plan = update["execution_plan"]
+    assert isinstance(plan, ExecutionPlan)
+    assert plan.route is ResearchRoute.RAG_ONLY
+    assert plan.reason_codes == ("deterministic_document_retrieval_plan",)
+    assert len(plan.branches) == 1
+    branch = plan.branches[0]
+    assert isinstance(branch, DocumentRetrievalBranch)
+    assert branch.request.query == question
+
+
 def test_previous_chart_period_question_answers_from_session_memory_without_rag() -> None:
     analysis = QuestionAnalysis(
         normalized_question="what period was that chart and how many reports",

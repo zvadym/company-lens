@@ -142,7 +142,8 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
     )
     update = _model_node_update("plan_request", attempts, started, error)
     if error is not None:
-        fallback_plan = _fallback_multi_company_growth_chart_plan(
+        fallback_plan = _planning_failure_fallback_plan(
+            state["question"],
             analysis,
             resolved,
             memory,
@@ -191,7 +192,8 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
             retrieval_index_version=runtime.context.retrieval_index_version,
         )
     except ValueError as exc:
-        fallback_plan = _fallback_multi_company_growth_chart_plan(
+        fallback_plan = _planning_failure_fallback_plan(
+            state["question"],
             analysis,
             resolved,
             memory,
@@ -231,6 +233,23 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
     if reconciled_analysis != analysis:
         update["analysis"] = reconciled_analysis
     return update
+
+
+def _planning_failure_fallback_plan(
+    question: str,
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+    memory: SessionMemory | None,
+) -> ExecutionPlan | None:
+    return _deterministic_document_retrieval_plan(
+        question,
+        analysis,
+        resolved,
+    ) or _fallback_multi_company_growth_chart_plan(
+        analysis,
+        resolved,
+        memory,
+    )
 
 
 __all__ = ("_plan_request",)

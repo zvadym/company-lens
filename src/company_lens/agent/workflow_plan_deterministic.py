@@ -73,8 +73,33 @@ def _deterministic_follow_up_plan(
     )
 
 
+def _deterministic_document_retrieval_plan(
+    question: str,
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+) -> ExecutionPlan | None:
+    if analysis.route is not ResearchRoute.RAG_ONLY:
+        return None
+    if set(analysis.required_capabilities) != {AgentCapability.DOCUMENTS}:
+        return None
+    if not resolved.company_ids:
+        return None
+    return ExecutionPlan(
+        route=ResearchRoute.RAG_ONLY,
+        branches=(
+            DocumentRetrievalBranch(
+                branch_id="documents",
+                request=AdaptiveRetrievalRequest(query=question),
+            ),
+        ),
+        requires_citations=True,
+        reason_codes=("deterministic_document_retrieval_plan",),
+    )
+
+
 __all__ = (
     "_requires_financial_company",
     "_validated_deterministic_plan_update",
     "_deterministic_follow_up_plan",
+    "_deterministic_document_retrieval_plan",
 )  # noqa: E501
