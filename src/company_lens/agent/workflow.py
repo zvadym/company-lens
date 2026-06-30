@@ -53,6 +53,7 @@ _WORKFLOW_MODULE_NAMES = (
     "workflow_chart_points",
     "workflow_state_evidence",
     "workflow_model_calls",
+    "workflow_followup_references",
     "workflow_errors",
 )
 

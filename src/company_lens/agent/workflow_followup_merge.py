@@ -3,6 +3,10 @@ from __future__ import annotations
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+from company_lens.agent.workflow_followup_references import (
+    _mentions_multiple_recent_companies,
+    _references_multiple_prior_companies,
+)
 
 
 def _merge_follow_up_resolution(
@@ -112,8 +116,14 @@ def _should_inherit_recent_companies(
         return recent_company_count >= 1
     if recent_company_count < 2:
         return False
-    return _references_multiple_prior_companies(analysis.normalized_question) or (
-        analysis.chart_requested and _analysis_requests_comparison(analysis)
+    reference_text = f"{resolved.query} {analysis.normalized_question}"
+    return (
+        _references_multiple_prior_companies(reference_text)
+        or (
+            _analysis_requests_comparison(analysis)
+            and _mentions_multiple_recent_companies(reference_text, memory)
+        )
+        or (analysis.chart_requested and _analysis_requests_comparison(analysis))
     )
 
 
@@ -129,24 +139,6 @@ def _should_add_to_existing_company_set(
     return _analysis_requests_add_series(analysis) or _question_requests_add_series(
         analysis.normalized_question
     )
-
-
-def _references_multiple_prior_companies(question: str) -> bool:
-    normalized = question.casefold()
-    markers = (
-        "these companies",
-        "those companies",
-        "both companies",
-        "the companies",
-        "these two",
-        "ці компан",
-        "цих компан",
-        "обидві компан",
-        "обидва компан",
-        "эти компан",
-        "обе компан",
-    )
-    return any(marker in normalized for marker in markers)
 
 
 def _analysis_requests_comparison(analysis: QuestionAnalysis) -> bool:
@@ -187,7 +179,6 @@ __all__ = (
     "_updated_recent_resolved_queries",
     "_should_inherit_recent_companies",
     "_should_add_to_existing_company_set",
-    "_references_multiple_prior_companies",
     "_analysis_requests_comparison",
     "_analysis_requests_add_series",
     "_question_requests_add_series",
