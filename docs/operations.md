@@ -23,6 +23,10 @@ COMPANY_LENS_PROMPT_VERSION=research-v1
 COMPANY_LENS_PARSER_VERSION=document-parser-v1
 ```
 
+Docker Compose also accepts the standard Langfuse `LANGFUSE_PUBLIC_KEY`,
+`LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL` variables and maps them into the
+`COMPANY_LENS_LANGFUSE_*` settings used by the application containers.
+
 `COMPANY_LENS_TRACE_CONTENT` controls whether Langfuse generation observations include raw
 input/output payloads:
 
