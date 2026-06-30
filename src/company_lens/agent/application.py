@@ -18,6 +18,7 @@ from company_lens.agent.tools import SqlResearchTools
 from company_lens.agent.workflow import ResearchAgentRuntime
 from company_lens.config import Settings
 from company_lens.db.session import build_session_factory
+from company_lens.prompts import build_prompt_provider
 from company_lens.retrieval.embeddings import build_embedder
 
 RESEARCH_SESSION_COLUMNS = {
@@ -63,6 +64,7 @@ def open_persistent_research_agent(settings: Settings) -> Iterator[PersistentRes
     """Assemble the production OpenAI, SQL, and PostgreSQL research stack."""
 
     _require_research_session_schema(settings.database_url)
+    prompt_provider = build_prompt_provider(settings)
     model_provider = build_openai_model_provider(settings)
     api_key = (
         settings.openai_api_key.get_secret_value() if settings.openai_api_key is not None else None
@@ -83,12 +85,15 @@ def open_persistent_research_agent(settings: Settings) -> Iterator[PersistentRes
             embedder=embedder,
             settings=settings,
         ),
+        prompt_provider=prompt_provider,
         max_session_messages=settings.agent_session_max_messages,
         max_cached_source_results=settings.agent_session_max_cached_results,
         retrieval_index_name=settings.agent_retrieval_index_name,
         retrieval_index_version=settings.agent_retrieval_index_version,
         semantic_support_judge=(
-            ModelSemanticSupportJudge(model_provider) if settings.semantic_judge_enabled else None
+            ModelSemanticSupportJudge(model_provider, prompt_provider)
+            if settings.semantic_judge_enabled
+            else None
         ),
     )
     with postgres_checkpointer(settings.database_url) as checkpointer:

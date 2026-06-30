@@ -160,6 +160,7 @@ class OpenAIResearchModelProvider:
                         "reasoning_effort": reasoning_effort,
                         "max_output_tokens": max_output_tokens,
                     },
+                    prompt_metadata=_prompt_metadata(messages),
                     tags=("llm", "openai", purpose.value),
                 )
         except Exception as exc:
@@ -243,6 +244,7 @@ class OpenAIResearchModelProvider:
                         "reasoning_effort": reasoning_effort,
                         "max_output_tokens": max_output_tokens,
                     },
+                    prompt_metadata=_prompt_metadata(messages),
                     tags=("llm", "openai", purpose.value),
                 )
         except Exception as exc:
@@ -380,6 +382,13 @@ def _text_response_kwargs(
 
 def _messages_payload(messages: Sequence[ModelMessage]) -> list[dict[str, str]]:
     return [{"role": message.role, "content": message.content} for message in messages]
+
+
+def _prompt_metadata(messages: Sequence[ModelMessage]) -> dict[str, object] | None:
+    for message in messages:
+        if message.prompt is not None:
+            return message.prompt.model_dump(mode="json")
+    return None
 
 
 def _response_refusal(response: Any) -> str | None:

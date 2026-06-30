@@ -1,0 +1,33 @@
+prompts:
+  - name: agent/parse-question
+    version: research-v1
+    type: text
+    path: agent/parse-question.txt
+  - name: agent/extract-company-mentions
+    version: research-v1
+    type: text
+    path: agent/extract-company-mentions.txt
+  - name: agent/plan-request
+    version: research-v1
+    type: text
+    path: agent/plan-request.txt
+  - name: agent/generate-answer
+    version: research-v1
+    type: text
+    path: agent/generate-answer.txt
+  - name: agent/repair-answer
+    version: research-v1
+    type: text
+    path: agent/repair-answer.txt
+  - name: agent/semantic-support-judge
+    version: semantic-support.v1
+    type: text
+    path: agent/semantic-support-judge.txt
+  - name: processing/document-summary
+    version: summary.extractive.v1
+    type: text
+    path: processing/document-summary.txt
+  - name: processing/section-summary
+    version: summary.extractive.v1
+    type: text
+    path: processing/section-summary.txt

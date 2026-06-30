@@ -358,6 +358,7 @@ def record_generation(
     output_payload: Any | None = None,
     response_id: str | None = None,
     model_parameters: Mapping[str, str | int | float | bool] | None = None,
+    prompt_metadata: Mapping[str, Any] | None = None,
     tags: tuple[str, ...] = (),
     cost_usd: float | None = None,
 ) -> None:
@@ -377,6 +378,8 @@ def record_generation(
     }
     if tags:
         span.set_attribute("langfuse.trace.tags", list(tags))
+    if prompt_metadata:
+        _set_prompt_attributes(span, prompt_metadata)
     langfuse_attributes = _langfuse_generation_attributes(
         model=model,
         purpose=purpose,
@@ -386,6 +389,7 @@ def record_generation(
         output_payload=output_payload,
         response_id=response_id,
         model_parameters=model_parameters,
+        prompt_metadata=prompt_metadata,
     )
     for key, value in langfuse_attributes.items():
         span.set_attribute(key, value)
@@ -457,18 +461,21 @@ def _langfuse_generation_attributes(
     output_payload: Any | None,
     response_id: str | None,
     model_parameters: Mapping[str, str | int | float | bool] | None,
+    prompt_metadata: Mapping[str, Any] | None,
 ) -> dict[str, str]:
     try:
         from langfuse import LangfuseOtelSpanAttributes
     except ImportError:
         return {}
 
-    metadata: dict[str, str] = {
+    metadata: dict[str, Any] = {
         "purpose": purpose,
         "trace_content": trace_content,
     }
     if response_id:
         metadata["response_id"] = response_id
+    if prompt_metadata:
+        metadata["prompt"] = dict(prompt_metadata)
 
     attributes = {
         LangfuseOtelSpanAttributes.OBSERVATION_TYPE: "generation",
@@ -488,6 +495,14 @@ def _langfuse_generation_attributes(
             _content_payload(output_payload, trace_content)
         )
     return attributes
+
+
+def _set_prompt_attributes(span: trace.Span, prompt_metadata: Mapping[str, Any]) -> None:
+    for key in ("name", "version", "source", "label", "content_hash", "langfuse_version"):
+        value = prompt_metadata.get(key)
+        if value is None:
+            continue
+        span.set_attribute(f"company_lens.prompt.{key}", value)
 
 
 def _langfuse_embedding_attributes(
