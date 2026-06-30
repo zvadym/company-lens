@@ -37,6 +37,16 @@ _instrumented_engines: WeakSet[Any] = WeakSet()
 TraceContentPolicy = Literal["metadata", "redacted", "full"]
 _REDACTED_PREVIEW_CHARS = 500
 _REDACTED_COLLECTION_ITEMS = 20
+_LANGFUSE_OBSERVATION_ATTRIBUTE_PREFIX = "langfuse.observation."
+_LANGFUSE_EXPORTED_OPERATION_KINDS = frozenset(
+    {
+        "workflow",
+        "agent_node",
+        "model",
+        "embedding",
+        "tool",
+    }
+)
 _SECRET_PATTERNS = (
     re.compile(r"\b(?:sk|pk)-[A-Za-z0-9_-]{8,}\b"),
     re.compile(r"(?i)\b(api[_-]?key|token|password|secret)\s*[=:]\s*[^\s,;]+"),
@@ -427,12 +437,14 @@ def _should_export_langfuse_span(span: Any) -> bool:
     attributes = getattr(span, "attributes", None)
     if not isinstance(attributes, Mapping):
         return False
-    if any(str(key).startswith("langfuse.") for key in attributes):
+    if any(str(key).startswith(_LANGFUSE_OBSERVATION_ATTRIBUTE_PREFIX) for key in attributes):
         return True
     kind = attributes.get("company_lens.operation.kind")
-    if kind in {"model", "embedding"}:
+    if kind in _LANGFUSE_EXPORTED_OPERATION_KINDS:
         return True
-    return bool(attributes.get("gen_ai.system"))
+    if kind == "external_request":
+        return attributes.get("server.address") != "openai"
+    return False
 
 
 def _langfuse_generation_attributes(

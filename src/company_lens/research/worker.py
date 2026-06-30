@@ -10,11 +10,13 @@ from datetime import timedelta
 from company_lens.agent.events import AgentExecutionEvent
 from company_lens.agent.output import research_run_output
 from company_lens.agent.persistence import (
+    GRAPH_VERSION,
     InterruptionReason,
     PersistentResearchAgent,
     ResearchRunInterrupted,
 )
 from company_lens.agent.schemas import AgentRunStatus, AgentState, ExecutionPolicy
+from company_lens.agent.workflow import research_graph_mermaid
 from company_lens.db.models import ResearchRun
 from company_lens.observability.context import bind_context
 from company_lens.observability.telemetry import observe_operation
@@ -49,7 +51,11 @@ class ResearchWorker:
             observe_operation(
                 "research.run",
                 kind="workflow",
-                attributes={"research.session_id": run.session_id},
+                attributes={
+                    "research.session_id": run.session_id,
+                    "company_lens.graph.version": GRAPH_VERSION,
+                    "company_lens.graph.mermaid": research_graph_mermaid(),
+                },
             ),
         ):
             return self._run_claimed(run)

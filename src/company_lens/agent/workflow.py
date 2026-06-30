@@ -9,6 +9,7 @@ from company_lens.agent.workflow_core import (
     ResearchAgentRuntime,
     build_research_graph,
     create_initial_agent_state,
+    research_graph_mermaid,
 )
 
 _WORKFLOW_MODULE_NAMES = (
@@ -74,4 +75,5 @@ __all__ = (
     "ResearchAgentRuntime",
     "build_research_graph",
     "create_initial_agent_state",
+    "research_graph_mermaid",
 )

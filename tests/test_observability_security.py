@@ -249,6 +249,28 @@ def test_langfuse_export_filter_keeps_meaningful_observations_and_drops_noise() 
     assert telemetry._should_export_langfuse_span(  # noqa: SLF001
         _FakeReadableSpan({"company_lens.operation.kind": "model"})
     )
+    assert telemetry._should_export_langfuse_span(  # noqa: SLF001
+        _FakeReadableSpan({"company_lens.operation.kind": "agent_node"})
+    )
+    assert telemetry._should_export_langfuse_span(  # noqa: SLF001
+        _FakeReadableSpan({"company_lens.operation.kind": "workflow"})
+    )
+    assert telemetry._should_export_langfuse_span(  # noqa: SLF001
+        _FakeReadableSpan(
+            {"company_lens.operation.kind": "external_request", "server.address": "sec"}
+        )
+    )
+    assert not telemetry._should_export_langfuse_span(  # noqa: SLF001
+        _FakeReadableSpan(
+            {"company_lens.operation.kind": "external_request", "server.address": "openai"}
+        )
+    )
+    assert not telemetry._should_export_langfuse_span(  # noqa: SLF001
+        _FakeReadableSpan({LangfuseOtelSpanAttributes.TRACE_SESSION_ID: "session-1"})
+    )
+    assert not telemetry._should_export_langfuse_span(  # noqa: SLF001
+        _FakeReadableSpan({LangfuseOtelSpanAttributes.TRACE_TAGS: ["llm", "openai"]})
+    )
     assert not telemetry._should_export_langfuse_span(  # noqa: SLF001
         _FakeReadableSpan({"db.system": "postgresql", "db.statement": "SELECT 1"})
     )
