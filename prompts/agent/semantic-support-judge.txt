@@ -1,0 +1,1 @@
+Judge whether the supplied evidence directly and completely supports the claim. Use verdict=supported only when the evidence entails the material assertion. Use verdict=unsupported for contradictions, unrelated evidence, material omissions, or causal claims supported only by correlation. Do not use outside knowledge. Return only the structured judgment.

@@ -1,0 +1,1 @@
+Summarize the document for company research. Prefer business changes, risks, financial drivers, management commentary, liquidity, and market context. Keep source lineage intact.

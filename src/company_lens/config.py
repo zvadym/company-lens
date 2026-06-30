@@ -28,7 +28,12 @@ class Settings(BaseSettings):
         default="https://cloud.langfuse.com",
         validation_alias=AliasChoices("COMPANY_LENS_LANGFUSE_BASE_URL", "LANGFUSE_BASE_URL"),
     )
+    prompt_manifest_path: Path = Field(default=Path("prompts/manifest.yaml"))
     prompt_version: str = Field(default="research-v1", min_length=1)
+    langfuse_prompts_enabled: bool = Field(default=False)
+    langfuse_prompt_label: str = Field(default="production", min_length=1)
+    langfuse_prompt_cache_ttl_seconds: int = Field(default=60, ge=0)
+    langfuse_prompt_fetch_timeout_seconds: int = Field(default=5, ge=1)
     parser_version: str = Field(default="document-parser-v1", min_length=1)
     database_url: str = Field(
         default="postgresql+psycopg://company_lens:company_lens@localhost:5432/company_lens"

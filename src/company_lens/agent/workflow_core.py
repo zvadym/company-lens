@@ -2,16 +2,18 @@ from __future__ import annotations
 
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 from company_lens.agent.workflow_context import *
+from company_lens.prompts import PromptProvider, RepoPromptProvider
 
 
 @dataclass(frozen=True)
 class ResearchAgentRuntime:
     model_provider: ResearchModelProvider
     tools: ResearchTools
+    prompt_provider: PromptProvider = field(default_factory=RepoPromptProvider)
     max_session_messages: int = 20
     max_cached_source_results: int = 20
     retrieval_index_name: str = "default"
