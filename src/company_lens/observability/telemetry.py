@@ -5,7 +5,7 @@ import logging
 import re
 import time
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -19,7 +19,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace import Status, StatusCode
 
 from company_lens.config import Settings
-from company_lens.observability.context import current_context
+from company_lens.observability.context import ObservabilityContext, current_context
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,16 @@ _instrumented_engines: WeakSet[Any] = WeakSet()
 TraceContentPolicy = Literal["metadata", "redacted", "full"]
 _REDACTED_PREVIEW_CHARS = 500
 _REDACTED_COLLECTION_ITEMS = 20
+_LANGFUSE_OBSERVATION_ATTRIBUTE_PREFIX = "langfuse.observation."
+_LANGFUSE_EXPORTED_OPERATION_KINDS = frozenset(
+    {
+        "workflow",
+        "agent_node",
+        "model",
+        "embedding",
+        "tool",
+    }
+)
 _SECRET_PATTERNS = (
     re.compile(r"\b(?:sk|pk)-[A-Za-z0-9_-]{8,}\b"),
     re.compile(r"(?i)\b(api[_-]?key|token|password|secret)\s*[=:]\s*[^\s,;]+"),
@@ -152,9 +162,12 @@ def observe_operation(
         span_attributes.update(attributes)
     started = time.perf_counter()
     status = "success"
-    with trace.get_tracer("company_lens").start_as_current_span(
-        name, attributes=span_attributes
-    ) as span:
+    with (
+        _langfuse_trace_context(context),
+        trace.get_tracer("company_lens").start_as_current_span(
+            name, attributes=span_attributes
+        ) as span,
+    ):
         try:
             yield span
         except Exception as exc:
@@ -169,6 +182,38 @@ def observe_operation(
                 _operation_count.add(1, metric_attributes)
             if _operation_duration is not None:
                 _operation_duration.record(duration_ms, metric_attributes)
+
+
+@contextmanager
+def _langfuse_trace_context(context: ObservabilityContext) -> Iterator[None]:
+    attributes = _langfuse_trace_attributes(context)
+    if not attributes:
+        yield
+        return
+    with _propagate_langfuse_attributes(**attributes):
+        yield
+
+
+def _langfuse_trace_attributes(context: ObservabilityContext) -> dict[str, Any]:
+    attributes: dict[str, Any] = {}
+    metadata: dict[str, str] = {}
+    if context.session_id:
+        attributes["session_id"] = context.session_id
+    if context.run_id:
+        metadata["run_id"] = context.run_id
+    if context.correlation_id:
+        metadata["correlation_id"] = context.correlation_id
+    if metadata:
+        attributes["metadata"] = metadata
+    return attributes
+
+
+def _propagate_langfuse_attributes(**attributes: Any) -> Any:
+    try:
+        from langfuse import propagate_attributes
+    except ImportError:
+        return nullcontext()
+    return propagate_attributes(**attributes)
 
 
 def record_model_usage(
@@ -392,12 +437,14 @@ def _should_export_langfuse_span(span: Any) -> bool:
     attributes = getattr(span, "attributes", None)
     if not isinstance(attributes, Mapping):
         return False
-    if any(str(key).startswith("langfuse.") for key in attributes):
+    if any(str(key).startswith(_LANGFUSE_OBSERVATION_ATTRIBUTE_PREFIX) for key in attributes):
         return True
     kind = attributes.get("company_lens.operation.kind")
-    if kind in {"model", "embedding"}:
+    if kind in _LANGFUSE_EXPORTED_OPERATION_KINDS:
         return True
-    return bool(attributes.get("gen_ai.system"))
+    if kind == "external_request":
+        return attributes.get("server.address") != "openai"
+    return False
 
 
 def _langfuse_generation_attributes(

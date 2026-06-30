@@ -23,6 +23,10 @@ COMPANY_LENS_PROMPT_VERSION=research-v1
 COMPANY_LENS_PARSER_VERSION=document-parser-v1
 ```
 
+Docker Compose also accepts the standard Langfuse `LANGFUSE_PUBLIC_KEY`,
+`LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL` variables and maps them into the
+`COMPANY_LENS_LANGFUSE_*` settings used by the application containers.
+
 `COMPANY_LENS_TRACE_CONTENT` controls whether Langfuse generation observations include raw
 input/output payloads:
 
@@ -49,6 +53,12 @@ metrics include:
 - `company_lens_operation_duration_milliseconds` for API, node, tool, and provider latency;
 - `company_lens_model_tokens_total` by model, purpose, and direction;
 - `company_lens_model_cost_USD_total` when an explicit cost is supplied.
+
+Langfuse Sessions use the CompanyLens research `session_id`. To inspect a multi-turn research,
+open Langfuse Sessions and filter for the API response `session_id`. Each trace also carries
+`run_id` and `correlation_id` metadata so a specific API response or worker log line can be matched
+back to the grouped Langfuse session. The same values remain available as `company_lens.*` span
+attributes for OpenTelemetry backends that do not understand Langfuse session metadata.
 
 Langfuse derives model cost from the model and `gen_ai.usage.*` span attributes when its model
 catalog contains the selected model. Pin and emit service, prompt, parser, embedding, and index

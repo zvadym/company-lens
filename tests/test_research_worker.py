@@ -4,6 +4,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import create_engine
@@ -104,6 +105,40 @@ def test_worker_persists_validated_answer_events_and_result() -> None:
     ]
     assert all(event.schema_version == "2" for event in events)
     assert "UNVALIDATED" not in "".join(str(event.data) for event in events)
+
+
+def test_worker_trace_metadata_includes_graph_topology(monkeypatch) -> None:
+    observed: list[dict[str, object]] = []
+
+    @contextmanager
+    def fake_observe_operation(
+        _name: str,
+        *,
+        kind: str,
+        attributes: dict[str, object] | None = None,
+    ):
+        observed.append({"kind": kind, **(attributes or {})})
+        yield
+
+    monkeypatch.setattr("company_lens.research.worker.observe_operation", fake_observe_operation)
+    monkeypatch.setattr("company_lens.research.worker.research_graph_mermaid", lambda: "graph TD;")
+    repository = _repository()
+    run = repository.enqueue(
+        StartResearchRequest(question="Question"),
+        session_id="worker-session",
+        timeout=timedelta(minutes=10),
+    )
+    worker = ResearchWorker(
+        repository=repository,
+        agent=FakeAgent(),  # type: ignore[arg-type]
+        worker_id="worker-1",
+    )
+
+    assert worker.run_once() is True
+    assert observed[0]["kind"] == "workflow"
+    assert observed[0]["research.session_id"] == run.session_id
+    assert observed[0]["company_lens.graph.version"] == "company-lens-research.v1"
+    assert observed[0]["company_lens.graph.mermaid"] == "graph TD;"
 
 
 def test_worker_timeout_and_safe_failure() -> None:

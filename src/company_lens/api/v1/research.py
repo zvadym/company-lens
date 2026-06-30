@@ -18,6 +18,7 @@ from company_lens.api.dependencies import (
 )
 from company_lens.api.errors import PublicApiError
 from company_lens.config import Settings
+from company_lens.observability.context import bind_context
 from company_lens.observability.correlation import CORRELATION_ID_STATE_KEY
 from company_lens.observability.telemetry import observe_operation
 from company_lens.research.repository import ResearchRunRepository
@@ -59,12 +60,16 @@ def start_research(
         window_seconds=60,
     )
     session_id = payload.session_id or f"session-{uuid.uuid4()}"
-    with observe_operation("research.enqueue", kind="api"):
+    correlation_id = getattr(request.state, CORRELATION_ID_STATE_KEY, None)
+    with (
+        bind_context(correlation_id=correlation_id, session_id=session_id),
+        observe_operation("research.enqueue", kind="api"),
+    ):
         run = repository.enqueue(
             payload,
             session_id=session_id,
             timeout=timedelta(seconds=settings.research_run_timeout_seconds),
-            correlation_id=getattr(request.state, CORRELATION_ID_STATE_KEY, None),
+            correlation_id=correlation_id,
         )
     base = str(request.base_url).rstrip("/")
     path = f"/api/v1/research/{run.id}"

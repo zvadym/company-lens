@@ -3,6 +3,7 @@ from __future__ import annotations
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from dataclasses import dataclass
+from functools import lru_cache
 
 from company_lens.agent.workflow_context import *
 
@@ -203,6 +204,11 @@ def build_research_graph(
     return builder.compile(checkpointer=checkpointer, interrupt_before=interrupt_before)
 
 
+@lru_cache(maxsize=1)
+def research_graph_mermaid() -> str:
+    return build_research_graph().get_graph().draw_mermaid()
+
+
 def _observed_node[**P, R](name: str, function: Callable[P, R]) -> Callable[P, R]:
     @wraps(function)
     def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
@@ -227,5 +233,6 @@ __all__ = (
     "ResearchAgent",
     "create_initial_agent_state",
     "build_research_graph",
+    "research_graph_mermaid",
     "_observed_node",
 )  # noqa: E501
