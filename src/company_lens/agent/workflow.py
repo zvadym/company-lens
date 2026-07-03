@@ -15,6 +15,7 @@ from company_lens.agent.workflow_core import (
 _WORKFLOW_MODULE_NAMES = (
     "workflow_core",
     "workflow_lifecycle",
+    "workflow_prompting",
     "workflow_session",
     "workflow_mentions",
     "workflow_mention_resolution",
@@ -22,7 +23,6 @@ _WORKFLOW_MODULE_NAMES = (
     "workflow_preparation",
     "workflow_frame",
     "workflow_readiness",
-    "workflow_plan_prompts",
     "workflow_plan_request",
     "workflow_plan_deterministic",
     "workflow_replay_financial",

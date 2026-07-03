@@ -48,22 +48,7 @@ def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -
         return _skipped("parse_question")
     started = time.monotonic()
     messages = (
-        ModelMessage(
-            role="system",
-            content=(
-                "Classify a public-company research question using these exact route semantics: "
-                "rag_only means company documents only; structured_only means company financial "
-                "facts only; api_only means cached macro series without derived arithmetic; "
-                "calculation means any requested change, growth, margin, index, average, or "
-                "correlation over financial or macro observations; hybrid means two or more "
-                "source kinds; unsupported means none of the available sources can answer. "
-                "A request asking how a macro rate changed requires macro_series and calculations, "
-                "not financial_facts. Add chart only when explicitly requested. Return short "
-                "lowercase_snake_case reason codes, never reasoning. Use English for all "
-                "structured fields, internal planning labels, reason codes, and tool-oriented "
-                "summaries."
-            ),
-        ),
+        _system_prompt_message(runtime, "agent/parse-question"),
         *tuple(
             ModelMessage(role=message.role, content=message.content)
             for message in state["messages"]

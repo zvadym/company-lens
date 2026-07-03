@@ -18,6 +18,7 @@ from company_lens.evidence.schemas import (
     SemanticSupportResult,
     SemanticSupportStatus,
 )
+from company_lens.prompts import PromptProvider, RepoPromptProvider
 
 SEMANTIC_JUDGE_PROMPT_VERSION = "semantic-support.v1"
 
@@ -32,8 +33,13 @@ class SemanticSupportJudgment(BaseModel):
 class ModelSemanticSupportJudge:
     """Optional semantic support check used after deterministic validation passes."""
 
-    def __init__(self, provider: ResearchModelProvider) -> None:
+    def __init__(
+        self,
+        provider: ResearchModelProvider,
+        prompt_provider: PromptProvider | None = None,
+    ) -> None:
         self._provider = provider
+        self._prompt_provider = prompt_provider or RepoPromptProvider()
 
     def __call__(
         self, claim: ClaimRecord, evidence: tuple[EvidenceEnvelope, ...]
@@ -45,19 +51,10 @@ class ModelSemanticSupportJudge:
                 prompt_version=SEMANTIC_JUDGE_PROMPT_VERSION,
             )
         try:
+            prompt = self._prompt_provider.get_text("agent/semantic-support-judge")
             result = self._provider.generate_structured(
                 (
-                    ModelMessage(
-                        role="system",
-                        content=(
-                            "Judge whether the supplied evidence directly and completely supports "
-                            "the claim. Use verdict=supported only when the evidence entails the "
-                            "material assertion. Use verdict=unsupported for contradictions, "
-                            "unrelated evidence, material omissions, or causal claims supported "
-                            "only by correlation. Do not use outside knowledge. Return only the "
-                            "structured judgment."
-                        ),
-                    ),
+                    ModelMessage(role="system", content=prompt.content, prompt=prompt.metadata),
                     ModelMessage(
                         role="user",
                         content=json.dumps(

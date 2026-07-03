@@ -36,6 +36,7 @@ dependencies = [
 
 [project.scripts]
 company-lens = "company_lens.cli:main"
+company-lens-sync-prompts = "company_lens.prompt_sync:main"
 
 [project.optional-dependencies]
 dev = [

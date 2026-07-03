@@ -20,6 +20,7 @@ COMPANY_LENS_LANGFUSE_SECRET_KEY=sk-lf-...
 COMPANY_LENS_LANGFUSE_BASE_URL=https://cloud.langfuse.com
 COMPANY_LENS_SERVICE_VERSION=<git-sha-or-release>
 COMPANY_LENS_PROMPT_VERSION=research-v1
+COMPANY_LENS_PROMPT_MANIFEST_PATH=prompts/manifest.yaml
 COMPANY_LENS_PARSER_VERSION=document-parser-v1
 ```
 
@@ -63,6 +64,27 @@ attributes for OpenTelemetry backends that do not understand Langfuse session me
 Langfuse derives model cost from the model and `gen_ai.usage.*` span attributes when its model
 catalog contains the selected model. Pin and emit service, prompt, parser, embedding, and index
 versions for every deployment so traces remain reproducible.
+
+### Langfuse prompts
+
+Reviewed prompt copies live in `prompts/manifest.yaml` and `prompts/**/*.txt`. By default the app
+uses these repo prompts only. To fetch production-labelled prompts from Langfuse with repo fallback:
+
+```dotenv
+COMPANY_LENS_LANGFUSE_PROMPTS_ENABLED=true
+COMPANY_LENS_LANGFUSE_PROMPT_LABEL=production
+```
+
+If Langfuse is unavailable or a prompt is missing, the app uses the checked-in prompt copy. Model
+generation metadata records prompt name, source, version or label, and content hash; prompt content
+is still excluded from traces unless `COMPANY_LENS_TRACE_CONTENT` allows input payload capture.
+
+Sync the checked-in prompt copies to Langfuse Prompt Management with:
+
+```bash
+company-lens-sync-prompts --dry-run
+company-lens-sync-prompts --label production
+```
 
 ## Reliability policy
 

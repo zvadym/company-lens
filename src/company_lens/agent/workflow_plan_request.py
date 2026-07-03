@@ -3,7 +3,6 @@ from __future__ import annotations
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
-from company_lens.agent.workflow_plan_prompts import PLAN_REQUEST_SYSTEM_PROMPT
 
 
 def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> dict[str, object]:
@@ -129,7 +128,7 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         sort_keys=True,
     )
     messages = (
-        ModelMessage(role="system", content=PLAN_REQUEST_SYSTEM_PROMPT),
+        _system_prompt_message(runtime, "agent/plan-request"),
         ModelMessage(role="user", content=planning_context),
     )
     output, attempts, error = _generate_structured_with_retries(

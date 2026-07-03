@@ -7,6 +7,7 @@ from typing import Literal, Protocol, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from company_lens.agent.schemas import AgentError
+from company_lens.prompts import PromptMetadata
 
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
 
@@ -25,6 +26,7 @@ class ModelMessage(BaseModel):
 
     role: Literal["system", "user", "assistant"]
     content: str = Field(min_length=1)
+    prompt: PromptMetadata | None = None
 
     @field_validator("content")
     @classmethod

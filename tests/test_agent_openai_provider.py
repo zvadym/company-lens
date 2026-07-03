@@ -16,6 +16,7 @@ from company_lens.agent.model import (
 )
 from company_lens.agent.openai_provider import OpenAIResearchModelProvider, ReasoningEffort
 from company_lens.agent.schemas import AgentErrorCategory, AgentErrorSeverity
+from company_lens.prompts import PromptMetadata
 
 
 class ParsedIntent(BaseModel):
@@ -133,6 +134,46 @@ def test_text_generation_omits_reasoning_when_disabled() -> None:
     provider.generate_text(_messages(), purpose=ModelPurpose.ANSWER)
 
     assert "reasoning" not in responses.create_calls[0]
+
+
+def test_generation_records_prompt_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_record_generation(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "company_lens.agent.openai_provider.record_generation",
+        fake_record_generation,
+    )
+    responses = FakeResponses()
+    provider = _provider(responses)
+
+    provider.generate_text(
+        (
+            ModelMessage(
+                role="system",
+                content="Classify the question.",
+                prompt=PromptMetadata(
+                    name="agent/test",
+                    version="v1",
+                    source="repo",
+                    content_hash="a" * 64,
+                ),
+            ),
+            ModelMessage(role="user", content="Cloudflare revenue growth"),
+        ),
+        purpose=ModelPurpose.ANSWER,
+    )
+
+    assert captured["prompt_metadata"] == {
+        "name": "agent/test",
+        "version": "v1",
+        "source": "repo",
+        "content_hash": "a" * 64,
+        "label": None,
+        "langfuse_version": None,
+    }
 
 
 def test_provider_normalizes_api_key_before_client_creation(

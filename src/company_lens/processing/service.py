@@ -34,6 +34,7 @@ from company_lens.processing.text import (
     shingle_fingerprint,
     summarize_text,
 )
+from company_lens.prompts import repo_text_prompt
 
 ChunkingStrategy = Literal["fixed-token", "semantic"]
 
@@ -42,14 +43,8 @@ DEFAULT_SUMMARY_PROMPT_VERSION = "summary.extractive.v1"
 DEFAULT_SUMMARY_MODEL = "local-extractive-v1"
 PROCESSING_SOURCE_NAME = "document_processing"
 
-DOCUMENT_SUMMARY_PROMPT = (
-    "Summarize the document for company research. Prefer business changes, risks, financial "
-    "drivers, management commentary, liquidity, and market context. Keep source lineage intact."
-)
-SECTION_SUMMARY_PROMPT = (
-    "Summarize this filing or PDF section for retrieval. Keep concrete business facts, risks, "
-    "metrics, time periods, and management claims."
-)
+DOCUMENT_SUMMARY_PROMPT = repo_text_prompt("processing/document-summary")
+SECTION_SUMMARY_PROMPT = repo_text_prompt("processing/section-summary")
 
 
 @dataclass(frozen=True)
