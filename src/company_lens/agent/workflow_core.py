@@ -19,6 +19,7 @@ class ResearchAgentRuntime:
     retrieval_index_name: str = "default"
     retrieval_index_version: str = DEFAULT_OPENAI_INDEX_VERSION
     semantic_support_judge: SemanticSupportJudge | None = None
+    semantic_issue_appeal_judge: SemanticSupportJudge | None = None
     source_checker: SourceChecker | None = None
 
 

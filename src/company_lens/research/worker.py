@@ -121,6 +121,7 @@ class ResearchWorker:
         result = ResearchResult(
             agent_status=output.status,
             answer=output.answer,
+            answer_companies=self._repository.answer_company_outputs(output.answer_companies),
             citations=output.citations,
             chart=output.chart,
             warnings=tuple(error for error in output.execution.errors if error.recoverable),

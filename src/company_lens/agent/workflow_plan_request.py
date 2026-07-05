@@ -45,11 +45,11 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
                 ),
             ),
         }
-    if _requires_financial_company(analysis) and not resolved.company_ids:
+    if _requires_company_target(state["question"], analysis) and not resolved.company_ids:
         missing_company_error = _agent_error(
             "plan_request",
             "missing_company",
-            "The question requires company financial facts, but no company was resolved.",
+            "The question requires a company target, but no company was resolved.",
             category=AgentErrorCategory.VALIDATION,
             severity=AgentErrorSeverity.TERMINAL,
         )

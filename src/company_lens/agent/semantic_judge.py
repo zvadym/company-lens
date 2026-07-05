@@ -17,10 +17,11 @@ from company_lens.evidence.schemas import (
     EvidenceKind,
     SemanticSupportResult,
     SemanticSupportStatus,
+    ValidationIssue,
 )
 from company_lens.prompts import PromptProvider, RepoPromptProvider
 
-SEMANTIC_JUDGE_PROMPT_VERSION = "semantic-support.v1"
+SEMANTIC_JUDGE_PROMPT_VERSION = "semantic-support.v2"
 
 
 class SemanticSupportJudgment(BaseModel):
@@ -28,6 +29,7 @@ class SemanticSupportJudgment(BaseModel):
 
     verdict: Literal["supported", "unsupported"]
     reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    resolved_issue_codes: tuple[str, ...] = ()
 
 
 class ModelSemanticSupportJudge:
@@ -42,7 +44,10 @@ class ModelSemanticSupportJudge:
         self._prompt_provider = prompt_provider or RepoPromptProvider()
 
     def __call__(
-        self, claim: ClaimRecord, evidence: tuple[EvidenceEnvelope, ...]
+        self,
+        claim: ClaimRecord,
+        evidence: tuple[EvidenceEnvelope, ...],
+        validation_issues: tuple[ValidationIssue, ...] = (),
     ) -> SemanticSupportResult:
         if not any(item.kind is EvidenceKind.DOCUMENT for item in evidence):
             return SemanticSupportResult(
@@ -61,6 +66,9 @@ class ModelSemanticSupportJudge:
                             {
                                 "claim": claim.model_dump(mode="json"),
                                 "evidence": [item.model_dump(mode="json") for item in evidence],
+                                "validation_issues": [
+                                    issue.model_dump(mode="json") for issue in validation_issues
+                                ],
                             },
                             sort_keys=True,
                         ),
@@ -91,4 +99,5 @@ class ModelSemanticSupportJudge:
             reason_code=result.output.reason_code,
             prompt_version=SEMANTIC_JUDGE_PROMPT_VERSION,
             model=result.model,
+            resolved_issue_codes=result.output.resolved_issue_codes,
         )

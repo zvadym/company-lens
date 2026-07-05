@@ -24,6 +24,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { isTerminal, type ResearchRun } from "@/api/types";
 import { useResearch } from "@/research/context";
 
+import { AnswerCompanyBadges } from "./AnswerCompanyBadges";
 import { groupEvidenceSources } from "./sourcePresentation";
 
 const ResearchChart = lazy(() => import("./ResearchChart"));
@@ -166,6 +167,7 @@ function AssistantMessage() {
           Text: MarkdownText,
         }}
       />
+      <AnswerCompanyBadges companies={run?.result?.answer_companies ?? []} />
       {run?.result?.chart ? (
         <Suspense fallback={<div className="chart-loading">Preparing chart…</div>}>
           <ResearchChart chart={run.result.chart} />

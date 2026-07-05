@@ -13,12 +13,29 @@ from sqlalchemy.pool import StaticPool
 
 from company_lens.agent.persistence import AgentExecutionEvent, InterruptionReason
 from company_lens.agent.schemas import AgentRunStatus, AgentState
-from company_lens.db.models import ResearchEvent, ResearchFeedback, ResearchRun
+from company_lens.db.models import (
+    Company,
+    CompanyTicker,
+    Exchange,
+    ResearchEvent,
+    ResearchFeedback,
+    ResearchRun,
+)
+from company_lens.evidence.schemas import EvidenceEnvelope, EvidenceKind, EvidenceMetadata
 from company_lens.research.repository import ResearchRunRepository
 from company_lens.research.schemas import ResearchRunStatus, StartResearchRequest
 from company_lens.research.worker import ResearchWorker
 
-TABLES = (ResearchRun.__table__, ResearchEvent.__table__, ResearchFeedback.__table__)
+COMPANY_ID = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+
+TABLES = (
+    Company.__table__,
+    Exchange.__table__,
+    CompanyTicker.__table__,
+    ResearchRun.__table__,
+    ResearchEvent.__table__,
+    ResearchFeedback.__table__,
+)
 
 
 class FakeAgent:
@@ -77,6 +94,26 @@ class BlockingAgent(FakeAgent):
         return _completed_state(session_id, run_id)
 
 
+class CompanyAnswerAgent(FakeAgent):
+    def run(self, *args: object, **kwargs: object) -> AgentState:
+        session_id = str(kwargs["session_id"])
+        run_id = kwargs["run_id"]
+        assert isinstance(run_id, uuid.UUID)
+        state = _completed_state(session_id, run_id)
+        state["evidence"] = (
+            EvidenceEnvelope(
+                evidence_id="document:cloudflare-risk",
+                kind=EvidenceKind.DOCUMENT,
+                summary="Cloudflare identified competition as a material risk.",
+                metadata=EvidenceMetadata(
+                    company_id=COMPANY_ID,
+                    company_name="Cloudflare",
+                ),
+            ),
+        )
+        return state
+
+
 def test_worker_persists_validated_answer_events_and_result() -> None:
     repository = _repository()
     run = repository.enqueue(
@@ -105,6 +142,50 @@ def test_worker_persists_validated_answer_events_and_result() -> None:
     ]
     assert all(event.schema_version == "2" for event in events)
     assert "UNVALIDATED" not in "".join(str(event.data) for event in events)
+
+
+def test_worker_enriches_answer_company_targets_for_api_badges() -> None:
+    repository, factory = _repository_with_factory()
+    exchange_id = uuid.uuid4()
+    with factory.begin() as session:
+        session.add(
+            Exchange(id=exchange_id, mic="XNYS", code="NYSE", name="New York Stock Exchange")
+        )
+        session.add(
+            Company(
+                id=COMPANY_ID,
+                legal_name="Cloudflare, Inc.",
+                display_name="Cloudflare",
+                cik="1477333",
+            )
+        )
+        session.add(
+            CompanyTicker(
+                company_id=COMPANY_ID,
+                exchange_id=exchange_id,
+                symbol="NET",
+                is_primary=True,
+            )
+        )
+    run = repository.enqueue(
+        StartResearchRequest(question="What risks did Cloudflare report?"),
+        session_id="worker-company-session",
+        timeout=timedelta(minutes=10),
+    )
+    worker = ResearchWorker(
+        repository=repository,
+        agent=CompanyAnswerAgent(),  # type: ignore[arg-type]
+        worker_id="worker-company",
+    )
+
+    assert worker.run_once() is True
+    response = repository.response(run.id)
+
+    assert response.result is not None
+    assert [
+        (company.id, company.primary_ticker, company.display_name)
+        for company in response.result.answer_companies
+    ] == [(COMPANY_ID, "NET", "Cloudflare")]
 
 
 def test_worker_trace_metadata_includes_graph_topology(monkeypatch) -> None:
@@ -225,6 +306,10 @@ def test_worker_renews_lease_while_agent_call_is_blocked() -> None:
 
 
 def _repository() -> ResearchRunRepository:
+    return _repository_with_factory()[0]
+
+
+def _repository_with_factory() -> tuple[ResearchRunRepository, sessionmaker]:
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -232,7 +317,8 @@ def _repository() -> ResearchRunRepository:
     )
     for table in TABLES:
         table.create(engine, checkfirst=True)
-    return ResearchRunRepository(sessionmaker(bind=engine, expire_on_commit=False))
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    return ResearchRunRepository(factory), factory
 
 
 def _completed_state(session_id: str, run_id: uuid.UUID) -> AgentState:

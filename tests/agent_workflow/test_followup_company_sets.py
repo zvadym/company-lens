@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 # ruff: noqa: F403, F405, I001
 from .context import *
+from company_lens.agent.schemas import CachedSourceResult
+from company_lens.evidence.schemas import EvidenceEnvelope, EvidenceKind, EvidenceMetadata
 
 
 def _company_query(
@@ -149,6 +153,135 @@ def test_compare_them_follow_up_inherits_recent_company_set_without_chart() -> N
         "Netflix",
     ]
     assert merged.metrics == ("revenue",)
+
+
+def test_plural_follow_up_does_not_inherit_companies_from_cached_source_results() -> None:
+    previous = _company_query(
+        query="Compare Cloudflare revenue growth over the last eight quarters.",
+        company_id=COMPANY_ID,
+        mention="Cloudflare",
+        display_value="Cloudflare",
+    )
+    cached_query = FinancialFactQuery(company_ids=(NETFLIX_ID,), metrics=("revenue",))
+    cached_result = FinancialFactQueryResult(
+        query=cached_query,
+        observations=(),
+        available_units=("USD",),
+    )
+    current = ResolvedQuery(query="compare them")
+    analysis = QuestionAnalysis(
+        normalized_question="compare the prior companies",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+        is_follow_up=True,
+        reason_codes=("comparison_requested",),
+    )
+    memory = SessionMemory(
+        last_resolved_query=previous,
+        recent_resolved_queries=(previous,),
+        cached_source_results=(
+            CachedSourceResult(
+                kind="query_financial_facts",
+                request_fingerprint="a" * 64,
+                stored_at=datetime.now(UTC),
+                financial_result=cached_result,
+            ),
+        ),
+    )
+
+    merged = _merge_follow_up_if_needed(current, analysis, memory)
+
+    assert merged.company_ids == (COMPANY_ID,)
+    assert [entity.mention for entity in merged.entities if entity.kind == "company"] == [
+        "Cloudflare",
+    ]
+
+
+def test_plural_follow_up_inherits_companies_from_previous_answer_evidence() -> None:
+    current = ResolvedQuery(
+        query="show me these companies revenue for the last 2 years",
+        metrics=("revenue",),
+    )
+    analysis = QuestionAnalysis(
+        normalized_question="show me these companies revenue for the last 2 years",
+        route=ResearchRoute.STRUCTURED_ONLY,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS,),
+        is_follow_up=True,
+        reason_codes=("multi_company_reference", "historical_financials"),
+    )
+    memory = SessionMemory(
+        last_resolved_query=ResolvedQuery(query="Netflix and Tesla"),
+        evidence=(
+            EvidenceEnvelope(
+                evidence_id="document:netflix-risk",
+                kind=EvidenceKind.DOCUMENT,
+                summary="Netflix risk discussion.",
+                metadata=EvidenceMetadata(company_id=COMPANY_ID, company_name="Netflix"),
+            ),
+            EvidenceEnvelope(
+                evidence_id="document:tesla-risk",
+                kind=EvidenceKind.DOCUMENT,
+                summary="Tesla risk discussion.",
+                metadata=EvidenceMetadata(company_id=NETFLIX_ID, company_name="Tesla"),
+            ),
+        ),
+    )
+
+    merged = _merge_follow_up_if_needed(current, analysis, memory)
+
+    assert merged.company_ids == (COMPANY_ID, NETFLIX_ID)
+    assert [entity.mention for entity in merged.entities if entity.kind == "company"] == [
+        "Netflix",
+        "Tesla",
+    ]
+    assert merged.metrics == ("revenue",)
+
+
+def test_follow_up_preserves_ambiguous_memory_as_ambiguous_instead_of_company_target() -> None:
+    previous = ResolvedQuery(
+        query="Compare United revenue growth",
+        entities=(
+            EntityResolution(
+                kind="company",
+                mention="United",
+                status="ambiguous",
+                candidates=(
+                    EntityCandidate(
+                        canonical_value="UAL",
+                        display_value="United Airlines Holdings Inc.",
+                        match_kind="sec_company_name",
+                    ),
+                    EntityCandidate(
+                        canonical_value="BNO",
+                        display_value="United States Brent Oil Fund LP",
+                        match_kind="sec_company_name",
+                    ),
+                ),
+            ),
+        ),
+        metrics=("revenue",),
+    )
+    current = ResolvedQuery(query="compare them")
+    analysis = QuestionAnalysis(
+        normalized_question="compare the prior companies",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+        is_follow_up=True,
+        reason_codes=("comparison_requested",),
+    )
+    memory = SessionMemory(last_resolved_query=previous, recent_resolved_queries=(previous,))
+
+    merged = _merge_follow_up_if_needed(current, analysis, memory)
+
+    assert merged.company_ids == ()
+    assert merged.entities[0].status == "ambiguous"
+    assert merged.entities[0].mention == "United"
 
 
 def test_add_series_follow_up_merges_new_company_with_previous_chart_companies() -> None:

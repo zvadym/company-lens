@@ -5,11 +5,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from company_lens.agent.answer_companies import answer_company_targets_from_state
 from company_lens.agent.persistence import ResearchSessionMetadata, ResearchSessionSnapshot
 from company_lens.agent.schemas import (
     AgentError,
     AgentRunStatus,
     AgentState,
+    AnswerCompanyTarget,
     BranchOutcome,
     EvidenceKind,
     ResearchRoute,
@@ -47,6 +49,7 @@ class ResearchRunOutput(OutputModel):
     status: AgentRunStatus
     route: ResearchRoute | None
     answer: str | None
+    answer_companies: tuple[AnswerCompanyTarget, ...]
     claims: tuple[ClaimRecord, ...]
     citations: tuple[ResearchCitationOutput, ...]
     validation: AnswerValidation | None
@@ -106,6 +109,7 @@ def research_run_output(
         status=state["status"],
         route=analysis.route if analysis is not None else None,
         answer=state.get("final_answer"),
+        answer_companies=answer_company_targets_from_state(state),
         claims=state.get("claims", ()),
         citations=citations,
         validation=state.get("answer_validation"),

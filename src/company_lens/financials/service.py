@@ -4,9 +4,9 @@ import uuid
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
-from typing import cast
+from typing import Any, cast
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from company_lens.db.models import Company, CompanyTicker, FinancialFact
@@ -23,22 +23,8 @@ class FinancialFactQueryService:
         self._session = session
 
     def query(self, request: FinancialFactQuery) -> FinancialFactQueryResult:
-        statement = (
-            select(FinancialFact, Company)
-            .join(Company, Company.id == FinancialFact.company_id)
-            .where(FinancialFact.canonical_metric.in_(request.metrics))
-        )
-        statement = self._apply_filters(statement, request)
-        statement = statement.order_by(
-            Company.display_name,
-            FinancialFact.canonical_metric,
-            FinancialFact.period_end.desc(),
-            FinancialFact.filed_date.desc(),
-            FinancialFact.accession_number.desc(),
-            FinancialFact.id.desc(),
-        ).limit(request.limit)
         rows = sorted(
-            self._session.execute(statement).all(),
+            self._query_rows(request),
             key=lambda row: (
                 row[1].display_name,
                 row[0].canonical_metric,
@@ -92,9 +78,9 @@ class FinancialFactQueryService:
 
     def _apply_filters(
         self,
-        statement: Select[tuple[FinancialFact, Company]],
+        statement: Select[Any],
         request: FinancialFactQuery,
-    ) -> Select[tuple[FinancialFact, Company]]:
+    ) -> Select[Any]:
         if request.company_ids:
             statement = statement.where(FinancialFact.company_id.in_(request.company_ids))
         if request.tickers:
@@ -118,6 +104,76 @@ class FinancialFactQueryService:
         if not request.include_amendments:
             statement = statement.where(FinancialFact.is_amendment.is_(False))
         return statement
+
+    def _query_rows(self, request: FinancialFactQuery) -> list[tuple[FinancialFact, Company]]:
+        if self._requires_series_balancing(request):
+            return self._balanced_query_rows(request)
+        statement = (
+            self._apply_filters(
+                select(FinancialFact, Company)
+                .join(Company, Company.id == FinancialFact.company_id)
+                .where(FinancialFact.canonical_metric.in_(request.metrics)),
+                request,
+            )
+            .order_by(
+                Company.display_name,
+                FinancialFact.canonical_metric,
+                *self._latest_fact_order(),
+            )
+            .limit(request.limit)
+        )
+        return [(fact, company) for fact, company in self._session.execute(statement).all()]
+
+    def _balanced_query_rows(
+        self,
+        request: FinancialFactQuery,
+    ) -> list[tuple[FinancialFact, Company]]:
+        # Rank inside each company/metric series before applying the global
+        # limit, otherwise the first company by display name can consume every row.
+        series_rank = (
+            func.row_number()
+            .over(
+                partition_by=(
+                    FinancialFact.company_id,
+                    FinancialFact.canonical_metric,
+                ),
+                order_by=self._latest_fact_order(),
+            )
+            .label("series_rank")
+        )
+        ranked = self._apply_filters(
+            select(FinancialFact.id.label("fact_id"), series_rank).where(
+                FinancialFact.canonical_metric.in_(request.metrics)
+            ),
+            request,
+        ).subquery()
+        statement = (
+            select(FinancialFact, Company)
+            .join(ranked, ranked.c.fact_id == FinancialFact.id)
+            .join(Company, Company.id == FinancialFact.company_id)
+            .order_by(
+                ranked.c.series_rank,
+                Company.display_name,
+                FinancialFact.canonical_metric,
+                *self._latest_fact_order(),
+            )
+            .limit(request.limit)
+        )
+        return [(fact, company) for fact, company in self._session.execute(statement).all()]
+
+    @staticmethod
+    def _requires_series_balancing(request: FinancialFactQuery) -> bool:
+        company_series_count = max(len(request.company_ids), len(request.tickers), 1)
+        return company_series_count * len(request.metrics) > 1
+
+    @staticmethod
+    def _latest_fact_order() -> tuple[Any, ...]:
+        return (
+            FinancialFact.period_end.desc(),
+            FinancialFact.filed_date.desc(),
+            FinancialFact.accession_number.desc(),
+            FinancialFact.id.desc(),
+        )
 
     def _ticker_map(self, company_ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:
         if not company_ids:

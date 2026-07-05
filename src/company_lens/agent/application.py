@@ -78,6 +78,11 @@ def open_persistent_research_agent(settings: Settings) -> Iterator[PersistentRes
         max_retries=settings.openai_retry_attempts,
     )
     session_factory = build_session_factory(settings.database_url)
+    semantic_judge = (
+        ModelSemanticSupportJudge(model_provider, prompt_provider)
+        if settings.semantic_judge_enabled or settings.semantic_judge_appeal_enabled
+        else None
+    )
     runtime = ResearchAgentRuntime(
         model_provider=model_provider,
         tools=SqlResearchTools(
@@ -90,10 +95,9 @@ def open_persistent_research_agent(settings: Settings) -> Iterator[PersistentRes
         max_cached_source_results=settings.agent_session_max_cached_results,
         retrieval_index_name=settings.agent_retrieval_index_name,
         retrieval_index_version=settings.agent_retrieval_index_version,
-        semantic_support_judge=(
-            ModelSemanticSupportJudge(model_provider, prompt_provider)
-            if settings.semantic_judge_enabled
-            else None
+        semantic_support_judge=semantic_judge if settings.semantic_judge_enabled else None,
+        semantic_issue_appeal_judge=(
+            semantic_judge if settings.semantic_judge_appeal_enabled else None
         ),
     )
     with postgres_checkpointer(settings.database_url) as checkpointer:

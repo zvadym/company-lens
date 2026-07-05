@@ -214,6 +214,52 @@ def test_validation_rejects_wrong_company_and_period() -> None:
     assert "wrong_period" in wrong_period.reason_codes
 
 
+def test_document_summary_scaled_numbers_support_scaled_claims() -> None:
+    document = EvidenceEnvelope(
+        evidence_id="document:netflix-business",
+        kind=EvidenceKind.DOCUMENT,
+        summary=(
+            "Netflix is one of the world's leading entertainment services with "
+            "approximately 302 million paid memberships in over 190 countries."
+        ),
+        source_urls=("https://example.test/netflix",),
+        metadata=EvidenceMetadata(company_id=CLOUDFLARE_ID, company_name="Netflix"),
+    )
+
+    validation = AnswerValidator(EvidenceRegistry((document,))).validate(
+        "Netflix reported approximately 302 million paid memberships in over 190 "
+        "countries [document:netflix-business]."
+    )
+
+    assert validation.valid is True
+
+
+def test_document_summary_year_can_support_referenced_prior_annual_report_period() -> None:
+    section = EvidenceEnvelope(
+        evidence_id="section:netflix-risk-factors",
+        kind=EvidenceKind.DOCUMENT,
+        summary=(
+            "There have been no material changes from the risk factors previously "
+            "disclosed in the Company's Annual Report on Form 10-K for the year "
+            "ended December 31, 2024."
+        ),
+        source_urls=("https://example.test/netflix-2025-q2",),
+        metadata=EvidenceMetadata(
+            company_id=CLOUDFLARE_ID,
+            company_name="Netflix",
+            fiscal_year=2025,
+        ),
+    )
+
+    validation = AnswerValidator(EvidenceRegistry((section,))).validate(
+        "Netflix reported no material changes from the risk factors previously "
+        "disclosed in its Annual Report on Form 10-K for the year ended December "
+        "31, 2024 [section:netflix-risk-factors]."
+    )
+
+    assert validation.valid is True
+
+
 @pytest.mark.parametrize(
     ("answer", "reason"),
     (
@@ -417,6 +463,65 @@ def test_unavailable_semantic_judge_is_distinct_from_unsupported_claim() -> None
     assert validation.valid is True
     assert validation.claims[0].semantic_support is not None
     assert validation.claims[0].semantic_support.status is SemanticSupportStatus.UNAVAILABLE
+
+
+def test_semantic_judge_can_appeal_selected_deterministic_issue() -> None:
+    document = EvidenceEnvelope(
+        evidence_id="document:cloudflare-risk",
+        kind=EvidenceKind.DOCUMENT,
+        summary="Cloudflare reported annual revenue in USD.",
+        source_urls=("https://example.test/report",),
+        metadata=EvidenceMetadata(company_id=CLOUDFLARE_ID, company_name="Cloudflare", unit="USD"),
+    )
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def judge(claim, _evidence, issues=()):
+        calls.append((claim.claim_id, tuple(issue.code for issue in issues)))
+        return SemanticSupportResult(
+            status=SemanticSupportStatus.SUPPORTED,
+            reason_code="deterministic_false_positive",
+            prompt_version="test.v1",
+            resolved_issue_codes=("unsupported_number",),
+        )
+
+    validation = AnswerValidator(
+        EvidenceRegistry((document,)),
+        semantic_issue_appeal_judge=judge,
+    ).validate("Cloudflare revenue was 999 USD [document:cloudflare-risk].")
+
+    assert validation.valid is True
+    assert validation.reason_codes == ()
+    assert calls == [(validation.claims[0].claim_id, ("unsupported_number",))]
+    assert validation.claims[0].semantic_support is not None
+    assert validation.claims[0].semantic_support.resolved_issue_codes == ("unsupported_number",)
+
+
+def test_semantic_judge_cannot_appeal_wrong_company_issue() -> None:
+    cloudflare = EvidenceEnvelope(
+        evidence_id="document:cloudflare-risk",
+        kind=EvidenceKind.DOCUMENT,
+        summary="Cloudflare describes competition as a business risk.",
+        source_urls=("https://example.test/cloudflare",),
+        metadata=EvidenceMetadata(company_id=CLOUDFLARE_ID, company_name="Cloudflare"),
+    )
+    microsoft = EvidenceEnvelope(
+        evidence_id="document:microsoft-risk",
+        kind=EvidenceKind.DOCUMENT,
+        summary="Microsoft describes competition as a business risk.",
+        source_urls=("https://example.test/microsoft",),
+        metadata=EvidenceMetadata(company_id=MICROSOFT_ID, company_name="Microsoft"),
+    )
+
+    def judge(_claim, _evidence, _issues=()):
+        raise AssertionError("Non-appealable issues should not call the semantic judge.")
+
+    validation = AnswerValidator(
+        EvidenceRegistry((cloudflare, microsoft)),
+        semantic_issue_appeal_judge=judge,
+    ).validate("Microsoft describes competition as a business risk [document:cloudflare-risk].")
+
+    assert validation.valid is False
+    assert validation.reason_codes == ("wrong_company",)
 
 
 def test_source_hydration_reports_exact_pages_and_inaccessible_urls() -> None:

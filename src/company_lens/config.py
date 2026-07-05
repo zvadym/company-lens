@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     openai_answer_model: str = Field(default="gpt-5.5")
     openai_repair_model: str = Field(default="gpt-5.4-mini", min_length=1)
     semantic_judge_enabled: bool = Field(default=False)
+    semantic_judge_appeal_enabled: bool = Field(default=True)
     semantic_judge_model: str = Field(default="gpt-5.4-mini", min_length=1)
     semantic_judge_reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] = "low"
     semantic_judge_max_output_tokens: int = Field(default=512, ge=1)

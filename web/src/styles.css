@@ -235,6 +235,21 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visi
 .answer-markdown .citation-link { display: inline-grid; min-width: 18px; height: 18px; margin: 0 1px; place-items: center; color: var(--paper-light); background: var(--oxide-dark); border-radius: 50%; font-family: "IBM Plex Mono", monospace; font-size: 8px; font-weight: 600; line-height: 1; text-decoration: none; vertical-align: super; transition: background 140ms ease, transform 140ms ease; }
 .answer-markdown .citation-link:hover { color: #fff; background: var(--forest); transform: translateY(-1px); }
 .answer-markdown .citation-link:focus-visible { outline: 2px solid var(--oxide); outline-offset: 2px; }
+.answer-companies { display: flex; flex-wrap: wrap; gap: 7px; margin: 13px 0 4px; }
+.answer-company-badge {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  color: var(--ink);
+  background: #e6ece5;
+  border: 1px solid #b7c5bb;
+  text-decoration: none;
+}
+.answer-company-badge[href]:hover { background: var(--paper-light); border-color: var(--forest); }
+.answer-company-ticker { color: var(--forest); font-family: "IBM Plex Mono", monospace; font-size: 9px; font-weight: 650; letter-spacing: .08em; }
+.answer-company-name { max-width: min(220px, 52vw); overflow: hidden; color: #505a52; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .message-loading { max-width: 680px; margin: 26px auto; color: var(--muted); font-size: 10px; }
 
 .researching-indicator { display: flex; gap: 5px; align-items: center; max-width: 680px; margin: 8px auto 18px; padding: 0 0 0 24px; color: var(--muted); font-family: "IBM Plex Mono", monospace; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }

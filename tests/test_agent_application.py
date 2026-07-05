@@ -10,8 +10,11 @@ from company_lens.agent.semantic_judge import ModelSemanticSupportJudge
 from company_lens.config import Settings
 
 
-def test_semantic_judge_is_disabled_by_default() -> None:
-    assert Settings(_env_file=None).semantic_judge_enabled is False
+def test_semantic_judge_defaults_to_appeal_only() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.semantic_judge_enabled is False
+    assert settings.semantic_judge_appeal_enabled is True
 
 
 def test_production_agent_assembly_uses_openai_embedder_and_configured_index(
@@ -66,6 +69,7 @@ def test_production_agent_assembly_uses_openai_embedder_and_configured_index(
     assert runtime.retrieval_index_name == "production"
     assert runtime.retrieval_index_version == "openai-index.v2"
     assert isinstance(runtime.semantic_support_judge, ModelSemanticSupportJudge)
+    assert runtime.semantic_issue_appeal_judge is runtime.semantic_support_judge
     assert embedding_call["provider"] == "openai"
     assert embedding_call["openai_api_key"] == "test-key"
     assert agent_call["checkpointer"] is checkpointer
