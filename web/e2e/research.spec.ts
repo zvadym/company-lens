@@ -31,6 +31,15 @@ const execution = {
   tool_calls_used: 1,
   trajectory: [],
 };
+const cloudflareCompany = {
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  display_name: "Cloudflare",
+  legal_name: "Cloudflare, Inc.",
+  cik: "1477333",
+  primary_ticker: "NET",
+  exchange: "NYSE",
+  profile_url: "https://www.sec.gov/edgar/browse/?CIK=1477333",
+};
 const chart = {
   schema_version: "company-lens.chart.v1",
   chart_type: "line",
@@ -55,6 +64,7 @@ type MockRun = {
   result: {
     agent_status: "completed";
     answer: string;
+    answer_companies: typeof cloudflareCompany[];
     citations: typeof citation[];
     chart: typeof chart | null;
     execution: typeof execution;
@@ -116,6 +126,7 @@ test("submits a question and renders streamed execution detail", async ({ page }
         ? {
             agent_status: "completed",
             answer: "Cloudflare cites this filing evidence [evidence-1].",
+            answer_companies: [cloudflareCompany],
             citations: [citation],
             chart,
             execution,
@@ -125,6 +136,7 @@ test("submits a question and renders streamed execution detail", async ({ page }
         : {
             agent_status: "completed",
             answer: "Margins answer.",
+            answer_companies: [],
             citations: [],
             chart: null,
             execution,
@@ -203,6 +215,10 @@ test("submits a question and renders streamed execution detail", async ({ page }
   await expect(page.getByText(/Intent · structured only/i)).toHaveCount(0);
   await expect(page.getByText("CompanyLens synthesis")).toHaveCount(0);
   await expect(page.locator(".message-assistant").first().locator(".message-meta")).toContainText("Jun 22");
+  await expect(
+    page.locator(".message-assistant").first()
+      .getByRole("link", { name: "Company Cloudflare (NET)" }),
+  ).toHaveAttribute("href", cloudflareCompany.profile_url);
   await page.locator(".message-assistant").first()
     .getByRole("button", { name: /copy answer text/i })
     .click();

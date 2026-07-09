@@ -18,6 +18,7 @@ def _validate_citations(
     validation = AnswerValidator(
         registry,
         semantic_judge=runtime.context.semantic_support_judge,
+        semantic_issue_appeal_judge=runtime.context.semantic_issue_appeal_judge,
     ).validate(
         answer,
         citations_required=citations_required,
@@ -92,21 +93,7 @@ def _repair_or_abstain(
     started = time.monotonic()
     attempts_used = state.get("repair_attempts", 0)
     if attempts_used >= state["policy"].max_repair_attempts:
-        fallback_update = _citation_fallback_update(state, started)
-        if fallback_update is not None:
-            return fallback_update
-        exhausted_error = _agent_error(
-            "repair_or_abstain",
-            "citation_repair_exhausted",
-            "The answer could not be repaired within the configured limit.",
-            category=AgentErrorCategory.BUDGET,
-            severity=AgentErrorSeverity.TERMINAL,
-        )
-        return {
-            "status": AgentRunStatus.ABSTAINED,
-            "errors": (exhausted_error,),
-            "trajectory": (_failed_event("repair_or_abstain", started),),
-        }
+        return _citation_repair_exhausted_update(state, started)
     validation = state.get("answer_validation")
     evidence_ids = [item.evidence_id for item in state.get("evidence", ())]
     messages = (
@@ -153,9 +140,56 @@ def _repair_or_abstain(
                 "errors": update.get("errors", ()),
             }
         update["status"] = AgentRunStatus.ABSTAINED
+        update["draft_answer"] = _citation_repair_failure_answer(state)
     else:
         update["draft_answer"] = _normalize_answer_number_formatting(text or "")
     return update
+
+
+def _citation_repair_exhausted_update(
+    state: AgentState,
+    started: float,
+) -> dict[str, object]:
+    attempts_used = state.get("repair_attempts", 0)
+    if attempts_used == 0:
+        fallback_update = _citation_fallback_update(state, started)
+        if fallback_update is not None:
+            return {
+                **fallback_update,
+                # Count fallback as the one repair path so an invalid fallback cannot loop
+                # back into itself or be finalized as if it were citation-safe.
+                "repair_attempts": 1,
+            }
+    exhausted_error = _agent_error(
+        "repair_or_abstain",
+        "citation_repair_exhausted",
+        "The answer could not be repaired within the configured limit.",
+        category=AgentErrorCategory.BUDGET,
+        severity=AgentErrorSeverity.TERMINAL,
+    )
+    return {
+        "status": AgentRunStatus.ABSTAINED,
+        # Never expose an unvalidated model draft or deterministic evidence dump.
+        "draft_answer": _citation_repair_failure_answer(state),
+        "errors": (exhausted_error,),
+        "trajectory": (_failed_event("repair_or_abstain", started),),
+    }
+
+
+def _citation_repair_failure_answer(state: AgentState) -> str:
+    validation = state.get("answer_validation")
+    reason_codes = validation.reason_codes if validation is not None else ()
+    if reason_codes:
+        reasons = ", ".join(reason_codes)
+        return (
+            "I couldn't produce a citation-safe answer for this question. "
+            f"The generated draft failed evidence validation ({reasons}). "
+            "Please narrow the company, filing period, or specific disclosure you want me to use."
+        )
+    return (
+        "I couldn't produce a citation-safe answer for this question. "
+        "Please narrow the company, filing period, or specific disclosure you want me to use."
+    )
 
 
 def _citation_fallback_update(
@@ -183,5 +217,7 @@ __all__ = (
     "_validate_citations",
     "_route_after_validation",
     "_repair_or_abstain",
+    "_citation_repair_exhausted_update",
+    "_citation_repair_failure_answer",
     "_citation_fallback_update",
 )  # noqa: E501

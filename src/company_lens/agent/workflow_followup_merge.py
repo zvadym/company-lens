@@ -57,7 +57,7 @@ def _merge_follow_up_if_needed(
         analysis is not None
         and analysis.is_follow_up
         and memory is not None
-        and (memory.last_resolved_query is not None or memory.recent_artifacts)
+        and _has_follow_up_memory_context(memory)
     ):
         previous = (
             _recent_company_context(memory)
@@ -76,6 +76,14 @@ def _merge_follow_up_if_needed(
             ),
         )
     return resolved
+
+
+def _has_follow_up_memory_context(memory: SessionMemory) -> bool:
+    return (
+        memory.last_resolved_query is not None
+        or bool(memory.recent_artifacts)
+        or bool(_visible_answer_company_targets(memory))
+    )
 
 
 def _merged_company_ids(
@@ -174,6 +182,7 @@ def _question_requests_add_series(question: str) -> bool:
 __all__ = (
     "_merge_follow_up_resolution",
     "_merge_follow_up_if_needed",
+    "_has_follow_up_memory_context",
     "_merged_company_ids",
     "_has_company_like_entity",
     "_updated_recent_resolved_queries",

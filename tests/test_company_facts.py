@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,14 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from company_lens.db.base import Base
-from company_lens.db.models import FinancialFact, SourceArtifact, SourceDocument
+from company_lens.db.models import (
+    Company,
+    CompanyTicker,
+    Exchange,
+    FinancialFact,
+    SourceArtifact,
+    SourceDocument,
+)
 from company_lens.financials.mapping import load_metric_mapping
 from company_lens.financials.schemas import FinancialFactQuery
 from company_lens.financials.service import FinancialFactQueryService
@@ -133,6 +141,76 @@ def test_typed_query_orders_observations_and_marks_conflicts(
     assert [item.period_end for item in latest.observations] == sorted(
         item.period_end for item in result.observations
     )[-2:]
+
+
+def test_multi_company_typed_query_balances_limited_results(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    CompanyFactsIngestionService(
+        session=session,
+        client=FakeCompanyFactsClient(),  # type: ignore[arg-type]
+        artifact_store=ArtifactStore(tmp_path),
+    ).ingest(CompanyFactsIngestionOptions(tickers=("NET",), mapping_path=MAPPING))
+    exchange = session.scalars(select(Exchange)).one()
+    peer = Company(legal_name="Zulu Peer Inc.", display_name="Zulu Peer Inc.")
+    session.add(peer)
+    session.flush()
+    session.add(
+        CompanyTicker(
+            company_id=peer.id,
+            exchange_id=exchange.id,
+            symbol="ZZZ",
+            is_primary=True,
+        )
+    )
+    revenue_facts = session.scalars(
+        select(FinancialFact)
+        .where(FinancialFact.canonical_metric == "revenue")
+        .order_by(FinancialFact.period_end)
+    ).all()
+    for fact in revenue_facts:
+        session.add(
+            FinancialFact(
+                company_id=peer.id,
+                taxonomy=fact.taxonomy,
+                concept=fact.concept,
+                canonical_metric=fact.canonical_metric,
+                metric_mapping_version=fact.metric_mapping_version,
+                label=fact.label,
+                value=fact.value,
+                unit=fact.unit,
+                period_start=fact.period_start,
+                period_end=fact.period_end,
+                fiscal_year=fact.fiscal_year,
+                fiscal_period=fact.fiscal_period,
+                period_type=fact.period_type,
+                form=fact.form,
+                filed_date=fact.filed_date,
+                frame=fact.frame,
+                is_amendment=fact.is_amendment,
+                accession_number=f"{fact.accession_number}-peer" if fact.accession_number else None,
+                dimensions=fact.dimensions,
+                source_url=fact.source_url,
+                source_hash=f"peer-{uuid.uuid4()}",
+            )
+        )
+    session.commit()
+
+    result = FinancialFactQueryService(session=session).query(
+        FinancialFactQuery(tickers=("NET", "ZZZ"), metrics=("revenue",), limit=4)
+    )
+
+    assert len(result.observations) == 4
+    observed_by_ticker = {
+        ticker: [item for item in result.observations if item.ticker == ticker]
+        for ticker in ("NET", "ZZZ")
+    }
+    assert {ticker: len(items) for ticker, items in observed_by_ticker.items()} == {
+        "NET": 2,
+        "ZZZ": 2,
+    }
+    assert all(items[-1].period_end >= items[0].period_end for items in observed_by_ticker.values())
 
 
 def test_missing_metric_returns_typed_empty_result(session: Session) -> None:

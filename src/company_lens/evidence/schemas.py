@@ -104,6 +104,7 @@ class SemanticSupportResult(FrozenModel):
     reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     prompt_version: str = Field(min_length=1)
     model: str | None = None
+    resolved_issue_codes: tuple[str, ...] = ()
 
 
 class ClaimValidation(FrozenModel):

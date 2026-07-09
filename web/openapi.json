@@ -83,6 +83,86 @@
         "title": "AgentRunStatus",
         "type": "string"
       },
+      "AnswerCompanyOutput": {
+        "properties": {
+          "cik": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cik"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "exchange": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "legal_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legal Name"
+          },
+          "primary_ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Ticker"
+          },
+          "profile_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Url"
+          }
+        },
+        "required": [
+          "display_name"
+        ],
+        "title": "AnswerCompanyOutput",
+        "type": "object"
+      },
       "BranchOutcome": {
         "properties": {
           "attempts": {
@@ -731,6 +811,14 @@
               }
             ],
             "title": "Answer"
+          },
+          "answer_companies": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AnswerCompanyOutput"
+            },
+            "title": "Answer Companies",
+            "type": "array"
           },
           "chart": {
             "anyOf": [

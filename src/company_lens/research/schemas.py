@@ -73,9 +73,20 @@ class ResearchAccepted(ApiModel):
     sources_url: str
 
 
+class AnswerCompanyOutput(ApiModel):
+    id: uuid.UUID | None = None
+    display_name: str
+    legal_name: str | None = None
+    cik: str | None = None
+    primary_ticker: str | None = None
+    exchange: str | None = None
+    profile_url: str | None = None
+
+
 class ResearchResult(ApiModel):
     agent_status: AgentRunStatus
     answer: str | None = None
+    answer_companies: tuple[AnswerCompanyOutput, ...] = ()
     citations: tuple[ResearchCitationOutput, ...] = ()
     chart: ChartSpecification | None = None
     warnings: tuple[AgentError, ...] = ()

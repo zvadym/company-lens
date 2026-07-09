@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
+from company_lens.agent.answer_companies import answer_company_targets_from_state
 from company_lens.agent.workflow_context import *
 
 
@@ -142,12 +143,14 @@ def _updated_session_memory(
         previous.recent_artifacts,
         _chart_artifact_context(state, chart) if chart is not None else None,
     )
+    answer_targets = answer_company_targets_from_state(state)
     return SessionMemory(
         last_resolved_query=resolved or previous.last_resolved_query,
         recent_resolved_queries=_updated_recent_resolved_queries(
             previous.recent_resolved_queries,
             resolved,
         ),
+        last_answer_company_targets=answer_targets or previous.last_answer_company_targets,
         last_execution_plan=plan or previous.last_execution_plan,
         last_chart_spec=chart or previous.last_chart_spec,
         recent_artifacts=artifacts,

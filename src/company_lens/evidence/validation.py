@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
+from inspect import Parameter, signature
 
 from company_lens.evidence.claims import extract_claims
 from company_lens.evidence.registry import EvidenceRegistry
@@ -17,7 +18,14 @@ from company_lens.evidence.schemas import (
     ValidationIssue,
 )
 
-SemanticSupportJudge = Callable[[ClaimRecord, tuple[EvidenceEnvelope, ...]], SemanticSupportResult]
+SemanticSupportJudge = Callable[..., SemanticSupportResult]
+APPEALABLE_DETERMINISTIC_ISSUES = frozenset(
+    {
+        "unsupported_number",
+        "wrong_period",
+        "wrong_unit",
+    }
+)
 
 YEAR_PATTERN = re.compile(r"\b(?:19|20)\d{2}\b")
 NUMBER_PATTERN = re.compile(r"(?<![\w-])[-+]?\d[\d,]*(?:\.\d+)?")
@@ -58,9 +66,11 @@ class AnswerValidator:
         registry: EvidenceRegistry,
         *,
         semantic_judge: SemanticSupportJudge | None = None,
+        semantic_issue_appeal_judge: SemanticSupportJudge | None = None,
     ) -> None:
         self._registry = registry
         self._semantic_judge = semantic_judge
+        self._semantic_issue_appeal_judge = semantic_issue_appeal_judge or semantic_judge
 
     def validate(self, answer: str, *, citations_required: bool = True) -> AnswerValidation:
         claims = extract_claims(answer)
@@ -113,8 +123,23 @@ class AnswerValidator:
         if known_evidence:
             issues.extend(self._validate_metadata(claim, known_evidence))
             issues.extend(self._validate_lineage(claim, known_evidence))
-            if not issues and self._semantic_judge is not None:
-                semantic_support = self._semantic_judge(claim, known_evidence)
+            semantic_support_ran = False
+            if issues and self._semantic_issue_appeal_judge is not None:
+                semantic_support = _semantic_issue_appeal(
+                    self._semantic_issue_appeal_judge,
+                    claim,
+                    known_evidence,
+                    tuple(issues),
+                )
+                semantic_support_ran = semantic_support is not None
+                if semantic_support is not None:
+                    issues = _issues_after_semantic_appeal(issues, semantic_support)
+            if not issues and self._semantic_judge is not None and not semantic_support_ran:
+                semantic_support = _call_semantic_judge(
+                    self._semantic_judge,
+                    claim,
+                    known_evidence,
+                )
                 if semantic_support.status is SemanticSupportStatus.UNSUPPORTED:
                     issues.append(
                         self._issue(
@@ -253,12 +278,73 @@ class AnswerValidator:
         )
 
 
+def _semantic_issue_appeal(
+    judge: SemanticSupportJudge,
+    claim: ClaimRecord,
+    evidence: tuple[EvidenceEnvelope, ...],
+    issues: tuple[ValidationIssue, ...],
+) -> SemanticSupportResult | None:
+    appealable = tuple(issue for issue in issues if issue.code in APPEALABLE_DETERMINISTIC_ISSUES)
+    if not appealable:
+        return None
+    return _call_semantic_judge(judge, claim, evidence, appealable)
+
+
+def _issues_after_semantic_appeal(
+    issues: list[ValidationIssue],
+    semantic_support: SemanticSupportResult,
+) -> list[ValidationIssue]:
+    if semantic_support.status is not SemanticSupportStatus.SUPPORTED:
+        return issues
+    # Older structured responses may omit per-issue codes; in appeal mode a
+    # supported verdict means the supplied allowlisted issues were false positives.
+    resolved = set(semantic_support.resolved_issue_codes) or {
+        issue.code for issue in issues if issue.code in APPEALABLE_DETERMINISTIC_ISSUES
+    }
+    return [
+        issue
+        for issue in issues
+        if issue.code not in APPEALABLE_DETERMINISTIC_ISSUES or issue.code not in resolved
+    ]
+
+
+def _call_semantic_judge(
+    judge: SemanticSupportJudge,
+    claim: ClaimRecord,
+    evidence: tuple[EvidenceEnvelope, ...],
+    issues: tuple[ValidationIssue, ...] = (),
+) -> SemanticSupportResult:
+    if issues and _semantic_judge_accepts_validation_issues(judge):
+        return judge(claim, evidence, issues)
+    return judge(claim, evidence)
+
+
+def _semantic_judge_accepts_validation_issues(judge: SemanticSupportJudge) -> bool:
+    try:
+        call_signature = signature(judge)
+    except (TypeError, ValueError):
+        return True
+    positional = (
+        Parameter.POSITIONAL_ONLY,
+        Parameter.POSITIONAL_OR_KEYWORD,
+    )
+    parameters = call_signature.parameters.values()
+    if any(parameter.kind is Parameter.VAR_POSITIONAL for parameter in parameters):
+        return True
+    return (
+        sum(parameter.kind in positional for parameter in call_signature.parameters.values()) >= 3
+    )
+
+
 def _evidence_years(evidence: EvidenceEnvelope) -> tuple[int | None, ...]:
     metadata = evidence.metadata
     return (
         metadata.fiscal_year,
         metadata.period_start.year if metadata.period_start else None,
         metadata.period_end.year if metadata.period_end else None,
+        # Later filings can quote the annual-report year they refer to; that cited
+        # text year should satisfy period checks even when filing metadata differs.
+        *(int(value) for value in YEAR_PATTERN.findall(evidence.summary)),
     )
 
 
@@ -288,6 +374,9 @@ def _unsupported_numbers(
             for value in NUMBER_PATTERN.findall(item.summary)
             if (parsed := _decimal(value)) is not None
         )
+        # Document summaries can carry formatted values such as "302 million";
+        # validate those in the same scale used for answer claims.
+        supported.update(_scaled_numbers(item.summary))
         values = item.payload.get("values")
         inputs = item.payload.get("inputs")
         for collection in (values, inputs):
@@ -327,6 +416,21 @@ def _claim_numbers(
         decimal_places = len(raw.rsplit(".", 1)[1]) if "." in raw else 0
         displayed_quantum = Decimal(1).scaleb(-decimal_places) * multiplier
         result.append((normalized, displayed_quantum / 2))
+    return tuple(result)
+
+
+def _scaled_numbers(text: str) -> tuple[Decimal, ...]:
+    result: list[Decimal] = []
+    for match in SCALED_NUMBER_PATTERN.finditer(text):
+        scale_name = match.group("scale")
+        if scale_name is None:
+            continue
+        parsed = _decimal(match.group("number"))
+        if parsed is None:
+            continue
+        multiplier = NUMBER_SCALES.get(scale_name.casefold())
+        if multiplier is not None:
+            result.append(parsed * multiplier)
     return tuple(result)
 
 

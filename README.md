@@ -93,29 +93,140 @@ The research agent is a bounded state machine, not an unrestricted autonomous lo
 
 ```mermaid
 flowchart TD
-    A[Receive question] --> B[Parse intent and entities]
-    B --> C[Resolve identifiers and periods]
-    C --> D[Create execution plan]
-    D --> E{Required evidence}
-    E -->|Narrative| F[Retrieve documents]
-    E -->|Financial| G[Query SEC facts]
-    E -->|Macro| H[Query FRED]
-    E -->|Derived metric| I[Run calculations]
-    F --> J[Evaluate context]
-    G --> K[Merge evidence]
-    H --> K
-    I --> K
-    J --> K
-    K --> L{Chart required?}
-    L -->|Yes| M[Generate chart spec]
-    L -->|No| N[Generate answer]
-    M --> N
-    N --> O[Validate citations]
-    O -->|Valid| P[Return result]
-    O -->|Repairable| Q[Repair answer]
+    A[User request] --> B[CODE start_turn]
+    B --> C[LLM parse_question]
+    C --> D{CODE can answer from session memory}
+    D -->|yes| Z[CODE finalize_response]
+    D -->|no| E[TOOL resolve_entities]
+    E --> F[CODE merge_follow_up_context]
+    F --> G[TOOL prepare_company_data]
+    G --> H[CODE or LLM plan_request]
+    H --> I[CODE hydrate_cached_results]
+    I --> J[TOOLS fetch_sources]
+    J --> K[CODE evaluate_context]
+    K --> L[CODE calculate_metrics_and_chart]
+    L --> M[CODE merge_evidence]
+    M --> N[LLM generate_answer]
+    N --> O[CODE validate_citations]
+    O --> P{Valid}
+    P -->|yes| Z
+    P -->|no appealable| Q[LLM semantic_issue_appeal]
     Q --> O
-    O -->|Unsupported| R[Abstain or return partial result]
+    P -->|still invalid| R[LLM repair_or_abstain]
+    R --> O
+    R -->|failed or exhausted| S[CODE safe_failure_answer]
+    S --> Z
 ```
+
+Node details:
+
+| Step | Implementation | What happens |
+|---|---|---|
+| `start_turn` | Code | Resets per-turn state such as draft answer, evidence, errors, citations, and repair attempts while retaining bounded session messages. |
+| `parse_question` | LLM structured output | Classifies the request into route, capabilities, follow-up status, metrics, periods, and chart intent. If parsing fails, deterministic follow-up classification can recover simple follow-up requests. |
+| `answer_session_context` | Code | Answers directly from session memory for narrow context questions, such as asking which period was used in the previous chart. |
+| `resolve_entities` | Tool + code | Resolves companies, tickers, fiscal periods, metrics, and macro series, then merges explicit and extracted company mentions. |
+| `merge_follow_up_context` | Code | If the request refers to previous work, it can inherit companies from recent resolved queries, recent chart artifacts, visible companies in the last answer, or evidence fallback. |
+| `prepare_company_data` | Tool + database/indexing | Ensures requested companies have filings, chunks, embeddings, and structured facts available. If data is already available, the step is skipped. |
+| `plan_request` | Code first, then LLM if needed | Applies guardrails for ambiguous or missing companies and missing financial readiness. It uses deterministic plans for supported follow-up cases; otherwise an LLM returns a typed `ExecutionPlan`. |
+| `hydrate_cached_results` | Code | Reuses exact cached source results from session memory when a branch request fingerprint matches previous work. |
+| `fetch_sources` | Tools | Executes planned source branches: filing retrieval, structured SEC financial facts, and FRED macro series. |
+| `evaluate_context` | Code | Checks whether the fetched context is sufficient. Missing required financial data can produce an abstention with a user-facing explanation. |
+| `calculate_metrics_and_chart` | Code | Runs deterministic calculations such as YoY growth, percentage change, CAGR, margin, rolling average, and correlation. Chart specs are generated from validated numeric datasets. |
+| `merge_evidence` | Code | Converts retrieved facts, documents, macro observations, and calculations into `EvidenceEnvelope` records with IDs, summaries, metadata, source URLs, and lineage. |
+| `generate_answer` | LLM text output | Receives conversation, question, and compact evidence context, then writes a draft answer with inline evidence IDs such as `[financial_fact:...]` and `[calculation:...]`. |
+| `validate_citations` | Code | Extracts claims and checks unknown citations, missing citations, wrong company, wrong period, wrong unit, unsupported numbers, calculation lineage, and correlation-as-causation. |
+| `semantic_issue_appeal` | LLM structured validation | Last-chance adjudication for likely deterministic false positives. It may only resolve `unsupported_number`, `wrong_period`, and `wrong_unit`. It cannot override wrong company, unknown citations, unsupported claims, or incomplete calculation lineage. |
+| `repair_or_abstain` | LLM text output | Sends the bad draft, validation issues, invalid claim previews, compact evidence, and allowed evidence IDs to a repair prompt. The repaired draft must pass validation before it can be finalized. |
+| `safe_failure_answer` | Code | If repair is exhausted or unavailable, the user sees a concise failure explanation instead of a raw evidence dump or invalid draft. |
+| `finalize_response` | Code | Finalizes valid answers, stores assistant messages, updates session memory, and saves recent companies, evidence, cached sources, and chart artifacts for future follow-ups. |
+
+For a follow-up request, the user can refer to companies from previous turns without repeating
+their names. For example, if the previous answer compared Netflix and Tesla, the next request:
+
+```text
+Compare their latest revenue growth.
+```
+
+is parsed as a follow-up comparison. Entity resolution may not find explicit companies in the
+new text, so the follow-up merge step inherits the companies from recent session context:
+
+```json
+{
+  "question": "Compare their latest revenue growth.",
+  "analysis": {
+    "is_follow_up": true,
+    "route": "calculation",
+    "metrics": ["revenue"],
+    "reason_codes": ["comparison", "follow_up"]
+  },
+  "resolved_query": {
+    "company_ids": ["netflix-id", "tesla-id"],
+    "entities": ["Netflix", "Tesla"],
+    "metrics": ["revenue"]
+  }
+}
+```
+
+Planning then turns that into source and calculation work:
+
+```json
+{
+  "route": "calculation",
+  "branches": [
+    {
+      "kind": "query_financial_facts",
+      "companies": ["Netflix", "Tesla"],
+      "metric": "revenue"
+    },
+    {
+      "kind": "calculate_metrics",
+      "operation": "year_over_year_growth"
+    }
+  ],
+  "requires_citations": true
+}
+```
+
+After tools and calculations run, answer generation sees compact evidence records such as:
+
+```json
+[
+  {
+    "evidence_id": "financial_fact:nflx-revenue-2025",
+    "kind": "financial_fact",
+    "summary": "Netflix revenue: ...",
+    "metadata": {
+      "company_name": "Netflix",
+      "metric": "revenue",
+      "unit": "USD"
+    }
+  },
+  {
+    "evidence_id": "calculation:nflx-revenue-growth",
+    "kind": "calculation",
+    "summary": "year_over_year_growth: 12.5 percent",
+    "lineage_refs": [
+      "financial_fact:nflx-revenue-2024",
+      "financial_fact:nflx-revenue-2025"
+    ]
+  }
+]
+```
+
+The model draft must cite those evidence IDs:
+
+```text
+Netflix revenue grew 12.5% year over year [calculation:nflx-revenue-growth].
+Tesla revenue declined 3.1% year over year [calculation:tsla-revenue-growth].
+```
+
+The validator then checks that each citation exists, each claim cites the right company and
+period, cited numbers match evidence or calculation output, and calculation evidence retains
+its input lineage. If validation reports an appealable issue such as `unsupported_number`,
+the semantic judge receives the claim, cited evidence, and validation issue. If the judge
+returns `supported` with the resolved issue code, that issue is cleared. Otherwise the answer
+goes through repair or ends with a safe abstention.
 
 The provider-neutral `ResearchModelProvider` separates structured parsing/planning from answer
 generation. Data access is isolated behind the `ResearchTools` port; the SQL adapter opens a
@@ -163,8 +274,10 @@ document/page/metric/unit metadata match the claim, and that calculation outputs
 input observations and formula. Unsupported claims are repaired, removed, marked unavailable, or
 answered with abstention.
 
-An optional semantic judge can additionally check qualitative claims against document evidence.
-It is disabled by default and controlled through environment settings.
+The semantic judge has two modes. Full semantic support checking for otherwise valid qualitative
+document claims is optional and disabled by default. Last-chance appeal for selected deterministic
+validation false positives is enabled by default through `COMPANY_LENS_SEMANTIC_JUDGE_APPEAL_ENABLED`
+and uses the same validation model settings.
 
 ## Local development
 

@@ -157,3 +157,43 @@ def test_repair_prompt_includes_invalid_claim_previews_for_sec_label_answers() -
     )
     assert "invalid_claims" in repair_context
     assert "Item 1. Business / Overview" in repair_context
+
+
+def test_repair_exhaustion_does_not_expose_unvalidated_fallback_answer() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="What is in Cloudflare's report?",
+        route=ResearchRoute.RAG_ONLY,
+        required_capabilities=(AgentCapability.DOCUMENTS,),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.RAG_ONLY,
+            branches=(
+                DocumentRetrievalBranch(
+                    branch_id="documents",
+                    request=AdaptiveRetrievalRequest(query="Cloudflare annual report"),
+                ),
+            ),
+        ),
+        texts=(
+            "Cloudflare revenue was 999 USD [document:cloudflare-risk].",
+            "Cloudflare revenue was 999 USD [document:cloudflare-risk].",
+        ),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, FakeResearchTools())).run(
+        "Що там з репортом Cloudflare?",
+        session_id="session-repair-exhaustion-safe-answer",
+        policy=ExecutionPolicy(max_repair_attempts=1),
+    )
+
+    assert result["status"] is AgentRunStatus.ABSTAINED
+    assert result["repair_attempts"] == 1
+    assert result["final_answer"] is not None
+    assert "citation-safe answer" in result["final_answer"]
+    assert "unsupported_number" in result["final_answer"]
+    assert "999 USD" not in result["final_answer"]
+    assert "## Result" not in result["final_answer"]
+    assert "Cloudflare identified competition" not in result["final_answer"]
+    assert [error.code for error in result["errors"]] == ["citation_repair_exhausted"]

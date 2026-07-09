@@ -20,7 +20,7 @@ prompts:
     type: text
     path: agent/repair-answer.txt
   - name: agent/semantic-support-judge
-    version: semantic-support.v1
+    version: semantic-support.v2
     type: text
     path: agent/semantic-support-judge.txt
   - name: processing/document-summary

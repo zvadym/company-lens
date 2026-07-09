@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # ruff: noqa: F403, F405, I001
 from .context import *
+from company_lens.agent.output import research_run_output
 
 
 def test_answer_generation_uses_human_number_display_values() -> None:
@@ -156,6 +157,21 @@ def test_answer_timeout_fallback_groups_peer_facts_by_period() -> None:
     assert " | 165 USD " in result["final_answer"]
     assert "| 2025-12-31 | Cloudflare | revenue |" not in result["final_answer"]
     assert result["answer_validation"].valid is True
+    output = research_run_output(result)
+    assert [
+        (company.company_id, company.ticker, company.display_name)
+        for company in output.answer_companies
+    ] == [
+        (COMPANY_ID, "NET", "Cloudflare"),
+        (NETFLIX_ID, "NFLX", "Netflix"),
+    ]
+    assert [
+        (company.company_id, company.ticker, company.display_name)
+        for company in result["session_memory"].last_answer_company_targets
+    ] == [
+        (COMPANY_ID, "NET", "Cloudflare"),
+        (NETFLIX_ID, "NFLX", "Netflix"),
+    ]
 
 
 def test_validation_failure_falls_back_to_deterministic_cited_summary() -> None:

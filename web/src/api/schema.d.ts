@@ -160,6 +160,23 @@ export interface components {
          * @enum {string}
          */
         AgentRunStatus: "pending" | "running" | "completed" | "partial" | "abstained" | "failed";
+        /** AnswerCompanyOutput */
+        AnswerCompanyOutput: {
+            /** Cik */
+            cik?: string | null;
+            /** Display Name */
+            display_name: string;
+            /** Exchange */
+            exchange?: string | null;
+            /** Id */
+            id?: string | null;
+            /** Legal Name */
+            legal_name?: string | null;
+            /** Primary Ticker */
+            primary_ticker?: string | null;
+            /** Profile Url */
+            profile_url?: string | null;
+        };
         /** BranchOutcome */
         BranchOutcome: {
             /** Attempts */
@@ -421,6 +438,11 @@ export interface components {
             agent_status: components["schemas"]["AgentRunStatus"];
             /** Answer */
             answer?: string | null;
+            /**
+             * Answer Companies
+             * @default []
+             */
+            answer_companies: components["schemas"]["AnswerCompanyOutput"][];
             chart?: components["schemas"]["ChartSpecification"] | null;
             /**
              * Citations

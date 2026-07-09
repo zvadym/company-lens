@@ -368,6 +368,35 @@ class CompanyTarget(FrozenModel):
     source: CompanyTargetSource
 
 
+class AnswerCompanyTarget(FrozenModel):
+    company_id: uuid.UUID | None = None
+    ticker: str | None = None
+    display_name: str | None = None
+    mention: str | None = None
+
+    @field_validator("ticker")
+    @classmethod
+    def normalize_ticker(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        ticker = value.strip().upper()
+        return ticker or None
+
+    @field_validator("display_name", "mention")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = " ".join(value.split())
+        return cleaned or None
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> AnswerCompanyTarget:
+        if self.company_id is None and self.ticker is None and self.display_name is None:
+            raise ValueError("answer company targets require an ID, ticker, or display name.")
+        return self
+
+
 class FinancialDataReadiness(FrozenModel):
     company_id: uuid.UUID
     metric: str = Field(min_length=1)
@@ -506,6 +535,7 @@ class SessionArtifactContext(FrozenModel):
 class SessionMemory(FrozenModel):
     last_resolved_query: ResolvedQuery | None = None
     recent_resolved_queries: tuple[ResolvedQuery, ...] = ()
+    last_answer_company_targets: tuple[AnswerCompanyTarget, ...] = ()
     last_execution_plan: ExecutionPlan | None = None
     last_chart_spec: ChartSpecification | None = None
     recent_artifacts: tuple[SessionArtifactContext, ...] = ()

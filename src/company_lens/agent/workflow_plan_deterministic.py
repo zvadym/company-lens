@@ -9,6 +9,30 @@ def _requires_financial_company(analysis: QuestionAnalysis) -> bool:
     return AgentCapability.FINANCIAL_FACTS in analysis.required_capabilities
 
 
+def _requires_company_target(question: str, analysis: QuestionAnalysis) -> bool:
+    if _requires_financial_company(analysis):
+        return True
+    if AgentCapability.DOCUMENTS not in analysis.required_capabilities:
+        return False
+    normalized = question.casefold()
+    company_document_markers = (
+        "10-k",
+        "10-q",
+        "annual report",
+        "quarterly report",
+        "filing",
+        "filings",
+        "management",
+        "reported",
+        "business risk",
+        "business risks",
+        "risk",
+        "risks",
+        "material",
+    )
+    return any(marker in normalized for marker in company_document_markers)
+
+
 def _validated_deterministic_plan_update(
     deterministic_plan: ExecutionPlan,
     analysis: QuestionAnalysis,
@@ -123,6 +147,7 @@ def _needs_deterministic_document_retrieval_plan(
 
 __all__ = (
     "_requires_financial_company",
+    "_requires_company_target",
     "_validated_deterministic_plan_update",
     "_deterministic_follow_up_plan",
     "_deterministic_document_retrieval_plan",

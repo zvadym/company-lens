@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from company_lens.agent.schemas import AnswerCompanyTarget
 from company_lens.db.models import (
     Company,
     CompanyTicker,
@@ -21,6 +22,7 @@ from company_lens.db.models import (
 )
 from company_lens.research.schemas import (
     EVENT_DATA_V2_MODELS,
+    AnswerCompanyOutput,
     CompaniesResponse,
     CompanyOutput,
     FeedbackRequest,
@@ -141,6 +143,66 @@ class ResearchRunRepository:
             run_id=run.id,
             sources=result.sources if result is not None else (),
         )
+
+    def answer_company_outputs(
+        self,
+        targets: tuple[AnswerCompanyTarget, ...],
+    ) -> tuple[AnswerCompanyOutput, ...]:
+        if not targets:
+            return ()
+        company_ids = tuple(
+            dict.fromkeys(target.company_id for target in targets if target.company_id is not None)
+        )
+        rows_by_id: dict[uuid.UUID, tuple[Company, CompanyTicker | None, Exchange | None]] = {}
+        if company_ids:
+            with self._session_factory() as session:
+                rows = session.execute(
+                    select(Company, CompanyTicker, Exchange)
+                    .outerjoin(
+                        CompanyTicker,
+                        and_(
+                            CompanyTicker.company_id == Company.id,
+                            CompanyTicker.is_primary.is_(True),
+                            CompanyTicker.valid_to.is_(None),
+                        ),
+                    )
+                    .outerjoin(Exchange, Exchange.id == CompanyTicker.exchange_id)
+                    .where(Company.id.in_(company_ids))
+                ).all()
+            rows_by_id = {
+                company.id: (company, ticker, exchange) for company, ticker, exchange in rows
+            }
+
+        outputs: list[AnswerCompanyOutput] = []
+        seen_keys: set[uuid.UUID | str] = set()
+        for target in targets:
+            key: uuid.UUID | str | None = target.company_id or target.ticker or target.display_name
+            if key is None or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            if target.company_id is not None and target.company_id in rows_by_id:
+                company, ticker, exchange = rows_by_id[target.company_id]
+                outputs.append(
+                    AnswerCompanyOutput(
+                        id=company.id,
+                        display_name=company.display_name,
+                        legal_name=company.legal_name,
+                        cik=company.cik,
+                        primary_ticker=ticker.symbol if ticker is not None else target.ticker,
+                        exchange=exchange.code if exchange is not None else None,
+                        profile_url=_sec_company_profile_url(company.cik),
+                    )
+                )
+                continue
+            outputs.append(
+                AnswerCompanyOutput(
+                    id=target.company_id,
+                    display_name=target.display_name or target.ticker or str(target.company_id),
+                    primary_ticker=target.ticker,
+                    profile_url=None,
+                )
+            )
+        return tuple(outputs)
 
     def request_cancellation(
         self, run_id: uuid.UUID, *, now: datetime | None = None
@@ -531,6 +593,12 @@ def _answer_chunks(answer: str, max_chars: int = 120) -> tuple[str, ...]:
     if current:
         chunks.append(current)
     return tuple(chunks)
+
+
+def _sec_company_profile_url(cik: str | None) -> str | None:
+    if not cik:
+        return None
+    return f"https://www.sec.gov/edgar/browse/?CIK={cik}"
 
 
 def _aware(value: datetime) -> datetime:

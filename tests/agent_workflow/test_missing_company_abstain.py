@@ -39,6 +39,55 @@ def test_financial_chart_without_company_abstains_before_planning() -> None:
     assert tools.calls["macro"] == 0
 
 
+def test_company_specific_document_question_without_company_asks_for_clarification() -> None:
+    class NoCompanyDocumentTools(FakeResearchTools):
+        def resolve_non_company_entities(self, query: str) -> ResolvedQuery:
+            self.calls["resolve_non_company"] += 1
+            return ResolvedQuery(query=query)
+
+        def retrieve_documents(
+            self,
+            request: AdaptiveRetrievalRequest,
+        ) -> AdaptiveRetrievalResponse:
+            raise AssertionError("missing company should not reach retrieval")
+
+    analysis = QuestionAnalysis(
+        normalized_question="What are the most material risks management reported this year?",
+        route=ResearchRoute.RAG_ONLY,
+        required_capabilities=(AgentCapability.DOCUMENTS,),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.RAG_ONLY,
+            branches=(
+                DocumentRetrievalBranch(
+                    branch_id="documents",
+                    request=AdaptiveRetrievalRequest(query="material risks management reported"),
+                ),
+            ),
+        ),
+        company_extraction=CompanyMentionExtraction(
+            companies=(),
+            reason_codes=("no_company_mentioned",),
+        ),
+    )
+    tools = NoCompanyDocumentTools()
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, tools)).run(
+        "What are the most material risks management reported this year?",
+        session_id="session-missing-document-company",
+    )
+
+    assert result["status"] is AgentRunStatus.ABSTAINED
+    assert result["final_answer"] is not None
+    assert "Which company should I analyze?" in result["final_answer"]
+    assert any(error.code == "missing_company" for error in result["errors"])
+    assert ModelPurpose.PLAN not in model.purposes
+    assert tools.calls["prepare"] == 0
+    assert tools.calls["retrieval"] == 0
+
+
 def test_unresolved_follow_up_company_abstain_has_user_facing_answer() -> None:
     class UnresolvedSamsungTools(FakeResearchTools):
         def resolve_entities(self, query: str) -> ResolvedQuery:

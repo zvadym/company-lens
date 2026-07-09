@@ -172,6 +172,16 @@ def _ambiguous_company_candidate_label(candidate: EntityCandidate) -> str:
 
 
 def _missing_company_answer(frame: ResearchFrame) -> str:
+    if not frame.company_targets:
+        if _looks_ukrainian(frame.question):
+            return (
+                "Яку компанію потрібно проаналізувати? Вкажіть ticker або повну назву "
+                "публічної компанії, і я використаю її filings та доступні фінансові дані."
+            )
+        return (
+            "Which company should I analyze? Please specify a public company ticker or full "
+            "legal name, and I'll use that company's filings and available financial data."
+        )
     company = _readiness_company_label(frame)
     if _looks_ukrainian(frame.question):
         return (
