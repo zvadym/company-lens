@@ -8,6 +8,16 @@
 
 **Input**: User description: "Create a Spec Kit feature for a repo-driven Langfuse evaluation foundation. Repository golden datasets remain the source of truth, selected cases sync to Langfuse, manual live evaluations publish deterministic and citation-validation scores, and PR reviewers can inspect a summarized manual result without making it a required PR gate. LLM-as-judge, annotation queues, and judge calibration are reserved for a follow-up feature."
 
+## Clarifications
+
+### Session 2026-07-09
+
+- Q: How should multiple repository datasets map to Langfuse experiment runs? → A: Preserve a one-to-one mapping between repository and Langfuse datasets, create one Langfuse experiment run per selected dataset, and group all runs from one manual invocation under a shared evaluation execution ID and summary.
+- Q: How should evaluation infrastructure failures affect the evaluation gate? → A: Fail the workflow and mark the execution partial or errored, but report the gate as not evaluated when infrastructure prevents a complete trustworthy evaluation; agent timeouts or missing answers that are successfully captured as observed behavior remain behavior failures evaluated by the gate.
+- Q: How should citation validation applicability be defined for golden cases? → A: Each golden case has an effective citation mode of required or not applicable, omitted values default to required, and cases marked not applicable are excluded from citation pass-rate denominators.
+- Q: How strictly should an evaluation execution guarantee reproducibility? → A: Before provider calls, validate and synchronize selected datasets, verify their remote counts and content hashes, pin the exact remote dataset snapshots, and persist an immutable run manifest; snapshot mismatch is an infrastructure error with a not-evaluated gate.
+- Q: What minimum structure should the expanded golden coverage satisfy? → A: Include at least two cases in every existing golden-case category and cover valid, missing, unknown-evidence, and semantic-mismatch citation scenarios, allowing citation scenarios to overlap category cases within the 18-to-25-case total.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Run Manual Evaluation Visible In Langfuse (Priority: P1)
@@ -21,8 +31,13 @@ A maintainer can manually run a live evaluation for selected golden datasets and
 **Acceptance Scenarios**:
 
 1. **Given** a selected valid golden dataset and available evaluation credentials, **When** a maintainer runs the manual evaluation workflow, **Then** the selected cases are evaluated and a Langfuse-visible run is created with item-level and aggregate scores.
-2. **Given** one or more selected cases fail expected behavior, **When** the evaluation completes, **Then** the run is marked failed, failed case IDs and short reasons are reported, and successful case results remain inspectable.
+2. **Given** one or more selected cases fail expected behavior, **When** the evaluation completes, **Then** the run remains completed, the evaluation gate is marked failed, failed case IDs and short reasons are reported, and successful case results remain inspectable.
 3. **Given** the evaluation gate fails, **When** the manual workflow completes, **Then** the manual workflow result is visibly failed while no required PR-blocking check is created by this feature.
+4. **Given** multiple repository datasets are selected, **When** the manual evaluation completes, **Then** each dataset has its own Langfuse experiment run and all resulting runs share one evaluation execution ID and aggregate summary.
+5. **Given** an infrastructure failure prevents a complete trustworthy evaluation, **When** the workflow terminates, **Then** the workflow fails, available records and artifacts are preserved, the execution is marked partial or errored, and the evaluation gate is marked not evaluated rather than failed.
+6. **Given** an agent timeout or missing final answer is successfully captured as the observed outcome for a selected case, **When** deterministic evaluation runs, **Then** the case is treated as a behavior failure and remains part of the evaluation gate.
+7. **Given** selected repository datasets and valid Langfuse credentials, **When** a manual evaluation starts, **Then** dataset validation, synchronization, remote count and content-hash verification, and exact snapshot selection complete before any provider-backed agent case runs.
+8. **Given** the synchronized remote dataset does not match the selected repository source, **When** preflight verification completes, **Then** no provider-backed case runs, the workflow fails as an infrastructure error, and the evaluation gate is marked not evaluated.
 
 ---
 
@@ -64,20 +79,26 @@ An agent developer can add reviewed critical cases to the repository dataset so 
 
 **Why this priority**: The existing 11 cases are a useful start but too small to build confidence in a solid agent. The foundation should cover the highest-risk behaviors before adding subjective judge-based evaluation.
 
-**Independent Test**: Review the repository datasets and verify that the first foundation release covers at least 18 and no more than 25 critical cases across core routing, citations, ambiguity, abstention, adversarial instructions, hybrid answers, and follow-up safety.
+**Independent Test**: Review the repository datasets and verify that the first foundation release contains at least 18 and no more than 25 critical cases, includes at least two cases in every existing golden-case category, and covers valid, missing, unknown-evidence, and semantic-mismatch citation scenarios.
 
 **Acceptance Scenarios**:
 
 1. **Given** the foundation dataset expansion is complete, **When** the datasets are validated, **Then** they include critical cases for structured facts, document retrieval, hybrid answers, ambiguous companies, future or missing facts, prompt-injection style instructions, citation validation, and follow-up context reuse.
 2. **Given** a developer changes or adds a golden case, **When** the dataset is reviewed, **Then** the expected behavior remains expressed in framework-neutral repository data rather than only in Langfuse.
+3. **Given** a golden case is authored or updated, **When** the dataset is validated, **Then** its citation mode is explicitly valid or defaults to required, and not-applicable mode is used only when the expected response contains no material source-derived claim requiring citation validation.
+4. **Given** the foundation coverage is validated, **When** cases are grouped by category, **Then** every existing golden-case category contains at least two reviewed cases.
+5. **Given** citation coverage is validated, **When** citation-required cases are inspected, **Then** the suite includes a valid citation, a missing citation, an unknown evidence ID, and a semantic mismatch involving company, period, number, or calculation lineage.
 
 ### Edge Cases
 
 - Langfuse credentials are missing, invalid, or point to the wrong project.
 - A repository dataset contains duplicate case IDs, invalid expected behavior, or unsupported fields.
 - Langfuse sync succeeds for some work before a later failure; the sync report must make partial completion clear and the evaluation must not claim a trustworthy completed sync.
-- A live agent run times out, is interrupted, or returns no final answer for a case.
-- Citation validation cannot run because the final answer or evidence registry is missing.
+- A synchronized Langfuse dataset has an unexpected item count or content hash and cannot be verified as the exact repository-authored snapshot selected for the run.
+- A live agent run times out or returns no final answer and the runner successfully captures that terminal behavior for the case.
+- The runner, provider, synchronization, or evaluator fails before it can produce a complete trustworthy result.
+- A citation-required case produces a captured missing answer, missing evidence, unknown evidence ID, wrong company or period citation, unsupported number, or incomplete calculation lineage.
+- Citation validation infrastructure fails before it can produce a trustworthy result for a citation-required case.
 - A PR number is invalid, unavailable to the workflow, or lacks permission for comments.
 - A dataset has stale remote cases that no longer exist in the repository source of truth.
 - A gate fails because of behavior regressions, missing results, citation failures, or operational budget violations.
@@ -88,33 +109,47 @@ An agent developer can add reviewed critical cases to the repository dataset so 
 ### Functional Requirements
 
 - **FR-001**: The system MUST treat repository golden dataset files as the source of truth for foundation evaluation cases.
-- **FR-002**: The system MUST validate selected golden datasets before synchronization or live evaluation begins.
-- **FR-003**: The system MUST synchronize selected repository datasets and cases into Langfuse with stable case identity and source metadata.
+- **FR-002**: The system MUST validate selected golden datasets before synchronization and complete synchronization verification before any provider-backed live evaluation begins.
+- **FR-003**: The system MUST synchronize each selected repository dataset to one corresponding Langfuse dataset with stable case identity and source metadata.
 - **FR-004**: Dataset synchronization MUST be idempotent for unchanged cases.
 - **FR-005**: Dataset synchronization MUST identify stale remote cases that are no longer present in the selected repository dataset.
-- **FR-006**: The manual evaluation workflow MUST allow maintainers to select dataset scope, maximum case count, execution configuration, and optional PR reporting target.
+- **FR-006**: The manual evaluation workflow MUST allow maintainers to select one or more datasets, a per-dataset maximum case count, execution configuration, and an optional PR reporting target.
 - **FR-007**: The manual evaluation workflow MUST run the live research agent against selected cases using isolated sessions per case.
-- **FR-008**: The system MUST record observed case behavior, deterministic checks, citation validation results, and operational metrics when available.
-- **FR-009**: The system MUST publish item-level scores for overall case pass, company accuracy, metric accuracy, operation accuracy, route accuracy, required tool recall, prohibited tool pass, follow-up safety, citation validity, and operational budget pass when applicable.
-- **FR-010**: The system MUST publish run-level aggregate scores for dataset pass rate, category pass rate, citation validity pass rate, missing result rate, operational metrics presence rate, and gate pass/fail.
-- **FR-011**: Versioned regression gates MUST remain repository-authored and reviewed with the evaluation datasets.
+- **FR-008**: The system MUST record observed case behavior, deterministic checks, citation validation results, operational metrics, and explicit missing markers for any expected result that could not be produced.
+- **FR-009**: The system MUST publish item-level scores for overall case pass, company accuracy, metric accuracy, operation accuracy, route accuracy, required tool recall, prohibited tool pass, follow-up safety, citation validity for citation-required cases, and operational budget pass according to the versioned score contract's applicability rules.
+- **FR-010**: The system MUST publish run-level aggregate scores for dataset pass rate, category pass rate, citation validity pass rate over citation-required cases only, missing result rate, operational metrics presence rate, and evaluation-gate status.
+- **FR-011**: Versioned evaluation gates MUST remain repository-authored and reviewed with the evaluation datasets.
 - **FR-012**: A failed gate MUST make the manual workflow visibly fail without creating a required PR-blocking gate in this feature.
 - **FR-013**: The system MUST create local machine-readable and human-readable evaluation artifacts for each manual run.
 - **FR-014**: When a PR number is supplied, the system MUST create or update a concise PR evaluation summary that links to local artifacts and Langfuse results.
-- **FR-015**: The first foundation release MUST expand the selected golden coverage from the current 11 cases to at least 18 and no more than 25 critical cases.
+- **FR-015**: The first foundation release MUST expand the selected golden coverage from the current 11 cases to at least 18 and no more than 25 critical cases, with at least two reviewed cases in each of these categories: document retrieval, structured financial, hybrid, cross-document comparison, ambiguous entity, missing data or abstention, adversarial or prompt injection, and follow-up.
 - **FR-016**: The foundation MUST NOT emit LLM-as-judge scores, create annotation queues, or perform judge calibration; those belong to a follow-up evaluation quality-loop feature.
 - **FR-017**: Reports, scores, comments, and public artifacts MUST preserve privacy-safe observability boundaries and avoid exposing raw prompts, provider payloads, hidden reasoning, credentials, stack traces, raw retrieved passages, or citation-invalid drafts.
-- **FR-018**: The system MUST distinguish behavior failures from evaluation infrastructure failures in summaries and artifacts.
-- **FR-019**: Partial evaluation runs MUST preserve available artifacts and Langfuse records while clearly failing the gate when selected cases are missing or incomplete.
+- **FR-018**: The system MUST distinguish behavior failures from evaluation infrastructure failures in Langfuse records, summaries, artifacts, and workflow outcomes.
+- **FR-019**: Evaluation infrastructure failures that prevent a complete trustworthy evaluation MUST fail the workflow, preserve available artifacts and Langfuse records, mark the execution partial or errored, and mark the evaluation gate not evaluated rather than failed.
+- **FR-020**: A manual invocation that selects multiple repository datasets MUST create one Langfuse experiment run per selected dataset and group those runs under one shared evaluation execution ID, artifact set, and optional PR summary.
+- **FR-021**: An agent timeout, missing final answer, or similar terminal outcome that the runner successfully captures for a selected case MUST be recorded as an observed behavior failure and included in evaluation gate calculations.
+- **FR-022**: Every golden case MUST resolve to a citation mode of required or not applicable, with omitted values normalized to required for backward compatibility.
+- **FR-023**: Citation-required cases MUST fail citation validation when a captured result has no final answer or required evidence, or has unknown evidence IDs, wrong-company or wrong-period citations, unsupported numbers, or incomplete calculation lineage.
+- **FR-024**: Cases with citation mode not applicable MUST be excluded from citation validity pass-rate denominators and MUST NOT emit a misleading boolean or numeric citation-validity score.
+- **FR-025**: A failure of citation-validation infrastructure to produce a trustworthy result MUST be classified as an infrastructure failure and handled according to the not-evaluated gate policy.
+- **FR-026**: Before any provider-backed case runs, the system MUST synchronize each selected repository dataset, verify the count and content hashes of the repository-present remote item set, exclude identified stale remote items, and select the exact verified remote dataset snapshot and item set for the experiment run.
+- **FR-027**: Every evaluation execution MUST persist an immutable run manifest in Langfuse metadata and local artifacts containing the commit SHA; dataset names, versions, source paths, content hashes, and remote snapshot identifiers; gate name, version, and content hash; model and execution configuration; prompt, parser, and index versions; execution policy; and environment.
+- **FR-028**: A repository-present remote item-set count or content-hash mismatch that cannot be resolved during preflight MUST prevent provider-backed case execution, fail the workflow as an infrastructure error, and leave the evaluation gate not evaluated.
+- **FR-029**: The expanded foundation dataset MUST cover a valid citation, a missing citation, an unknown evidence ID, and a semantic citation mismatch involving company, period, number, or calculation lineage; these cases MAY also satisfy category coverage requirements.
+- **FR-030**: Synchronized item identity MUST be deterministic and project-unique from repository dataset name and stable case ID; dataset version and content hash MUST remain version metadata rather than changing item identity.
+- **FR-031**: The foundation MUST maintain a repository-authored, versioned score contract defining each emitted score's canonical name, item or run scope, value type, applicability and denominator rules, evaluator version, and privacy-safe reason semantics.
 
 ### Key Entities
 
 - **Golden Dataset**: A repository-authored collection of evaluation cases with a stable name, version, description, and categories.
-- **Golden Case**: A stable case ID, conversation, expected behavior, category, and optional notes used to evaluate one agent behavior.
+- **Golden Case**: A stable case ID, conversation, expected behavior, category, citation mode that defaults to required, and optional notes used to evaluate one agent behavior.
 - **Synchronized Dataset Item**: The Langfuse-visible representation of one repository golden case, including metadata that links it back to dataset name, version, source path, category, and case ID.
-- **Evaluation Run**: One manual execution of selected golden cases against a branch/ref and configuration, with observed outputs, score summaries, artifacts, and Langfuse links.
-- **Evaluation Score**: A deterministic or citation-validation outcome attached to a case or run.
-- **Regression Gate**: A repository-authored set of pass/fail thresholds for evaluation metrics and operational budgets.
+- **Evaluation Run**: One dataset-specific execution of selected golden cases against a branch/ref and configuration, with observed outputs, score summaries, artifacts, Langfuse links, and a terminal status of completed, partial, or errored.
+- **Evaluation Execution**: One manual workflow invocation that groups one or more dataset-specific evaluation runs under a shared execution ID, aggregate summary, and terminal status of completed, partial, or errored.
+- **Evaluation Run Manifest**: An immutable, privacy-safe record of the exact code, datasets, remote snapshots, gate, models, prompt and parser versions, index version, execution policy, configuration, and environment used by one evaluation execution.
+- **Evaluation Score**: A deterministic or citation-validation outcome attached to a case or run and governed by the repository-authored versioned score contract.
+- **Evaluation Gate**: A repository-authored set of thresholds for evaluation metrics and operational budgets with a terminal status of passed, failed, or not evaluated.
 - **PR Evaluation Summary**: A pull-request comment summarizing the manual evaluation status, selected datasets, scores, failed cases, artifact links, and Langfuse links.
 
 ## Success Criteria *(mandatory)*
@@ -123,13 +158,18 @@ An agent developer can add reviewed critical cases to the repository dataset so 
 
 - **SC-001**: A maintainer can synchronize selected repository datasets and verify that 100% of selected case IDs appear once in Langfuse after a successful sync.
 - **SC-002**: Re-running synchronization for unchanged selected datasets does not create duplicate Langfuse items for any stable case ID.
-- **SC-003**: A manual evaluation run creates Langfuse-visible results and local artifacts for 100% of selected cases, including failed or missing-case records.
+- **SC-003**: Every completed manual evaluation execution creates one Langfuse experiment run per selected repository dataset and local artifacts containing a terminal record for 100% of selected cases, including behavior failures and captured missing-case outcomes, with every run linked by the shared evaluation execution ID.
 - **SC-004**: Evaluation summaries include pass/fail status, selected dataset names, case counts, aggregate scores, failed case IDs, short failure reasons, and Langfuse links for every completed manual run.
-- **SC-005**: When a valid PR number is supplied, the manual workflow creates or updates a PR summary comment for at least 95% of successful reporting attempts; failures remain visible through workflow output and artifacts.
+- **SC-005**: For every evaluation execution supplied with a valid PR number and sufficient workflow permissions, reporting creates or updates exactly one canonical PR summary comment; any reporting failure remains visible through workflow output and artifacts.
 - **SC-006**: Gate failures cause the manual workflow to finish with a visible failed result while leaving the PR free of a required blocking evaluation check in this feature.
-- **SC-007**: The initial foundation coverage contains at least 18 and no more than 25 reviewed golden cases spanning the critical categories named in this specification.
+- **SC-007**: The initial foundation coverage contains at least 18 and no more than 25 reviewed golden cases, at least two cases in every existing golden-case category, and all four required citation scenarios.
 - **SC-008**: No foundation evaluation run emits LLM-as-judge scores, annotation queue items, or judge-calibration results.
 - **SC-009**: Public reports and PR comments contain zero raw prompts, provider payloads, hidden reasoning, credentials, stack traces, raw retrieved passages, or citation-invalid drafts.
+- **SC-010**: Every workflow failure is classified as either an evaluated behavior or gate failure, or an infrastructure failure with a not-evaluated gate; no infrastructure failure is reported as a quality regression.
+- **SC-011**: Citation validity pass rates use exactly the citation-required cases as their denominator, while every not-applicable case is visibly identified and excluded without receiving a citation-validity score.
+- **SC-012**: Re-running an evaluation from a recorded manifest against unchanged external services selects the same repository content, remote dataset snapshots, gate, model configuration, prompt and parser versions, index version, and execution policy.
+- **SC-013**: Zero provider-backed case calls begin when selected repository datasets cannot be verified against their synchronized Langfuse snapshots.
+- **SC-014**: Every score emitted by a foundation evaluation resolves to exactly one definition in the selected repository score-contract version, and no run mixes incompatible score definitions under the same canonical name.
 
 ## Assumptions
 
