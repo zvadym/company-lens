@@ -4,7 +4,7 @@ import math
 import uuid
 from collections import defaultdict
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any
 
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
@@ -36,6 +36,14 @@ from company_lens.retrieval.rerank import Reranker
 from company_lens.retrieval.resolution import EntityResolver
 from company_lens.retrieval.schemas import RetrievalFilters, RetrievalRequest
 from company_lens.retrieval.service import RetrievalService
+
+_RERANKER_TRACE_STATUSES: dict[object, RerankerTraceStatus] = {
+    "disabled": "disabled",
+    "succeeded": "succeeded",
+    "partial": "partial",
+    "fallback": "fallback",
+    "failed": "failed",
+}
 
 
 class ContextAssembler:
@@ -389,9 +397,7 @@ def _string_or_none(value: object) -> str | None:
 
 
 def _reranker_status_or_none(value: object) -> RerankerTraceStatus | None:
-    if value in {"disabled", "succeeded", "partial", "fallback", "failed"}:
-        return cast(RerankerTraceStatus, value)
-    return None
+    return _RERANKER_TRACE_STATUSES.get(value)
 
 
 def _non_negative_int(value: object) -> int:
