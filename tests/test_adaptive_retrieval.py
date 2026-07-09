@@ -195,6 +195,11 @@ def test_adaptive_retrieval_passes_reranker_to_chunk_search(session: Session) ->
     chunks = [item for item in response.context if item.kind == "chunk"]
     assert chunks
     assert any("Fastly faces competition" in text for text in reranker.seen_texts)
+    assert response.trace.attempts[0].reranker is not None
+    assert response.trace.attempts[0].reranker.provider == "custom"
+    assert response.trace.attempts[0].reranker.status == "succeeded"
+    assert response.trace.attempts[0].reranker.candidate_count >= len(chunks)
+    assert response.trace.attempts[0].reranker.scored_count >= len(chunks)
 
 
 def test_comparative_questions_receive_larger_context_budget(session: Session) -> None:

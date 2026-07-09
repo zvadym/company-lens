@@ -57,7 +57,9 @@ from company_lens.retrieval.adaptive_schemas import (
     AdaptiveRetrievalRequest,
     AdaptiveRetrievalResponse,
     ContextEvidence,
+    RerankerTraceSummary,
     ResolvedQuery,
+    RetrievalAttempt,
     RetrievalPlan,
     RetrievalTrace,
 )
@@ -145,7 +147,23 @@ def test_projector_emits_educational_summaries_without_private_state() -> None:
                     ),
                     trace=RetrievalTrace(
                         initial_plan=retrieval_plan,
-                        attempts=(),
+                        attempts=(
+                            RetrievalAttempt(
+                                attempt=1,
+                                strategy="hybrid",
+                                action="detailed_chunk_search",
+                                evidence_count=1,
+                                context_tokens=4,
+                                reranker=RerankerTraceSummary(
+                                    provider="http",
+                                    status="succeeded",
+                                    model="cross-encoder/test",
+                                    candidate_count=12,
+                                    scored_count=12,
+                                    latency_ms=42.5,
+                                ),
+                            ),
+                        ),
                         final_context_tokens=0,
                     ),
                 ),
@@ -253,6 +271,9 @@ def test_projector_emits_educational_summaries_without_private_state() -> None:
     encoded = json.dumps([event.data for event in events], default=str)
     assert "PRIVATE DRAFT ANSWER" not in encoded
     assert "PRIVATE RAW RETRIEVED PASSAGE" not in encoded
+    assert "reranker" in encoded
+    assert "cross-encoder/test" in encoded
+    assert "candidate_count" in encoded
     assert "formula" in encoded
     assert "observation_count" in encoded
 

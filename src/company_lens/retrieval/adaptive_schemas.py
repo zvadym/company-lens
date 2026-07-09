@@ -19,6 +19,7 @@ RetrievalStrategy = Literal[
 EvidenceScope = Literal["auto", "documents"]
 ResolutionStatus = Literal["resolved", "ambiguous", "unresolved"]
 EvidenceKind = Literal["document_summary", "section_summary", "chunk", "financial_fact"]
+RerankerTraceStatus = Literal["disabled", "succeeded", "partial", "fallback", "failed"]
 
 
 class EntityCandidate(BaseModel):
@@ -117,6 +118,17 @@ class ContextEvidence(BaseModel):
     token_count: int = Field(ge=1)
 
 
+class RerankerTraceSummary(BaseModel):
+    provider: str | None = None
+    status: RerankerTraceStatus | None = None
+    model: str | None = None
+    candidate_count: int = Field(default=0, ge=0)
+    scored_count: int = Field(default=0, ge=0)
+    latency_ms: float | None = Field(default=None, ge=0)
+    fallback_reason: str | None = None
+    warnings: tuple[str, ...] = ()
+
+
 class RetrievalAttempt(BaseModel):
     attempt: int = Field(ge=1)
     strategy: RetrievalStrategy
@@ -124,6 +136,7 @@ class RetrievalAttempt(BaseModel):
     reason: str | None = None
     evidence_count: int = Field(ge=0)
     context_tokens: int = Field(ge=0)
+    reranker: RerankerTraceSummary | None = None
 
 
 class RetrievalTrace(BaseModel):

@@ -8,7 +8,7 @@ from company_lens.config import Settings
 
 
 def test_reranker_settings_default_to_noop() -> None:
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
     assert settings.reranker_provider == "noop"
     assert settings.reranker_url == "http://reranker:8080"

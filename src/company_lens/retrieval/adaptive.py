@@ -4,7 +4,7 @@ import math
 import uuid
 from collections import defaultdict
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
@@ -22,6 +22,8 @@ from company_lens.retrieval.adaptive_schemas import (
     AdaptiveRetrievalRequest,
     AdaptiveRetrievalResponse,
     ContextEvidence,
+    RerankerTraceStatus,
+    RerankerTraceSummary,
     RetrievalAttempt,
     RetrievalBudget,
     RetrievalPlan,
@@ -113,6 +115,7 @@ class AdaptiveRetrievalService:
         self._planner = RetrievalPlanner()
         self._assembler = ContextAssembler()
         self._retrieval = RetrievalService(session=session, embedder=embedder, reranker=reranker)
+        self._last_reranker_trace: RerankerTraceSummary | None = None
 
     def retrieve(self, request: AdaptiveRetrievalRequest) -> AdaptiveRetrievalResponse:
         resolved = self._resolver.resolve(request.query)
@@ -125,6 +128,7 @@ class AdaptiveRetrievalService:
         final_context: tuple[ContextEvidence, ...] = ()
 
         for number, strategy in enumerate(_strategy_sequence(plan), start=1):
+            self._last_reranker_trace = None
             candidates, action = self._execute_strategy(
                 strategy,
                 plan,
@@ -141,6 +145,7 @@ class AdaptiveRetrievalService:
                     reason=None if number == 1 else "insufficient_evidence",
                     evidence_count=len(context),
                     context_tokens=sum(item.token_count for item in context),
+                    reranker=self._last_reranker_trace,
                 )
             )
             final_context = context
@@ -340,6 +345,7 @@ class AdaptiveRetrievalService:
                 max_per_period=plan.budget.max_chunks,
             )
         )
+        self._last_reranker_trace = _reranker_trace_summary(response.diagnostics)
         return [
             ContextEvidence(
                 kind="chunk",
@@ -360,6 +366,42 @@ class AdaptiveRetrievalService:
             )
             for result in response.results
         ]
+
+
+def _reranker_trace_summary(diagnostics: dict[str, object]) -> RerankerTraceSummary:
+    warnings = diagnostics.get("reranker_warnings")
+    return RerankerTraceSummary(
+        provider=_string_or_none(diagnostics.get("reranker_provider")),
+        status=_reranker_status_or_none(diagnostics.get("reranker_status")),
+        model=_string_or_none(diagnostics.get("reranker_model")),
+        candidate_count=_non_negative_int(diagnostics.get("reranker_candidate_count")),
+        scored_count=_non_negative_int(diagnostics.get("reranker_scored_count")),
+        latency_ms=_non_negative_float_or_none(diagnostics.get("reranker_latency_ms")),
+        fallback_reason=_string_or_none(diagnostics.get("reranker_fallback_reason")),
+        warnings=(
+            tuple(str(value) for value in warnings) if isinstance(warnings, tuple | list) else ()
+        ),
+    )
+
+
+def _string_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _reranker_status_or_none(value: object) -> RerankerTraceStatus | None:
+    if value in {"disabled", "succeeded", "partial", "fallback", "failed"}:
+        return cast(RerankerTraceStatus, value)
+    return None
+
+
+def _non_negative_int(value: object) -> int:
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
+def _non_negative_float_or_none(value: object) -> float | None:
+    if isinstance(value, int | float) and value >= 0:
+        return float(value)
+    return None
 
 
 def _strategy_sequence(plan: RetrievalPlan) -> tuple[RetrievalStrategy, ...]:
