@@ -3,16 +3,27 @@
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+**/.ruff_cache/
 .venv/
 venv/
 __pycache__/
 *.py[cod]
+*.egg-info/
+dist/
+build/
 
 .env
 .env.*
 !.env.example
 
+node_modules/
+web/node_modules/
+web/dist/
+coverage/
+*.log*
+Dockerfile*
+.dockerignore
+
 tools/data-checks/.venv/
 tools/data-checks/reports/*.json
 tools/data-checks/**/__pycache__/
-

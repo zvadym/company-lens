@@ -1,0 +1,16 @@
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+COPY reranker/pyproject.toml ./pyproject.toml
+COPY reranker/company_lens_reranker ./company_lens_reranker
+
+RUN pip install --no-cache-dir .
+
+EXPOSE 8080
+
+CMD ["uvicorn", "company_lens_reranker.app:app", "--host", "0.0.0.0", "--port", "8080"]

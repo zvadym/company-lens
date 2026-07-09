@@ -22,11 +22,12 @@ from company_lens.db.models import (
 )
 from company_lens.processing.text import content_hash
 from company_lens.retrieval.indexing import EmbeddingIndexingService
+from company_lens.retrieval.rerank import Reranker
 from company_lens.retrieval.schemas import EmbeddingIndexingRequest, RetrievalMode, RetrievalRequest
 from company_lens.retrieval.service import RetrievalService
 
 
-def run_benchmark(dataset_path: Path) -> dict[str, Any]:
+def run_benchmark(dataset_path: Path, *, reranker: Reranker | None = None) -> dict[str, Any]:
     payload = yaml.safe_load(dataset_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("Benchmark dataset must be a mapping.")
@@ -38,7 +39,7 @@ def run_benchmark(dataset_path: Path) -> dict[str, Any]:
         with factory() as session:
             _seed_dataset(session, payload)
             EmbeddingIndexingService(session=session).index_chunks(EmbeddingIndexingRequest())
-            return _evaluate(session, payload)
+            return _evaluate(session, payload, reranker=reranker)
 
 
 def print_benchmark_report(report: dict[str, Any]) -> None:
@@ -122,7 +123,12 @@ def _seed_dataset(session: Session, payload: dict[str, Any]) -> None:
     session.commit()
 
 
-def _evaluate(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
+def _evaluate(
+    session: Session,
+    payload: dict[str, Any],
+    *,
+    reranker: Reranker | None = None,
+) -> dict[str, Any]:
     modes: tuple[RetrievalMode, ...] = ("dense", "lexical", "hybrid")
     rows: list[dict[str, Any]] = []
     query_payloads = payload.get("queries", [])
@@ -132,7 +138,7 @@ def _evaluate(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
         duplicate_rates: list[float] = []
         started = time.perf_counter()
         for query_payload in query_payloads:
-            response = RetrievalService(session=session).retrieve(
+            response = RetrievalService(session=session, reranker=reranker).retrieve(
                 RetrievalRequest(
                     query=query_payload["query"],
                     mode=mode,

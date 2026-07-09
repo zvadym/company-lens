@@ -92,6 +92,7 @@ from company_lens.retrieval.embeddings import (
     build_embedder,
 )
 from company_lens.retrieval.indexing import EmbeddingIndexingService
+from company_lens.retrieval.rerank import build_reranker
 from company_lens.retrieval.schemas import (
     EmbeddingIndexingRequest,
     RetrievalFilters,
@@ -977,7 +978,11 @@ def _run_retrieve(args: argparse.Namespace) -> int:
 
     session_factory = build_session_factory(settings.database_url)
     with session_factory() as session:
-        response = RetrievalService(session=session, embedder=embedder).retrieve(request)
+        response = RetrievalService(
+            session=session,
+            embedder=embedder,
+            reranker=build_reranker(settings),
+        ).retrieve(request)
     print(json.dumps(response.model_dump(mode="json"), indent=2, sort_keys=True))
     return 0
 
@@ -998,7 +1003,11 @@ def _run_adaptive_retrieve(args: argparse.Namespace) -> int:
 
     session_factory = build_session_factory(settings.database_url)
     with session_factory() as session:
-        response = AdaptiveRetrievalService(session=session, embedder=embedder).retrieve(request)
+        response = AdaptiveRetrievalService(
+            session=session,
+            embedder=embedder,
+            reranker=build_reranker(settings),
+        ).retrieve(request)
     print(json.dumps(response.model_dump(mode="json"), indent=2, sort_keys=True))
     return 0
 

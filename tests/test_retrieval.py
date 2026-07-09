@@ -31,6 +31,7 @@ from company_lens.retrieval.embeddings import (
     build_embedder,
 )
 from company_lens.retrieval.indexing import EmbeddingIndexingService
+from company_lens.retrieval.rerank import RerankInput, RerankOutput
 from company_lens.retrieval.schemas import (
     EmbeddingIndexingRequest,
     RetrievalFilters,
@@ -215,6 +216,45 @@ def test_dedupe_removes_near_identical_results(session: Session) -> None:
     hashes = [result.content_hash for result in response.results]
     assert len(hashes) == len(set(hashes))
     assert response.diagnostics["deduped_candidates"] >= 1
+
+
+def test_reranker_can_reorder_candidates_and_preserve_metadata(session: Session) -> None:
+    _seed_corpus(session)
+
+    class PreferMacroeconomicReranker:
+        name = "prefer-macro-test"
+
+        def rerank(self, items: tuple[RerankInput, ...]) -> tuple[RerankOutput, ...]:
+            return tuple(
+                RerankOutput(
+                    chunk_id=item.chunk_id,
+                    score=10.0 if "Macroeconomic pressure" in item.text else 1.0,
+                )
+                for item in items
+            )
+
+    response = RetrievalService(
+        session=session,
+        reranker=PreferMacroeconomicReranker(),
+    ).retrieve(
+        RetrievalRequest(
+            query="competition security platform macroeconomic sales cycles",
+            mode="lexical",
+            top_k=2,
+        )
+    )
+
+    assert response.results
+    first = response.results[0]
+    assert first.text.startswith("Macroeconomic pressure")
+    assert first.company_display_name == "Cloudflare"
+    assert first.stable_source_id == "0001477333-26-000001"
+    assert first.source_url == "https://example.com/form10k.htm"
+    assert first.scores.reranker_score == 10.0
+    assert first.diagnostics.reranker_rank == 1
+    assert response.diagnostics["reranker"] == "prefer-macro-test"
+    assert response.diagnostics["reranker_status"] == "succeeded"
+    assert response.diagnostics["reranker_scored_count"] >= 2
 
 
 def test_cli_indexes_retrieves_and_runs_benchmark(

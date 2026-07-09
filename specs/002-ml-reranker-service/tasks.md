@@ -18,10 +18,10 @@
 
 **Purpose**: Prepare the repository layout and dependency boundaries without changing runtime behavior.
 
-- [ ] T001 Create the reranker service package scaffold in `reranker/company_lens_reranker/__init__.py`
-- [ ] T002 [P] Create the reranker service test package scaffold in `reranker/tests/__init__.py`
-- [ ] T003 [P] Add reranker-service package metadata and ML-only dependencies in `reranker/pyproject.toml`
-- [ ] T004 [P] Add the standalone reranker container build file in `Dockerfile.reranker`
+- [X] T001 Create the reranker service package scaffold in `reranker/company_lens_reranker/__init__.py`
+- [X] T002 [P] Create the reranker service test package scaffold in `reranker/tests/__init__.py`
+- [X] T003 [P] Add reranker-service package metadata and ML-only dependencies in `reranker/pyproject.toml`
+- [X] T004 [P] Add the standalone reranker container build file in `Dockerfile.reranker`
 
 ---
 
@@ -31,13 +31,13 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T005 Add reranker provider settings and validation defaults in `src/company_lens/config.py`
-- [ ] T006 [P] Add config coverage for provider defaults and invalid values in `tests/test_config.py`
-- [ ] T007 Define reranker status, diagnostics, request, response, and error types in `src/company_lens/retrieval/rerank.py`
-- [ ] T008 Extend retrieval response diagnostics fields for reranker status and counts in `src/company_lens/retrieval/schemas.py`
-- [ ] T009 Thread an optional reranker through adaptive retrieval construction in `src/company_lens/retrieval/adaptive.py`
-- [ ] T010 Wire configured reranker creation into the SQL research tools path in `src/company_lens/agent/tools.py`
-- [ ] T011 Wire configured reranker creation into CLI retrieval commands in `src/company_lens/cli.py`
+- [X] T005 Add reranker provider settings and validation defaults in `src/company_lens/config.py`
+- [X] T006 [P] Add config coverage for provider defaults and invalid values in `tests/test_config.py`
+- [X] T007 Define reranker status, diagnostics, request, response, and error types in `src/company_lens/retrieval/rerank.py`
+- [X] T008 Extend retrieval response diagnostics fields for reranker status and counts in `src/company_lens/retrieval/schemas.py`
+- [X] T009 Thread an optional reranker through adaptive retrieval construction in `src/company_lens/retrieval/adaptive.py`
+- [X] T010 Wire configured reranker creation into the SQL research tools path in `src/company_lens/agent/tools.py`
+- [X] T011 Wire configured reranker creation into CLI retrieval commands in `src/company_lens/cli.py`
 
 **Checkpoint**: Backend can still run with `noop` reranking and all user-story implementation can build on shared config/types.
 
@@ -51,17 +51,17 @@
 
 ### Tests for User Story 1
 
-- [ ] T012 [P] [US1] Add a fake reranker ordering test in `tests/test_retrieval.py`
-- [ ] T013 [P] [US1] Add a metadata-preservation assertion for reranked results in `tests/test_retrieval.py`
-- [ ] T014 [P] [US1] Add adaptive retrieval reranker propagation coverage in `tests/test_adaptive_retrieval.py`
+- [X] T012 [P] [US1] Add a fake reranker ordering test in `tests/test_retrieval.py`
+- [X] T013 [P] [US1] Add a metadata-preservation assertion for reranked results in `tests/test_retrieval.py`
+- [X] T014 [P] [US1] Add adaptive retrieval reranker propagation coverage in `tests/test_adaptive_retrieval.py`
 
 ### Implementation for User Story 1
 
-- [ ] T015 [US1] Update `_rerank` ordering to record accepted reranker scores and ranks in `src/company_lens/retrieval/service.py`
-- [ ] T016 [US1] Preserve original retrieval scores, source metadata, dedupe, and diversity behavior after reranking in `src/company_lens/retrieval/service.py`
-- [ ] T017 [US1] Pass the optional reranker from adaptive retrieval into `RetrievalService` in `src/company_lens/retrieval/adaptive.py`
-- [ ] T018 [US1] Pass the configured reranker from `SqlResearchTools.retrieve_documents` into `AdaptiveRetrievalService` in `src/company_lens/agent/tools.py`
-- [ ] T019 [US1] Update retrieval benchmark construction to accept configured reranking in `src/company_lens/retrieval/benchmark.py`
+- [X] T015 [US1] Update `_rerank` ordering to record accepted reranker scores and ranks in `src/company_lens/retrieval/service.py`
+- [X] T016 [US1] Preserve original retrieval scores, source metadata, dedupe, and diversity behavior after reranking in `src/company_lens/retrieval/service.py`
+- [X] T017 [US1] Pass the optional reranker from adaptive retrieval into `RetrievalService` in `src/company_lens/retrieval/adaptive.py`
+- [X] T018 [US1] Pass the configured reranker from `SqlResearchTools.retrieve_documents` into `AdaptiveRetrievalService` in `src/company_lens/agent/tools.py`
+- [X] T019 [US1] Update retrieval benchmark construction to accept configured reranking in `src/company_lens/retrieval/benchmark.py`
 
 **Checkpoint**: User Story 1 is independently functional through backend tests without the external ML service.
 
