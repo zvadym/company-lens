@@ -8,6 +8,8 @@
   and ask the user to create it.
 - When implementing a GitHub issue, create a new branch named `ID/short-description`.
 - Every commit for issue work must reference the issue as `#ID`.
+- Before committing, run the local quality gate with `make check`. Do not commit if it
+  fails; if the check cannot be run locally, state the reason explicitly before committing.
 - Add succinct code comments for non-obvious logic, invariants, fallbacks, state transitions,
   and domain-specific assumptions. Avoid comments that merely restate what the code already says.
 - When changing a file longer than 250 lines, first try to split cohesive logic into smaller

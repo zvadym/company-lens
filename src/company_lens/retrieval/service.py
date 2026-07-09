@@ -26,7 +26,12 @@ from company_lens.retrieval.embeddings import (
     cosine_similarity,
     vector_to_pg,
 )
-from company_lens.retrieval.rerank import NoopReranker, Reranker, RerankInput
+from company_lens.retrieval.rerank import (
+    NoopReranker,
+    RerankDiagnostics,
+    Reranker,
+    RerankInput,
+)
 from company_lens.retrieval.schemas import (
     RetrievalDiagnostics,
     RetrievalFilters,
@@ -109,6 +114,7 @@ class RetrievalService:
             lexical_candidates=lexical_candidates,
         )
         candidates = self._rerank(request, candidates)
+        reranker_diagnostics = self._reranker_diagnostics(candidates)
         contexts = self._contexts([candidate.chunk_id for candidate in candidates], request)
         candidates, deduped = self._dedupe(candidates, contexts, request)
         candidates, diversity_limited = self._apply_diversity(candidates, contexts, request)
@@ -133,6 +139,7 @@ class RetrievalService:
                 "stale_embeddings": stale_embeddings,
                 "warnings": tuple(warnings),
                 "reranker": self._reranker.name,
+                **reranker_diagnostics,
             },
         )
 
@@ -334,6 +341,33 @@ class RetrievalService:
         for index, candidate in enumerate(candidates):
             candidate.reranker_rank = index + 1
         return candidates
+
+    def _reranker_diagnostics(self, candidates: list[_Candidate]) -> dict[str, object]:
+        diagnostics = getattr(self._reranker, "last_diagnostics", None)
+        if isinstance(diagnostics, RerankDiagnostics):
+            return {
+                "reranker_provider": diagnostics.provider,
+                "reranker_name": diagnostics.name,
+                "reranker_status": diagnostics.status,
+                "reranker_model": diagnostics.model,
+                "reranker_candidate_count": diagnostics.candidate_count,
+                "reranker_scored_count": diagnostics.scored_count,
+                "reranker_latency_ms": diagnostics.latency_ms,
+                "reranker_fallback_reason": diagnostics.fallback_reason,
+                "reranker_warnings": diagnostics.warnings,
+            }
+        scored_count = sum(1 for candidate in candidates if candidate.reranker_score is not None)
+        return {
+            "reranker_provider": "custom",
+            "reranker_name": self._reranker.name,
+            "reranker_status": "succeeded",
+            "reranker_model": None,
+            "reranker_candidate_count": len(candidates),
+            "reranker_scored_count": scored_count,
+            "reranker_latency_ms": None,
+            "reranker_fallback_reason": None,
+            "reranker_warnings": (),
+        }
 
     def _contexts(
         self,

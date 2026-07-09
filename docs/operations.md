@@ -99,11 +99,25 @@ are retryable. Validation, authentication, and other HTTP 4xx failures fail imme
 | FRED | `FRED_REQUEST_TIMEOUT_SECONDS` | shared retry policy | yes | macro branch may become partial |
 | OpenAI model | purpose-specific timeout | LangGraph workflow | yes | repair, partial result, or abstention |
 | OpenAI embeddings | embedding timeout | shared retry policy | yes | indexing batch fails without partial write |
+| Reranker service | `COMPANY_LENS_RERANKER_TIMEOUT_SECONDS` | retrieval boundary | no | first-stage ordering unless fail-closed |
 
 Ingestion uses stable source identities, hashes, uniqueness constraints, and transactions so a
 repeated command updates or reuses existing records rather than duplicating them. Research state is
 checkpointed in PostgreSQL. A worker that receives the same run resumes pending nodes and does not
 repeat completed tool calls.
+
+### Reranker operations
+
+The backend defaults to `COMPANY_LENS_RERANKER_PROVIDER=noop`. HTTP reranking is optional and runs
+through the separate `reranker` Compose profile or an equivalent internal service URL. Keep
+`COMPANY_LENS_RERANKER_FAIL_CLOSED=false` for normal product usage so retrieval falls back to
+first-stage ordering on connection failures, timeouts, non-2xx responses, invalid JSON, or partial
+provider output. Use `true` only for evaluation runs that must fail when reranking is not active.
+
+Reranker diagnostics may include provider, status, model identity, candidate count, scored count,
+latency, fallback reason, warning codes, final reranker score, and final reranker rank. They must not
+include raw retrieved text, raw reranker request or response payloads, provider exception details,
+credentials, stack traces, or hidden reasoning.
 
 ### Cache policy
 

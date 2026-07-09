@@ -35,6 +35,7 @@ from company_lens.retrieval.adaptive_schemas import (
     ResolvedQuery,
 )
 from company_lens.retrieval.embeddings import Embedder
+from company_lens.retrieval.rerank import build_reranker
 from company_lens.retrieval.resolution import EntityResolver, public_company_resolution
 
 
@@ -161,6 +162,7 @@ class SqlResearchTools:
             lambda session: AdaptiveRetrievalService(
                 session=session,
                 embedder=self._embedder,
+                reranker=(build_reranker(self._settings) if self._settings is not None else None),
             ).retrieve(request)
         )
 

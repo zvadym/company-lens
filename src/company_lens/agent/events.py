@@ -380,6 +380,11 @@ def _result_summary(state: AgentState, outcome: BranchOutcome) -> dict[str, obje
                     "reason": attempt.reason,
                     "evidence_count": attempt.evidence_count,
                     "context_tokens": attempt.context_tokens,
+                    "reranker": (
+                        attempt.reranker.model_dump(mode="json")
+                        if attempt.reranker is not None
+                        else None
+                    ),
                 }
                 for attempt in trace.attempts
             ),

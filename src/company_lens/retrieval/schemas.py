@@ -153,4 +153,13 @@ class RetrievalResponse(BaseModel):
     @model_validator(mode="after")
     def _result_count_matches_diagnostics(self) -> RetrievalResponse:
         self.diagnostics.setdefault("result_count", len(self.results))
+        self.diagnostics.setdefault("reranker_provider", None)
+        self.diagnostics.setdefault("reranker_name", None)
+        self.diagnostics.setdefault("reranker_status", None)
+        self.diagnostics.setdefault("reranker_model", None)
+        self.diagnostics.setdefault("reranker_candidate_count", 0)
+        self.diagnostics.setdefault("reranker_scored_count", 0)
+        self.diagnostics.setdefault("reranker_latency_ms", None)
+        self.diagnostics.setdefault("reranker_fallback_reason", None)
+        self.diagnostics.setdefault("reranker_warnings", ())
         return self

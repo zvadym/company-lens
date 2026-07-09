@@ -97,6 +97,10 @@ class Settings(BaseSettings):
         default="openai-text-embedding-3-small-384.v1",
         min_length=1,
     )
+    reranker_provider: Literal["noop", "http"] = Field(default="noop")
+    reranker_url: str = Field(default="http://reranker:8080", min_length=1)
+    reranker_timeout_seconds: float = Field(default=2.0, gt=0, le=60)
+    reranker_fail_closed: bool = Field(default=False)
     research_run_timeout_seconds: int = Field(default=600, ge=10, le=24 * 60 * 60)
     research_worker_poll_seconds: float = Field(default=1.0, gt=0, le=60)
     research_worker_lease_seconds: int = Field(default=60, ge=10, le=60 * 60)

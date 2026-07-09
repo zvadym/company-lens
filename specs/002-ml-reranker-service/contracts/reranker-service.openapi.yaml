@@ -1,0 +1,151 @@
+openapi: 3.1.0
+info:
+  title: CompanyLens Internal Reranker Service
+  version: 0.1.0
+  description: Internal service contract for scoring query-document relevance candidates.
+servers:
+  - url: http://reranker:8080
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: health
+      responses:
+        "200":
+          description: Service is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /ready:
+    get:
+      summary: Readiness check
+      operationId: ready
+      responses:
+        "200":
+          description: Model is ready for scoring.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+        "503":
+          description: Model is not ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /rerank:
+    post:
+      summary: Score candidate chunks for one query
+      operationId: rerank
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RerankRequest"
+      responses:
+        "200":
+          description: Candidate scores.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RerankResponse"
+        "400":
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: Request payload too large.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Scoring failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
+    ReadyResponse:
+      type: object
+      required: [status, model]
+      properties:
+        status:
+          type: string
+          const: ready
+        model:
+          type: string
+          minLength: 1
+    RerankRequest:
+      type: object
+      required: [query, items]
+      additionalProperties: false
+      properties:
+        query:
+          type: string
+          minLength: 1
+        items:
+          type: array
+          maxItems: 500
+          items:
+            $ref: "#/components/schemas/RerankItem"
+    RerankItem:
+      type: object
+      required: [id, text]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          minLength: 1
+        text:
+          type: string
+          minLength: 1
+    RerankResponse:
+      type: object
+      required: [model, scores]
+      additionalProperties: false
+      properties:
+        model:
+          type: string
+          minLength: 1
+        scores:
+          type: array
+          items:
+            $ref: "#/components/schemas/RerankScore"
+    RerankScore:
+      type: object
+      required: [id, score]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          minLength: 1
+        score:
+          type: number
+          format: double
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              minLength: 1
+            message:
+              type: string
+              minLength: 1

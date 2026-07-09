@@ -29,6 +29,7 @@ from company_lens.processing.text import content_hash
 from company_lens.retrieval.adaptive import AdaptiveRetrievalService
 from company_lens.retrieval.adaptive_schemas import AdaptiveRetrievalRequest
 from company_lens.retrieval.planning import RetrievalPlanner
+from company_lens.retrieval.rerank import RerankInput, RerankOutput
 from company_lens.retrieval.resolution import EntityResolver
 
 
@@ -166,6 +167,39 @@ def test_detailed_context_orders_summaries_before_source_chunks(session: Session
     assert "chunk" in kinds
     assert kinds.index("document_summary") < kinds.index("section_summary") < kinds.index("chunk")
     assert all(item.citation_label and item.source_url for item in response.context)
+
+
+def test_adaptive_retrieval_passes_reranker_to_chunk_search(session: Session) -> None:
+    class PreferFastlyReranker:
+        name = "prefer-fastly-test"
+
+        def __init__(self) -> None:
+            self.seen_texts: list[str] = []
+
+        def rerank(self, items: tuple[RerankInput, ...]) -> tuple[RerankOutput, ...]:
+            self.seen_texts.extend(item.text for item in items)
+            return tuple(
+                RerankOutput(
+                    chunk_id=item.chunk_id,
+                    score=10.0 if "Fastly faces competition" in item.text else 1.0,
+                )
+                for item in items
+            )
+
+    reranker = PreferFastlyReranker()
+    response = AdaptiveRetrievalService(
+        session=session,
+        reranker=reranker,
+    ).retrieve(AdaptiveRetrievalRequest(query="Cloudflare Fastly competition evidence"))
+
+    chunks = [item for item in response.context if item.kind == "chunk"]
+    assert chunks
+    assert any("Fastly faces competition" in text for text in reranker.seen_texts)
+    assert response.trace.attempts[0].reranker is not None
+    assert response.trace.attempts[0].reranker.provider == "custom"
+    assert response.trace.attempts[0].reranker.status == "succeeded"
+    assert response.trace.attempts[0].reranker.candidate_count >= len(chunks)
+    assert response.trace.attempts[0].reranker.scored_count >= len(chunks)
 
 
 def test_comparative_questions_receive_larger_context_budget(session: Session) -> None:

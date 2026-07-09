@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import create_engine
@@ -31,6 +32,13 @@ from company_lens.retrieval.embeddings import (
     build_embedder,
 )
 from company_lens.retrieval.indexing import EmbeddingIndexingService
+from company_lens.retrieval.rerank import (
+    HttpReranker,
+    RerankDiagnostics,
+    RerankerError,
+    RerankInput,
+    RerankOutput,
+)
 from company_lens.retrieval.schemas import (
     EmbeddingIndexingRequest,
     RetrievalFilters,
@@ -217,6 +225,276 @@ def test_dedupe_removes_near_identical_results(session: Session) -> None:
     assert response.diagnostics["deduped_candidates"] >= 1
 
 
+def test_reranker_can_reorder_candidates_and_preserve_metadata(session: Session) -> None:
+    _seed_corpus(session)
+
+    class PreferMacroeconomicReranker:
+        name = "prefer-macro-test"
+
+        def rerank(self, items: tuple[RerankInput, ...]) -> tuple[RerankOutput, ...]:
+            return tuple(
+                RerankOutput(
+                    chunk_id=item.chunk_id,
+                    score=10.0 if "Macroeconomic pressure" in item.text else 1.0,
+                )
+                for item in items
+            )
+
+    response = RetrievalService(
+        session=session,
+        reranker=PreferMacroeconomicReranker(),
+    ).retrieve(
+        RetrievalRequest(
+            query="competition security platform macroeconomic sales cycles",
+            mode="lexical",
+            top_k=2,
+        )
+    )
+
+    assert response.results
+    first = response.results[0]
+    assert first.text.startswith("Macroeconomic pressure")
+    assert first.company_display_name == "Cloudflare"
+    assert first.stable_source_id == "0001477333-26-000001"
+    assert first.source_url == "https://example.com/form10k.htm"
+    assert first.scores.reranker_score == 10.0
+    assert first.diagnostics.reranker_rank == 1
+    assert response.diagnostics["reranker"] == "prefer-macro-test"
+    assert response.diagnostics["reranker_status"] == "succeeded"
+    assert response.diagnostics["reranker_scored_count"] >= 2
+
+
+def test_successful_reranker_diagnostics_include_counts_model_scores_and_ranks(
+    session: Session,
+) -> None:
+    _seed_corpus(session)
+
+    class DiagnosticsReranker:
+        name = "diagnostics-test"
+
+        def __init__(self) -> None:
+            self.last_diagnostics = RerankDiagnostics(
+                provider="test",
+                name=self.name,
+                status="disabled",
+                candidate_count=0,
+                scored_count=0,
+            )
+
+        def rerank(self, items: tuple[RerankInput, ...]) -> tuple[RerankOutput, ...]:
+            outputs = tuple(
+                RerankOutput(
+                    chunk_id=item.chunk_id,
+                    score=20.0 if "Competition from security" in item.text else 1.0,
+                )
+                for item in items
+            )
+            self.last_diagnostics = RerankDiagnostics(
+                provider="test",
+                name=self.name,
+                status="succeeded",
+                model="fake-cross-encoder",
+                candidate_count=len(items),
+                scored_count=len(outputs),
+                latency_ms=12.5,
+            )
+            return outputs
+
+    response = RetrievalService(
+        session=session,
+        reranker=DiagnosticsReranker(),
+    ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical", top_k=2))
+
+    assert response.diagnostics["reranker_provider"] == "test"
+    assert response.diagnostics["reranker_status"] == "succeeded"
+    assert response.diagnostics["reranker_model"] == "fake-cross-encoder"
+    assert response.diagnostics["reranker_candidate_count"] >= 2
+    assert (
+        response.diagnostics["reranker_scored_count"]
+        == response.diagnostics["reranker_candidate_count"]
+    )
+    assert response.diagnostics["reranker_latency_ms"] == 12.5
+    assert response.diagnostics["reranker_fallback_reason"] is None
+    assert response.results[0].scores.reranker_score == 20.0
+    assert response.results[0].diagnostics.reranker_rank == 1
+
+
+def test_reranker_diagnostics_exclude_raw_text_and_payloads(session: Session) -> None:
+    _seed_corpus(session)
+
+    class PrivacyReranker:
+        name = "privacy-test"
+
+        def rerank(self, items: tuple[RerankInput, ...]) -> tuple[RerankOutput, ...]:
+            return tuple(RerankOutput(chunk_id=item.chunk_id, score=item.score) for item in items)
+
+    response = RetrievalService(
+        session=session,
+        reranker=PrivacyReranker(),
+    ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical"))
+
+    diagnostics_json = json.dumps(response.diagnostics, default=str)
+    assert "Competition from security and cloud platform vendors" not in diagnostics_json
+    assert "Macroeconomic pressure" not in diagnostics_json
+    assert '"items"' not in diagnostics_json
+    assert '"text"' not in diagnostics_json
+
+
+def test_noop_reranker_records_disabled_diagnostics(session: Session) -> None:
+    _seed_corpus(session)
+
+    response = RetrievalService(session=session).retrieve(
+        RetrievalRequest(query="competition security vendors", mode="lexical")
+    )
+
+    assert response.results
+    assert response.diagnostics["reranker_provider"] == "noop"
+    assert response.diagnostics["reranker_status"] == "disabled"
+    assert response.diagnostics["reranker_candidate_count"] >= len(response.results)
+    assert response.diagnostics["reranker_scored_count"] >= len(response.results)
+
+
+def test_http_reranker_timeout_falls_back_to_first_stage_order(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed_corpus(session)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("private timeout detail")
+
+    _patch_http_client(monkeypatch, handler)
+    response = RetrievalService(
+        session=session,
+        reranker=HttpReranker(
+            url="http://reranker.test",
+            timeout_seconds=0.1,
+            fail_closed=False,
+        ),
+    ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical"))
+
+    assert response.results
+    assert response.diagnostics["reranker_status"] == "fallback"
+    assert response.diagnostics["reranker_fallback_reason"] == "reranker_request_failed"
+    assert "reranker_request_failed" in response.diagnostics["reranker_warnings"]
+    assert "private timeout detail" not in json.dumps(response.diagnostics, default=str)
+
+
+def test_http_reranker_service_unavailable_falls_back_without_raw_payload(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed_corpus(session)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="provider internal outage detail")
+
+    _patch_http_client(monkeypatch, handler)
+    response = RetrievalService(
+        session=session,
+        reranker=HttpReranker(
+            url="http://reranker.test",
+            timeout_seconds=1.0,
+            fail_closed=False,
+        ),
+    ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical"))
+
+    assert response.results
+    assert response.diagnostics["reranker_status"] == "fallback"
+    assert response.diagnostics["reranker_fallback_reason"] == "reranker_request_failed"
+    assert "provider internal outage detail" not in json.dumps(response.diagnostics, default=str)
+
+
+def test_http_reranker_invalid_json_falls_back(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed_corpus(session)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not-json")
+
+    _patch_http_client(monkeypatch, handler)
+    response = RetrievalService(
+        session=session,
+        reranker=HttpReranker(
+            url="http://reranker.test",
+            timeout_seconds=1.0,
+            fail_closed=False,
+        ),
+    ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical"))
+
+    assert response.results
+    assert response.diagnostics["reranker_status"] == "fallback"
+    assert response.diagnostics["reranker_fallback_reason"] == "reranker_request_failed"
+
+
+def test_http_reranker_partial_response_keeps_results_with_warnings(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed_corpus(session)
+    captured_ids: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        captured_ids.extend(str(item["id"]) for item in payload["items"])
+        return httpx.Response(
+            200,
+            json={
+                "model": "test-reranker",
+                "scores": [
+                    {"id": captured_ids[0], "score": 10.0},
+                    {"id": captured_ids[0], "score": 99.0},
+                    {"id": "unknown", "score": 5.0},
+                    {"id": captured_ids[1], "score": "not-number"},
+                ],
+            },
+        )
+
+    _patch_http_client(monkeypatch, handler)
+    response = RetrievalService(
+        session=session,
+        reranker=HttpReranker(
+            url="http://reranker.test",
+            timeout_seconds=1.0,
+            fail_closed=False,
+        ),
+    ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical"))
+
+    assert response.results
+    assert response.diagnostics["reranker_status"] == "partial"
+    assert response.diagnostics["reranker_model"] == "test-reranker"
+    assert response.diagnostics["reranker_scored_count"] == 1
+    assert set(response.diagnostics["reranker_warnings"]) >= {
+        "duplicate_score_id",
+        "unknown_score_id",
+        "invalid_score_value",
+        "missing_score_id",
+    }
+
+
+def test_http_reranker_fail_closed_raises_sanitized_error(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed_corpus(session)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("private connection detail")
+
+    _patch_http_client(monkeypatch, handler)
+    with pytest.raises(RerankerError, match="Reranker request failed"):
+        RetrievalService(
+            session=session,
+            reranker=HttpReranker(
+                url="http://reranker.test",
+                timeout_seconds=0.1,
+                fail_closed=True,
+            ),
+        ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical"))
+
+
 def test_cli_indexes_retrieves_and_runs_benchmark(
     session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -283,7 +561,32 @@ def test_benchmark_runs_all_modes() -> None:
     report = run_benchmark(Path("evals/retrieval/golden/synthetic.yaml"))
 
     assert {row["mode"] for row in report["rows"]} == {"dense", "lexical", "hybrid"}
+    assert {row["variant"] for row in report["rows"]} == {"configured"}
     assert all(row["queries"] == 3 for row in report["rows"])
+
+
+def test_benchmark_can_compare_baseline_and_reranked_runs() -> None:
+    class BenchmarkReranker:
+        name = "benchmark-test"
+
+        def rerank(self, items: tuple[RerankInput, ...]) -> tuple[RerankOutput, ...]:
+            return tuple(
+                RerankOutput(chunk_id=item.chunk_id, score=float(index))
+                for index, item in enumerate(items, start=1)
+            )
+
+    report = run_benchmark(
+        Path("evals/retrieval/golden/synthetic.yaml"),
+        reranker=BenchmarkReranker(),
+        compare_reranker=True,
+    )
+
+    assert {row["variant"] for row in report["rows"]} == {"baseline", "reranked"}
+    assert len(report["rows"]) == 6
+    baseline_rows = [row for row in report["rows"] if row["variant"] == "baseline"]
+    reranked_rows = [row for row in report["rows"] if row["variant"] == "reranked"]
+    assert all(row["reranker"] == "noop-reranker-v1" for row in baseline_rows)
+    assert all(row["reranker"] == "benchmark-test" for row in reranked_rows)
 
 
 def _seed_corpus(session: Session, *, include_duplicate: bool = False) -> list[DocumentChunk]:
@@ -381,6 +684,19 @@ def _seed_corpus(session: Session, *, include_duplicate: bool = False) -> list[D
         chunks.append(chunk)
     session.commit()
     return chunks
+
+
+def _patch_http_client(
+    monkeypatch: pytest.MonkeyPatch,
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    real_client = httpx.Client
+    transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
+
+    def client_factory(*, timeout: float) -> httpx.Client:
+        return real_client(transport=transport, timeout=timeout)
+
+    monkeypatch.setattr("company_lens.retrieval.rerank.httpx.Client", client_factory)
 
 
 @pytest.fixture

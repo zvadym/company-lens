@@ -35,6 +35,30 @@ If host port `5432` is busy, run the stack with another exposed Postgres port:
 COMPANY_LENS_DEV_POSTGRES_PORT=5433 make start-dev-docker
 ```
 
+To opt into the separate ML reranker service locally, start the dev stack with the
+`reranker` Compose profile and point the backend at the internal service:
+
+```bash
+COMPOSE_PROFILES=reranker \
+COMPANY_LENS_RERANKER_PROVIDER=http \
+make start-dev-docker
+```
+
+The reranker image is built from `Dockerfile.reranker` and installs only the dependencies from
+`reranker/pyproject.toml`, including `sentence-transformers` and its Torch runtime. The API and
+worker images keep using `Dockerfile.dev` and do not install those ML dependencies. Model files are
+cached in the `reranker-model-cache` Docker volume mounted at `/models`; the first startup may
+download weights, while later restarts reuse the volume unless it is removed.
+
+Useful local overrides:
+
+```bash
+COMPANY_LENS_RERANKER_SERVICE_MODEL_NAME=cross-encoder/ms-marco-MiniLM-L6-v2
+COMPANY_LENS_RERANKER_SERVICE_BATCH_SIZE=16
+COMPANY_LENS_RERANKER_SERVICE_MAX_LENGTH=512
+COMPANY_LENS_RERANKER_TIMEOUT_SECONDS=2.0
+```
+
 For non-Docker development, start PostgreSQL, apply migrations, and run the API and worker from
 the repository root:
 

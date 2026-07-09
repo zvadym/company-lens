@@ -18,7 +18,7 @@ from company_lens.agent.schemas import (
 )
 from company_lens.analytics.schemas import ChartSpecification
 from company_lens.evidence.schemas import SourcePreview
-from company_lens.retrieval.adaptive_schemas import RetrievalStrategy
+from company_lens.retrieval.adaptive_schemas import RerankerTraceStatus, RetrievalStrategy
 
 
 class ApiModel(BaseModel):
@@ -290,6 +290,17 @@ class NodeStatusEventData(ApiModel):
     duration_ms: int | None = Field(default=None, ge=0)
 
 
+class RerankerTraceOutput(ApiModel):
+    provider: str | None = None
+    status: RerankerTraceStatus | None = None
+    model: str | None = None
+    candidate_count: int = Field(default=0, ge=0)
+    scored_count: int = Field(default=0, ge=0)
+    latency_ms: float | None = Field(default=None, ge=0)
+    fallback_reason: str | None = None
+    warnings: tuple[str, ...] = ()
+
+
 class RetrievalAttemptOutput(ApiModel):
     attempt: int = Field(ge=1)
     strategy: RetrievalStrategy
@@ -297,6 +308,7 @@ class RetrievalAttemptOutput(ApiModel):
     reason: str | None = None
     evidence_count: int = Field(ge=0)
     context_tokens: int = Field(ge=0)
+    reranker: RerankerTraceOutput | None = None
 
 
 class RetrievalToolResultSummary(ApiModel):
