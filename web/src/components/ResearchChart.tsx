@@ -19,7 +19,7 @@ import type { ChartSpecification } from "@/api/types";
 
 import { chartData, displaySeriesLabel, formatChartValue } from "./researchChartFormatting";
 
-const colors = ["#c94f2c", "#245c4d", "#7a6fc2", "#b78a1f", "#347a9a"];
+const colors = ["#111827", "#4b5563", "#6b7280", "#9ca3af", "#030712"];
 
 function Series({ chart }: { chart: ChartSpecification }) {
   if (chart.chart_type === "bar") {
@@ -74,18 +74,18 @@ export default function ResearchChart({ chart }: { chart: ChartSpecification }) 
   const data = chartData(chart);
   const common = (
     <>
-      <CartesianGrid stroke="#d8d2c5" strokeDasharray="2 5" vertical={false} />
-      <XAxis dataKey="x" minTickGap={28} tick={{ fill: "#65645f", fontSize: 11 }} />
+      <CartesianGrid stroke="#e5e7eb" strokeDasharray="2 5" vertical={false} />
+      <XAxis dataKey="x" minTickGap={28} tick={{ fill: "#4b5563", fontSize: 11 }} />
       <YAxis
-        tick={{ fill: "#65645f", fontSize: 11 }}
+        tick={{ fill: "#4b5563", fontSize: 11 }}
         tickFormatter={formatChartValue}
         width={52}
       />
       <Tooltip
         contentStyle={{
-          background: "#fffdf8",
-          border: "1px solid #cdc6b7",
-          borderRadius: 2,
+          background: "#ffffff",
+          border: "1px solid #d8dce3",
+          borderRadius: 12,
           fontFamily: "IBM Plex Sans Variable",
           fontSize: 12,
         }}
@@ -103,7 +103,13 @@ export default function ResearchChart({ chart }: { chart: ChartSpecification }) 
         <h3 id="chart-title">{chart.title}</h3>
       </figcaption>
       <div className="chart-canvas" role="img" aria-label={`${chart.title}. ${chart.series.length} series.`}>
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer
+          width="100%"
+          height="100%"
+          minWidth={0}
+          minHeight={320}
+          initialDimension={{ width: 720, height: 320 }}
+        >
           {chart.chart_type === "bar" ? (
             <BarChart data={data}>{common}</BarChart>
           ) : chart.chart_type === "area" ? (

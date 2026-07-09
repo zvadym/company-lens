@@ -204,13 +204,13 @@ test("submits a question and renders streamed execution detail", async ({ page }
   });
 
   await page.goto("/research/new");
-  await page.getByRole("button", { name: /compare cloudflare revenue growth/i }).click();
+  await page.getByRole("button", { name: /show cloudflare revenue growth/i }).click();
   await expect(page).toHaveURL(new RegExp(`/research/${sessionId}\\?run=${firstRunId}$`));
   expect(posts[0]).toEqual({
-    question: "Compare Cloudflare revenue growth over the last eight quarters.",
+    question: "Show Cloudflare revenue growth over the last four quarters.",
   });
   await expect(page.getByRole("navigation", { name: "Research history" })).toContainText(
-    "Compare Cloudflare revenue growth",
+    "Show Cloudflare revenue growth",
   );
   await expect(page.getByText(/Intent · structured only/i)).toHaveCount(0);
   await expect(page.getByText("CompanyLens synthesis")).toHaveCount(0);
@@ -239,7 +239,7 @@ test("submits a question and renders streamed execution detail", async ({ page }
   await expect(page.getByText("What about margins?")).toBeVisible();
   await expect(
     page.locator(".thread-root")
-      .getByText("Compare Cloudflare revenue growth over the last eight quarters.", {
+      .getByText("Show Cloudflare revenue growth over the last four quarters.", {
         exact: true,
       }),
   ).toBeVisible();

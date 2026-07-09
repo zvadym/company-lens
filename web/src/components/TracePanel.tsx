@@ -87,16 +87,13 @@ export function TracePanel({ events, connection }: {
     <section className="inspector-section" aria-labelledby="trace-title">
       <div className="inspector-heading">
         <div>
-          <span className="eyebrow">Live methodology</span>
+          <span className="eyebrow">Live trace</span>
           <h2 id="trace-title">Execution trace</h2>
         </div>
         <span className={`connection-pill is-${connection}`}>
           <span aria-hidden="true" />{connection}
         </span>
       </div>
-      <p className="privacy-note">
-        Structured decisions and tool outcomes only. Private model reasoning is never exposed.
-      </p>
       {visibleEvents.length === 0 ? (
         <div className="inspector-empty">
           <BrainCircuit size={22} />

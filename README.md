@@ -23,6 +23,8 @@ structured SEC facts and deterministic calculations. Hybrid questions can combin
 company filings, SEC Company Facts, FRED macro series, charts, and citation validation
 inside one bounded agent run.
 
+![CompanyLens research UI](docs/Screenshot.png)
+
 ## What It Shows
 
 - **Adaptive Retrieval**: exact entity filters, dense vector search, lexical search,
