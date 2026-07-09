@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://company-lens.local/schemas/evaluation-execution.v1.json",
+  "title": "CompanyLens Evaluation Execution",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "execution_id",
+    "started_at",
+    "completed_at",
+    "status",
+    "gate_status",
+    "manifest",
+    "runs",
+    "failure_codes",
+    "artifact_paths"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "execution_id": { "type": "string", "format": "uuid" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "status": { "enum": ["completed", "partial", "errored"] },
+    "gate_status": { "enum": ["passed", "failed", "not_evaluated"] },
+    "manifest": { "$ref": "#/$defs/manifest" },
+    "runs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/datasetRun" }
+    },
+    "failure_codes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+    },
+    "artifact_paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["json", "markdown"],
+      "properties": {
+        "json": { "type": "string" },
+        "markdown": { "type": "string" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "completed" } } },
+      "then": { "properties": { "gate_status": { "enum": ["passed", "failed"] } } },
+      "else": { "properties": { "gate_status": { "const": "not_evaluated" } } }
+    }
+  ],
+  "$defs": {
+    "manifest": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "commit_sha",
+        "environment",
+        "datasets",
+        "gate",
+        "score_contract",
+        "models",
+        "versions",
+        "execution_policy"
+      ],
+      "properties": {
+        "commit_sha": { "type": "string", "minLength": 7 },
+        "source_ref": { "type": ["string", "null"] },
+        "environment": { "type": "string", "minLength": 1 },
+        "datasets": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+        "gate": { "type": "object" },
+        "score_contract": { "type": "object" },
+        "models": { "type": "object" },
+        "versions": { "type": "object" },
+        "execution_policy": { "type": "object" }
+      }
+    },
+    "datasetRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_name",
+        "dataset_version",
+        "status",
+        "gate_status",
+        "selected_case_ids",
+        "case_results",
+        "aggregate_scores"
+      ],
+      "properties": {
+        "dataset_name": { "type": "string", "minLength": 1 },
+        "dataset_version": { "type": "integer", "minimum": 1 },
+        "status": { "enum": ["completed", "partial", "errored"] },
+        "gate_status": { "enum": ["passed", "failed", "not_evaluated"] },
+        "selected_case_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "case_results": { "type": "array", "items": { "type": "object" } },
+        "aggregate_scores": {
+          "type": "object",
+          "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "langfuse_dataset_run_id": { "type": ["string", "null"] },
+        "langfuse_run_url": { "type": ["string", "null"], "format": "uri" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "completed" } } },
+          "then": { "properties": { "gate_status": { "enum": ["passed", "failed"] } } },
+          "else": { "properties": { "gate_status": { "const": "not_evaluated" } } }
+        }
+      ]
+    }
+  }
+}

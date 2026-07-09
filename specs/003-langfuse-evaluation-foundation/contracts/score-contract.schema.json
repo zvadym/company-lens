@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://company-lens.local/schemas/score-contract.v1.json",
+  "title": "CompanyLens Evaluation Score Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "version", "evaluator_version", "scores"],
+  "properties": {
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "version": { "type": "integer", "minimum": 1 },
+    "evaluator_version": { "type": "string", "minLength": 1 },
+    "scores": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/score" }
+    }
+  },
+  "$defs": {
+    "score": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "scope", "data_type", "applicability", "description"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 35,
+          "pattern": "^[A-Za-z0-9_.() -]+$"
+        },
+        "scope": { "enum": ["item", "run"] },
+        "data_type": { "enum": ["BOOLEAN", "NUMERIC", "CATEGORICAL"] },
+        "minimum": { "type": "number", "minimum": 0, "maximum": 1 },
+        "maximum": { "type": "number", "minimum": 0, "maximum": 1 },
+        "categories": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "applicability": {
+          "enum": [
+            "always",
+            "citation_required",
+            "follow_up",
+            "required_tools",
+            "prohibited_tools"
+          ]
+        },
+        "aggregation": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "data_type": { "const": "NUMERIC" } } },
+          "then": { "required": ["minimum", "maximum"] }
+        },
+        {
+          "if": { "properties": { "data_type": { "const": "CATEGORICAL" } } },
+          "then": { "required": ["categories"] }
+        },
+        {
+          "if": { "properties": { "scope": { "const": "run" } } },
+          "then": { "required": ["aggregation"] }
+        }
+      ]
+    }
+  }
+}
