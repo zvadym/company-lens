@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import create_engine
@@ -31,7 +32,7 @@ from company_lens.retrieval.embeddings import (
     build_embedder,
 )
 from company_lens.retrieval.indexing import EmbeddingIndexingService
-from company_lens.retrieval.rerank import RerankInput, RerankOutput
+from company_lens.retrieval.rerank import HttpReranker, RerankerError, RerankInput, RerankOutput
 from company_lens.retrieval.schemas import (
     EmbeddingIndexingRequest,
     RetrievalFilters,
@@ -257,6 +258,161 @@ def test_reranker_can_reorder_candidates_and_preserve_metadata(session: Session)
     assert response.diagnostics["reranker_scored_count"] >= 2
 
 
+def test_noop_reranker_records_disabled_diagnostics(session: Session) -> None:
+    _seed_corpus(session)
+
+    response = RetrievalService(session=session).retrieve(
+        RetrievalRequest(query="competition security vendors", mode="lexical")
+    )
+
+    assert response.results
+    assert response.diagnostics["reranker_provider"] == "noop"
+    assert response.diagnostics["reranker_status"] == "disabled"
+    assert response.diagnostics["reranker_candidate_count"] >= len(response.results)
+    assert response.diagnostics["reranker_scored_count"] >= len(response.results)
+
+
+def test_http_reranker_timeout_falls_back_to_first_stage_order(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed_corpus(session)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("private timeout detail")
+
+    _patch_http_client(monkeypatch, handler)
+    response = RetrievalService(
+        session=session,
+        reranker=HttpReranker(
+            url="http://reranker.test",
+            timeout_seconds=0.1,
+            fail_closed=False,
+        ),
+    ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical"))
+
+    assert response.results
+    assert response.diagnostics["reranker_status"] == "fallback"
+    assert response.diagnostics["reranker_fallback_reason"] == "reranker_request_failed"
+    assert "reranker_request_failed" in response.diagnostics["reranker_warnings"]
+    assert "private timeout detail" not in json.dumps(response.diagnostics, default=str)
+
+
+def test_http_reranker_service_unavailable_falls_back_without_raw_payload(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed_corpus(session)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="provider internal outage detail")
+
+    _patch_http_client(monkeypatch, handler)
+    response = RetrievalService(
+        session=session,
+        reranker=HttpReranker(
+            url="http://reranker.test",
+            timeout_seconds=1.0,
+            fail_closed=False,
+        ),
+    ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical"))
+
+    assert response.results
+    assert response.diagnostics["reranker_status"] == "fallback"
+    assert response.diagnostics["reranker_fallback_reason"] == "reranker_request_failed"
+    assert "provider internal outage detail" not in json.dumps(response.diagnostics, default=str)
+
+
+def test_http_reranker_invalid_json_falls_back(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed_corpus(session)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not-json")
+
+    _patch_http_client(monkeypatch, handler)
+    response = RetrievalService(
+        session=session,
+        reranker=HttpReranker(
+            url="http://reranker.test",
+            timeout_seconds=1.0,
+            fail_closed=False,
+        ),
+    ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical"))
+
+    assert response.results
+    assert response.diagnostics["reranker_status"] == "fallback"
+    assert response.diagnostics["reranker_fallback_reason"] == "reranker_request_failed"
+
+
+def test_http_reranker_partial_response_keeps_results_with_warnings(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed_corpus(session)
+    captured_ids: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        captured_ids.extend(str(item["id"]) for item in payload["items"])
+        return httpx.Response(
+            200,
+            json={
+                "model": "test-reranker",
+                "scores": [
+                    {"id": captured_ids[0], "score": 10.0},
+                    {"id": captured_ids[0], "score": 99.0},
+                    {"id": "unknown", "score": 5.0},
+                    {"id": captured_ids[1], "score": "not-number"},
+                ],
+            },
+        )
+
+    _patch_http_client(monkeypatch, handler)
+    response = RetrievalService(
+        session=session,
+        reranker=HttpReranker(
+            url="http://reranker.test",
+            timeout_seconds=1.0,
+            fail_closed=False,
+        ),
+    ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical"))
+
+    assert response.results
+    assert response.diagnostics["reranker_status"] == "partial"
+    assert response.diagnostics["reranker_model"] == "test-reranker"
+    assert response.diagnostics["reranker_scored_count"] == 1
+    assert set(response.diagnostics["reranker_warnings"]) >= {
+        "duplicate_score_id",
+        "unknown_score_id",
+        "invalid_score_value",
+        "missing_score_id",
+    }
+
+
+def test_http_reranker_fail_closed_raises_sanitized_error(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed_corpus(session)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("private connection detail")
+
+    _patch_http_client(monkeypatch, handler)
+    with pytest.raises(RerankerError, match="Reranker request failed"):
+        RetrievalService(
+            session=session,
+            reranker=HttpReranker(
+                url="http://reranker.test",
+                timeout_seconds=0.1,
+                fail_closed=True,
+            ),
+        ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical"))
+
+
 def test_cli_indexes_retrieves_and_runs_benchmark(
     session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -421,6 +577,19 @@ def _seed_corpus(session: Session, *, include_duplicate: bool = False) -> list[D
         chunks.append(chunk)
     session.commit()
     return chunks
+
+
+def _patch_http_client(
+    monkeypatch: pytest.MonkeyPatch,
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    real_client = httpx.Client
+    transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
+
+    def client_factory(*, timeout: float) -> httpx.Client:
+        return real_client(transport=transport, timeout=timeout)
+
+    monkeypatch.setattr("company_lens.retrieval.rerank.httpx.Client", client_factory)
 
 
 @pytest.fixture

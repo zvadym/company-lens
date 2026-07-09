@@ -75,18 +75,18 @@
 
 ### Tests for User Story 2
 
-- [ ] T020 [P] [US2] Add disabled-provider and noop diagnostics tests in `tests/test_retrieval.py`
-- [ ] T021 [P] [US2] Add HTTP timeout and service-unavailable fallback tests in `tests/test_retrieval.py`
-- [ ] T022 [P] [US2] Add invalid JSON, missing-score, duplicate-score, and unknown-ID fallback tests in `tests/test_retrieval.py`
-- [ ] T023 [P] [US2] Add strict fail-closed retrieval error tests in `tests/test_retrieval.py`
+- [X] T020 [P] [US2] Add disabled-provider and noop diagnostics tests in `tests/test_retrieval.py`
+- [X] T021 [P] [US2] Add HTTP timeout and service-unavailable fallback tests in `tests/test_retrieval.py`
+- [X] T022 [P] [US2] Add invalid JSON, missing-score, duplicate-score, and unknown-ID fallback tests in `tests/test_retrieval.py`
+- [X] T023 [P] [US2] Add strict fail-closed retrieval error tests in `tests/test_retrieval.py`
 
 ### Implementation for User Story 2
 
-- [ ] T024 [US2] Implement `HttpReranker` request execution, response validation, and sanitized error classification in `src/company_lens/retrieval/rerank.py`
-- [ ] T025 [US2] Implement graceful fallback versus strict fail-closed behavior in `src/company_lens/retrieval/rerank.py`
-- [ ] T026 [US2] Add response-level fallback diagnostics and warning codes in `src/company_lens/retrieval/service.py`
-- [ ] T027 [US2] Ensure provider exception strings and raw payloads are excluded from retrieval diagnostics in `src/company_lens/retrieval/service.py`
-- [ ] T028 [US2] Add OpenTelemetry-safe reranker call attributes in `src/company_lens/observability/telemetry.py`
+- [X] T024 [US2] Implement `HttpReranker` request execution, response validation, and sanitized error classification in `src/company_lens/retrieval/rerank.py`
+- [X] T025 [US2] Implement graceful fallback versus strict fail-closed behavior in `src/company_lens/retrieval/rerank.py`
+- [X] T026 [US2] Add response-level fallback diagnostics and warning codes in `src/company_lens/retrieval/service.py`
+- [X] T027 [US2] Ensure provider exception strings and raw payloads are excluded from retrieval diagnostics in `src/company_lens/retrieval/service.py`
+- [X] T028 [US2] Add OpenTelemetry-safe reranker call attributes in `src/company_lens/observability/telemetry.py`
 
 **Checkpoint**: User Story 2 is independently functional with fake HTTP failures and no real model service.
 

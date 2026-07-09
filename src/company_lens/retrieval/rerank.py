@@ -8,6 +8,7 @@ from typing import Any, Literal, Protocol
 import httpx
 
 from company_lens.config import Settings
+from company_lens.observability.telemetry import record_reranker_observation
 
 RerankStatus = Literal["disabled", "succeeded", "partial", "fallback", "failed"]
 
@@ -111,6 +112,7 @@ class HttpReranker:
                 response.raise_for_status()
                 payload = response.json()
             outputs, model, warnings = _parse_response(payload, items)
+            accepted_count = len(outputs)
             status: RerankStatus = "partial" if len(outputs) < len(items) else "succeeded"
             if len(outputs) < len(items):
                 outputs = _fill_missing_outputs(items, outputs)
@@ -120,10 +122,11 @@ class HttpReranker:
                 status=status,
                 model=model,
                 candidate_count=len(items),
-                scored_count=len(outputs),
+                scored_count=accepted_count,
                 latency_ms=(time.perf_counter() - started) * 1000,
                 warnings=warnings,
             )
+            _record_diagnostics(self.last_diagnostics)
             return outputs
         except RerankerError:
             raise
@@ -139,6 +142,7 @@ class HttpReranker:
                     fallback_reason="reranker_request_failed",
                     warnings=("reranker_request_failed",),
                 )
+                _record_diagnostics(self.last_diagnostics)
                 raise RerankerError("Reranker request failed.") from None
             self.last_diagnostics = RerankDiagnostics(
                 provider="http",
@@ -150,6 +154,7 @@ class HttpReranker:
                 fallback_reason="reranker_request_failed",
                 warnings=("reranker_request_failed",),
             )
+            _record_diagnostics(self.last_diagnostics)
             return tuple(RerankOutput(chunk_id=item.chunk_id, score=item.score) for item in items)
 
 
@@ -210,4 +215,16 @@ def _fill_missing_outputs(
     by_id = {output.chunk_id: output for output in outputs}
     return tuple(
         by_id.get(item.chunk_id, RerankOutput(item.chunk_id, item.score)) for item in items
+    )
+
+
+def _record_diagnostics(diagnostics: RerankDiagnostics) -> None:
+    record_reranker_observation(
+        provider=diagnostics.provider,
+        status=diagnostics.status,
+        candidate_count=diagnostics.candidate_count,
+        scored_count=diagnostics.scored_count,
+        model=diagnostics.model,
+        latency_ms=diagnostics.latency_ms,
+        fallback_reason=diagnostics.fallback_reason,
     )

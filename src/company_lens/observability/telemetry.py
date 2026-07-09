@@ -249,6 +249,29 @@ def record_model_usage(
     )
 
 
+def record_reranker_observation(
+    *,
+    provider: str,
+    status: str,
+    candidate_count: int,
+    scored_count: int,
+    model: str | None = None,
+    latency_ms: float | None = None,
+    fallback_reason: str | None = None,
+) -> None:
+    span = trace.get_current_span()
+    span.set_attribute("company_lens.reranker.provider", provider)
+    span.set_attribute("company_lens.reranker.status", status)
+    span.set_attribute("company_lens.reranker.candidate_count", candidate_count)
+    span.set_attribute("company_lens.reranker.scored_count", scored_count)
+    if model:
+        span.set_attribute("company_lens.reranker.model", model)
+    if latency_ms is not None:
+        span.set_attribute("company_lens.reranker.latency_ms", latency_ms)
+    if fallback_reason:
+        span.set_attribute("company_lens.reranker.fallback_reason", fallback_reason)
+
+
 @contextmanager
 def collect_model_usage() -> Iterator[list[ModelUsageRecord]]:
     # Eval runs mirror telemetry usage into observed JSON without coupling the agent to OpenAI.
