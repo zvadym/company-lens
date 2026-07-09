@@ -123,3 +123,11 @@ Agent context update script: skipped. This Spec Kit installation does not includ
 ## Complexity Tracking
 
 No constitution violations are required.
+
+## Implementation Notes
+
+Some touched files remain over 250 lines because they are existing integration aggregators:
+`src/company_lens/cli.py` centralizes CLI command registration and dispatch, and
+`tests/test_retrieval.py` shares one in-memory corpus fixture across retrieval integration cases.
+Splitting either during this feature would add churn outside the reranker boundary without reducing
+the risk of the reranker implementation.

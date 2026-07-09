@@ -342,6 +342,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Path to benchmark YAML dataset.",
     )
     benchmark_parser.add_argument("--output-json", type=Path, default=None)
+    benchmark_parser.add_argument(
+        "--enable-reranking",
+        action="store_true",
+        help="Run the benchmark with the configured reranker.",
+    )
+    benchmark_parser.add_argument(
+        "--compare-reranking",
+        action="store_true",
+        help="Report baseline and configured-reranker rows side by side.",
+    )
 
     # Keep validation available without requiring an evaluator runtime or database connection.
     golden_parser = subparsers.add_parser(
@@ -1028,7 +1038,13 @@ def _build_embedder(provider: str, settings: Settings) -> Embedder:
 
 def _run_benchmark_retrieval(args: argparse.Namespace) -> int:
     try:
-        report = run_benchmark(args.dataset)
+        settings = get_settings()
+        use_reranker = bool(args.enable_reranking or args.compare_reranking)
+        report = run_benchmark(
+            args.dataset,
+            reranker=build_reranker(settings) if use_reranker else None,
+            compare_reranker=bool(args.compare_reranking),
+        )
     except (OSError, ValueError) as exc:
         print(f"Retrieval benchmark failed: {exc}")
         return 1

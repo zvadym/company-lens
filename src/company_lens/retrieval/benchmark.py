@@ -22,12 +22,17 @@ from company_lens.db.models import (
 )
 from company_lens.processing.text import content_hash
 from company_lens.retrieval.indexing import EmbeddingIndexingService
-from company_lens.retrieval.rerank import Reranker
+from company_lens.retrieval.rerank import NoopReranker, Reranker
 from company_lens.retrieval.schemas import EmbeddingIndexingRequest, RetrievalMode, RetrievalRequest
 from company_lens.retrieval.service import RetrievalService
 
 
-def run_benchmark(dataset_path: Path, *, reranker: Reranker | None = None) -> dict[str, Any]:
+def run_benchmark(
+    dataset_path: Path,
+    *,
+    reranker: Reranker | None = None,
+    compare_reranker: bool = False,
+) -> dict[str, Any]:
     payload = yaml.safe_load(dataset_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("Benchmark dataset must be a mapping.")
@@ -39,14 +44,20 @@ def run_benchmark(dataset_path: Path, *, reranker: Reranker | None = None) -> di
         with factory() as session:
             _seed_dataset(session, payload)
             EmbeddingIndexingService(session=session).index_chunks(EmbeddingIndexingRequest())
-            return _evaluate(session, payload, reranker=reranker)
+            return _evaluate(
+                session,
+                payload,
+                reranker=reranker,
+                compare_reranker=compare_reranker,
+            )
 
 
 def print_benchmark_report(report: dict[str, Any]) -> None:
     rows = report["rows"]
-    print("mode      queries  recall@k  precision@k  duplicate_rate  latency_ms")
+    print("variant   mode      queries  recall@k  precision@k  duplicate_rate  latency_ms")
     for row in rows:
         print(
+            f"{row['variant']:<9} "
             f"{row['mode']:<9} "
             f"{row['queries']:>7} "
             f"{row['recall_at_k']:>9.3f} "
@@ -128,40 +139,55 @@ def _evaluate(
     payload: dict[str, Any],
     *,
     reranker: Reranker | None = None,
+    compare_reranker: bool = False,
 ) -> dict[str, Any]:
     modes: tuple[RetrievalMode, ...] = ("dense", "lexical", "hybrid")
     rows: list[dict[str, Any]] = []
     query_payloads = payload.get("queries", [])
-    for mode in modes:
-        recalls: list[float] = []
-        precisions: list[float] = []
-        duplicate_rates: list[float] = []
-        started = time.perf_counter()
-        for query_payload in query_payloads:
-            response = RetrievalService(session=session, reranker=reranker).retrieve(
-                RetrievalRequest(
-                    query=query_payload["query"],
-                    mode=mode,
-                    top_k=int(query_payload.get("top_k", 10)),
+    variants: tuple[tuple[str, Reranker | None], ...]
+    if compare_reranker:
+        variants = (("baseline", NoopReranker()), ("reranked", reranker))
+    else:
+        variants = (("configured", reranker),)
+    for variant, variant_reranker in variants:
+        for mode in modes:
+            recalls: list[float] = []
+            precisions: list[float] = []
+            duplicate_rates: list[float] = []
+            reranker_statuses: list[str] = []
+            started = time.perf_counter()
+            for query_payload in query_payloads:
+                response = RetrievalService(session=session, reranker=variant_reranker).retrieve(
+                    RetrievalRequest(
+                        query=query_payload["query"],
+                        mode=mode,
+                        top_k=int(query_payload.get("top_k", 10)),
+                    )
                 )
+                expected = set(query_payload.get("expected_chunk_keys", []))
+                actual = _result_chunk_keys(
+                    session,
+                    [result.chunk_id for result in response.results],
+                )
+                hits = expected & set(actual)
+                recalls.append(len(hits) / len(expected) if expected else 1.0)
+                precisions.append(len(hits) / len(actual) if actual else 0.0)
+                duplicate_rates.append(_duplicate_rate(actual))
+                reranker_statuses.append(str(response.diagnostics.get("reranker_status")))
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            rows.append(
+                {
+                    "variant": variant,
+                    "mode": mode,
+                    "reranker": variant_reranker.name if variant_reranker else None,
+                    "reranker_statuses": tuple(dict.fromkeys(reranker_statuses)),
+                    "queries": len(query_payloads),
+                    "recall_at_k": _average(recalls),
+                    "precision_at_k": _average(precisions),
+                    "duplicate_rate": _average(duplicate_rates),
+                    "latency_ms": elapsed_ms,
+                }
             )
-            expected = set(query_payload.get("expected_chunk_keys", []))
-            actual = _result_chunk_keys(session, [result.chunk_id for result in response.results])
-            hits = expected & set(actual)
-            recalls.append(len(hits) / len(expected) if expected else 1.0)
-            precisions.append(len(hits) / len(actual) if actual else 0.0)
-            duplicate_rates.append(_duplicate_rate(actual))
-        elapsed_ms = (time.perf_counter() - started) * 1000
-        rows.append(
-            {
-                "mode": mode,
-                "queries": len(query_payloads),
-                "recall_at_k": _average(recalls),
-                "precision_at_k": _average(precisions),
-                "duplicate_rate": _average(duplicate_rates),
-                "latency_ms": elapsed_ms,
-            }
-        )
     return {"dataset": payload.get("name", "unnamed"), "rows": rows}
 
 

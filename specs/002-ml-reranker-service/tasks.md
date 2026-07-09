@@ -100,19 +100,19 @@
 
 ### Tests for User Story 3
 
-- [ ] T029 [P] [US3] Add reranker service schema validation tests in `reranker/tests/test_schemas.py`
-- [ ] T030 [P] [US3] Add fake-model scoring and batching tests in `reranker/tests/test_scoring.py`
-- [ ] T031 [P] [US3] Add ASGI endpoint tests for health, readiness, and rerank responses in `reranker/tests/test_app.py`
-- [ ] T032 [P] [US3] Add Docker Compose configuration tests for optional reranker service wiring in `tests/test_config.py`
+- [X] T029 [P] [US3] Add reranker service schema validation tests in `reranker/tests/test_schemas.py`
+- [X] T030 [P] [US3] Add fake-model scoring and batching tests in `reranker/tests/test_scoring.py`
+- [X] T031 [P] [US3] Add ASGI endpoint tests for health, readiness, and rerank responses in `reranker/tests/test_app.py`
+- [X] T032 [P] [US3] Add Docker Compose configuration tests for optional reranker service wiring in `tests/test_config.py`
 
 ### Implementation for User Story 3
 
-- [ ] T033 [US3] Implement reranker request and response schemas in `reranker/company_lens_reranker/schemas.py`
-- [ ] T034 [US3] Implement lazy CrossEncoder loading and batched scoring in `reranker/company_lens_reranker/scoring.py`
-- [ ] T035 [US3] Implement `/health`, `/ready`, and `/rerank` endpoints in `reranker/company_lens_reranker/app.py`
-- [ ] T036 [US3] Configure `Dockerfile.reranker` to install only reranker-service dependencies from `reranker/pyproject.toml`
-- [ ] T037 [US3] Add optional reranker service, model cache volume, and backend environment variables in `docker-compose.dev.yml`
-- [ ] T038 [US3] Document local reranker startup and model-cache behavior in `web/README.md`
+- [X] T033 [US3] Implement reranker request and response schemas in `reranker/company_lens_reranker/schemas.py`
+- [X] T034 [US3] Implement lazy CrossEncoder loading and batched scoring in `reranker/company_lens_reranker/scoring.py`
+- [X] T035 [US3] Implement `/health`, `/ready`, and `/rerank` endpoints in `reranker/company_lens_reranker/app.py`
+- [X] T036 [US3] Configure `Dockerfile.reranker` to install only reranker-service dependencies from `reranker/pyproject.toml`
+- [X] T037 [US3] Add optional reranker service, model cache volume, and backend environment variables in `docker-compose.dev.yml`
+- [X] T038 [US3] Document local reranker startup and model-cache behavior in `web/README.md`
 
 **Checkpoint**: User Story 3 is independently functional through service unit tests and documented local Docker smoke validation.
 
@@ -126,16 +126,16 @@
 
 ### Tests for User Story 4
 
-- [ ] T039 [P] [US4] Add retrieval diagnostics assertions for candidate count, scored count, model identity, score, rank, and fallback reason in `tests/test_retrieval.py`
-- [ ] T040 [P] [US4] Add benchmark output coverage for baseline versus reranked runs in `tests/test_retrieval.py`
-- [ ] T041 [P] [US4] Add privacy assertions that diagnostics exclude raw chunk text and raw payloads in `tests/test_retrieval.py`
+- [X] T039 [P] [US4] Add retrieval diagnostics assertions for candidate count, scored count, model identity, score, rank, and fallback reason in `tests/test_retrieval.py`
+- [X] T040 [P] [US4] Add benchmark output coverage for baseline versus reranked runs in `tests/test_retrieval.py`
+- [X] T041 [P] [US4] Add privacy assertions that diagnostics exclude raw chunk text and raw payloads in `tests/test_retrieval.py`
 
 ### Implementation for User Story 4
 
-- [ ] T042 [US4] Add reranker provider, status, model, counts, latency, and fallback fields to retrieval diagnostics in `src/company_lens/retrieval/service.py`
-- [ ] T043 [US4] Add reranking comparison options to retrieval benchmark inputs and reports in `src/company_lens/retrieval/benchmark.py`
-- [ ] T044 [US4] Add CLI flags or settings pass-through for benchmark reranking comparison in `src/company_lens/cli.py`
-- [ ] T045 [US4] Update validation instructions for disabled, fake, and real reranker paths in `specs/002-ml-reranker-service/quickstart.md`
+- [X] T042 [US4] Add reranker provider, status, model, counts, latency, and fallback fields to retrieval diagnostics in `src/company_lens/retrieval/service.py`
+- [X] T043 [US4] Add reranking comparison options to retrieval benchmark inputs and reports in `src/company_lens/retrieval/benchmark.py`
+- [X] T044 [US4] Add CLI flags or settings pass-through for benchmark reranking comparison in `src/company_lens/cli.py`
+- [X] T045 [US4] Update validation instructions for disabled, fake, and real reranker paths in `specs/002-ml-reranker-service/quickstart.md`
 
 **Checkpoint**: User Story 4 is independently functional through diagnostics tests and benchmark comparison output.
 
@@ -145,12 +145,12 @@
 
 **Purpose**: Final validation, documentation, and graph maintenance across the completed feature.
 
-- [ ] T046 [P] Update backend configuration documentation for reranker settings in `README.md`
-- [ ] T047 [P] Update operations notes for reranker privacy and fallback behavior in `docs/operations.md`
-- [ ] T048 [P] Add a concise implementation note to the Spec Kit plan if any file over 250 lines was intentionally not split in `specs/002-ml-reranker-service/plan.md`
-- [ ] T049 Run focused backend and service checks from `specs/002-ml-reranker-service/quickstart.md`
-- [ ] T050 Run full backend quality gate with `make check` using `Makefile`
-- [ ] T051 Run `graphify update .` to refresh graph metadata after code changes in `graphify-out/graph.json`
+- [X] T046 [P] Update backend configuration documentation for reranker settings in `README.md`
+- [X] T047 [P] Update operations notes for reranker privacy and fallback behavior in `docs/operations.md`
+- [X] T048 [P] Add a concise implementation note to the Spec Kit plan if any file over 250 lines was intentionally not split in `specs/002-ml-reranker-service/plan.md`
+- [X] T049 Run focused backend and service checks from `specs/002-ml-reranker-service/quickstart.md`
+- [X] T050 Run full backend quality gate with `make check` using `Makefile`
+- [X] T051 Run `graphify update .` to refresh graph metadata after code changes in `graphify-out/graph.json`
 
 ---
 

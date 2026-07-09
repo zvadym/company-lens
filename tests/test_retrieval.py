@@ -32,7 +32,13 @@ from company_lens.retrieval.embeddings import (
     build_embedder,
 )
 from company_lens.retrieval.indexing import EmbeddingIndexingService
-from company_lens.retrieval.rerank import HttpReranker, RerankerError, RerankInput, RerankOutput
+from company_lens.retrieval.rerank import (
+    HttpReranker,
+    RerankDiagnostics,
+    RerankerError,
+    RerankInput,
+    RerankOutput,
+)
 from company_lens.retrieval.schemas import (
     EmbeddingIndexingRequest,
     RetrievalFilters,
@@ -258,6 +264,82 @@ def test_reranker_can_reorder_candidates_and_preserve_metadata(session: Session)
     assert response.diagnostics["reranker_scored_count"] >= 2
 
 
+def test_successful_reranker_diagnostics_include_counts_model_scores_and_ranks(
+    session: Session,
+) -> None:
+    _seed_corpus(session)
+
+    class DiagnosticsReranker:
+        name = "diagnostics-test"
+
+        def __init__(self) -> None:
+            self.last_diagnostics = RerankDiagnostics(
+                provider="test",
+                name=self.name,
+                status="disabled",
+                candidate_count=0,
+                scored_count=0,
+            )
+
+        def rerank(self, items: tuple[RerankInput, ...]) -> tuple[RerankOutput, ...]:
+            outputs = tuple(
+                RerankOutput(
+                    chunk_id=item.chunk_id,
+                    score=20.0 if "Competition from security" in item.text else 1.0,
+                )
+                for item in items
+            )
+            self.last_diagnostics = RerankDiagnostics(
+                provider="test",
+                name=self.name,
+                status="succeeded",
+                model="fake-cross-encoder",
+                candidate_count=len(items),
+                scored_count=len(outputs),
+                latency_ms=12.5,
+            )
+            return outputs
+
+    response = RetrievalService(
+        session=session,
+        reranker=DiagnosticsReranker(),
+    ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical", top_k=2))
+
+    assert response.diagnostics["reranker_provider"] == "test"
+    assert response.diagnostics["reranker_status"] == "succeeded"
+    assert response.diagnostics["reranker_model"] == "fake-cross-encoder"
+    assert response.diagnostics["reranker_candidate_count"] >= 2
+    assert (
+        response.diagnostics["reranker_scored_count"]
+        == response.diagnostics["reranker_candidate_count"]
+    )
+    assert response.diagnostics["reranker_latency_ms"] == 12.5
+    assert response.diagnostics["reranker_fallback_reason"] is None
+    assert response.results[0].scores.reranker_score == 20.0
+    assert response.results[0].diagnostics.reranker_rank == 1
+
+
+def test_reranker_diagnostics_exclude_raw_text_and_payloads(session: Session) -> None:
+    _seed_corpus(session)
+
+    class PrivacyReranker:
+        name = "privacy-test"
+
+        def rerank(self, items: tuple[RerankInput, ...]) -> tuple[RerankOutput, ...]:
+            return tuple(RerankOutput(chunk_id=item.chunk_id, score=item.score) for item in items)
+
+    response = RetrievalService(
+        session=session,
+        reranker=PrivacyReranker(),
+    ).retrieve(RetrievalRequest(query="competition security vendors", mode="lexical"))
+
+    diagnostics_json = json.dumps(response.diagnostics, default=str)
+    assert "Competition from security and cloud platform vendors" not in diagnostics_json
+    assert "Macroeconomic pressure" not in diagnostics_json
+    assert '"items"' not in diagnostics_json
+    assert '"text"' not in diagnostics_json
+
+
 def test_noop_reranker_records_disabled_diagnostics(session: Session) -> None:
     _seed_corpus(session)
 
@@ -479,7 +561,32 @@ def test_benchmark_runs_all_modes() -> None:
     report = run_benchmark(Path("evals/retrieval/golden/synthetic.yaml"))
 
     assert {row["mode"] for row in report["rows"]} == {"dense", "lexical", "hybrid"}
+    assert {row["variant"] for row in report["rows"]} == {"configured"}
     assert all(row["queries"] == 3 for row in report["rows"])
+
+
+def test_benchmark_can_compare_baseline_and_reranked_runs() -> None:
+    class BenchmarkReranker:
+        name = "benchmark-test"
+
+        def rerank(self, items: tuple[RerankInput, ...]) -> tuple[RerankOutput, ...]:
+            return tuple(
+                RerankOutput(chunk_id=item.chunk_id, score=float(index))
+                for index, item in enumerate(items, start=1)
+            )
+
+    report = run_benchmark(
+        Path("evals/retrieval/golden/synthetic.yaml"),
+        reranker=BenchmarkReranker(),
+        compare_reranker=True,
+    )
+
+    assert {row["variant"] for row in report["rows"]} == {"baseline", "reranked"}
+    assert len(report["rows"]) == 6
+    baseline_rows = [row for row in report["rows"] if row["variant"] == "baseline"]
+    reranked_rows = [row for row in report["rows"] if row["variant"] == "reranked"]
+    assert all(row["reranker"] == "noop-reranker-v1" for row in baseline_rows)
+    assert all(row["reranker"] == "benchmark-test" for row in reranked_rows)
 
 
 def _seed_corpus(session: Session, *, include_duplicate: bool = False) -> list[DocumentChunk]:

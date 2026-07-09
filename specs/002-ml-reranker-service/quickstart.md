@@ -32,6 +32,7 @@ Run focused tests for backend reranker integration:
 
 ```bash
 pytest tests/test_retrieval.py tests/test_config.py -q
+(cd reranker && pytest)
 ```
 
 Expected outcome:
@@ -46,10 +47,10 @@ Start the dev stack with the reranker service enabled once implementation adds t
 
 ```bash
 make migrate-dev-docker
-COMPANY_LENS_RERANKER_PROVIDER=http make start-dev-docker
+COMPOSE_PROFILES=reranker \
+COMPANY_LENS_RERANKER_PROVIDER=http \
+make start-dev-docker
 ```
-
-If a compose profile is used, include the documented profile flag from the implementation.
 
 Expected outcome:
 
@@ -67,6 +68,13 @@ make index-dev
 ```
 
 Run a retrieval benchmark or focused retrieval command once implementation exposes the reranker comparison path.
+
+```bash
+company-lens benchmark-retrieval \
+  --dataset evals/retrieval/golden/synthetic.yaml \
+  --compare-reranking \
+  --output-json /tmp/company-lens-reranking-report.json
+```
 
 Expected outcome:
 

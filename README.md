@@ -311,6 +311,30 @@ DEV_EMBEDDING_PROVIDER=local make index-dev
 The React app is available at `http://localhost:5173`; the API is available at
 `http://localhost:8000`.
 
+Reranking is disabled by default so the backend image stays free of Torch,
+Transformers, and `sentence-transformers`. To opt into the separate local ML
+reranker service:
+
+```bash
+COMPOSE_PROFILES=reranker \
+COMPANY_LENS_RERANKER_PROVIDER=http \
+make start-dev-docker
+```
+
+Backend settings:
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `COMPANY_LENS_RERANKER_PROVIDER` | `noop` | Selects disabled/noop or HTTP reranking. |
+| `COMPANY_LENS_RERANKER_URL` | `http://reranker:8080` | Internal reranker service URL. |
+| `COMPANY_LENS_RERANKER_TIMEOUT_SECONDS` | `2.0` | Bounds one reranker request. |
+| `COMPANY_LENS_RERANKER_FAIL_CLOSED` | `false` | Fallback by default; fail retrieval in strict evaluation. |
+
+The service image uses `Dockerfile.reranker`, reads `reranker/pyproject.toml`, and caches model
+weights in the `reranker-model-cache` Docker volume. Run
+`company-lens benchmark-retrieval --compare-reranking` to compare baseline and reranked retrieval
+rows on the synthetic benchmark.
+
 For local Python development:
 
 ```bash

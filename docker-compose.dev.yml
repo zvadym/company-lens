@@ -28,6 +28,10 @@ services:
       COMPANY_LENS_LANGFUSE_BASE_URL: ${COMPANY_LENS_LANGFUSE_BASE_URL:-${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}}
       COMPANY_LENS_LANGFUSE_PROMPTS_ENABLED: ${COMPANY_LENS_LANGFUSE_PROMPTS_ENABLED:-false}
       COMPANY_LENS_LANGFUSE_PROMPT_LABEL: ${COMPANY_LENS_LANGFUSE_PROMPT_LABEL:-production}
+      COMPANY_LENS_RERANKER_PROVIDER: ${COMPANY_LENS_RERANKER_PROVIDER:-noop}
+      COMPANY_LENS_RERANKER_URL: ${COMPANY_LENS_RERANKER_URL:-http://reranker:8080}
+      COMPANY_LENS_RERANKER_TIMEOUT_SECONDS: ${COMPANY_LENS_RERANKER_TIMEOUT_SECONDS:-2.0}
+      COMPANY_LENS_RERANKER_FAIL_CLOSED: ${COMPANY_LENS_RERANKER_FAIL_CLOSED:-false}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
@@ -95,6 +99,28 @@ services:
       api:
         condition: service_healthy
 
+  reranker:
+    build:
+      context: .
+      dockerfile: Dockerfile.reranker
+    profiles:
+      - reranker
+    environment:
+      COMPANY_LENS_RERANKER_SERVICE_MODEL_NAME: ${COMPANY_LENS_RERANKER_SERVICE_MODEL_NAME:-cross-encoder/ms-marco-MiniLM-L6-v2}
+      COMPANY_LENS_RERANKER_SERVICE_BATCH_SIZE: ${COMPANY_LENS_RERANKER_SERVICE_BATCH_SIZE:-16}
+      COMPANY_LENS_RERANKER_SERVICE_MAX_LENGTH: ${COMPANY_LENS_RERANKER_SERVICE_MAX_LENGTH:-512}
+      SENTENCE_TRANSFORMERS_HOME: /models
+    ports:
+      - "${COMPANY_LENS_RERANKER_PORT:-8080}:8080"
+    volumes:
+      - reranker-model-cache:/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/ready', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
   migrate:
     build:
       context: .
@@ -136,5 +162,6 @@ services:
 
 volumes:
   postgres-dev-data:
+  reranker-model-cache:
   web-node-modules:
   web-pnpm-store:
