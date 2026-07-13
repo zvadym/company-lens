@@ -70,9 +70,9 @@ Reference: [Langfuse datasets](https://langfuse.com/docs/evaluation/experiments/
 refetch that exact dataset version, and compare active IDs/counts/hashes before provider calls.
 
 **Rationale**: Langfuse versions every item addition, update, archive, and deletion. A timestamp-pinned
-dataset prevents later edits from changing the run. Verification protects against partial sync,
-concurrent edits, and wrong-project credentials. All selected datasets preflight before the first
-agent call.
+dataset prevents later edits from changing the run. Verification protects against partial sync and
+concurrent edits; a separate project-identity preflight protects against wrong-project credentials.
+All selected datasets preflight before the first agent call.
 
 **Alternatives considered**:
 
@@ -196,3 +196,62 @@ cohesive splits before modifying files over 250 lines.
 - Add all behavior to current modules: rejected because it worsens ownership and test isolation.
 - New standalone service: rejected because the workload is manual, repository-driven, and already
   has the required CLI, agent, database, and telemetry boundaries.
+
+## Decision 12: Verify the key-associated Langfuse project before remote access
+
+**Decision**: Require `COMPANY_LENS_LANGFUSE_PROJECT_ID` and resolve the project associated with the
+configured project-scoped key through Langfuse's public `GET /api/public/projects` operation. Compare
+IDs before any dataset read/write, score-config mutation, or provider-backed case call.
+
+**Rationale**: Content-hash verification proves consistency only inside the project selected by the
+active credentials. A valid key for an unintended empty project could otherwise create matching
+datasets and pass snapshot verification. Langfuse exposes the key-associated project identity as a
+public project-scoped API operation, so fail-closed identity does not require organization-admin
+credentials.
+
+**Alternatives considered**:
+
+- Trust an operator-provided project name: rejected because names are mutable and not authoritative.
+- Infer the project from the public-key prefix: rejected because the key does not encode a supported
+  project identity contract.
+- Verify after synchronization: rejected because the wrong project may already have been mutated.
+
+## Decision 13: Make manifest replay read-only and create a new execution
+
+**Decision**: `run-evaluation --manifest` validates the source execution's immutable manifest,
+repository hashes, exact remote snapshots, and configuration. It performs no synchronization or
+score-config mutation and creates a new execution linked through `replay_of_execution_id` and the
+source manifest fingerprint.
+
+**Rationale**: Reproducibility requires an executable path, not only recorded metadata. A new
+execution ID preserves provenance and avoids ambiguous idempotency when the same observed behavior is
+evaluated at a later time.
+
+**Alternatives considered**:
+
+- Reuse the original execution ID: rejected because traces and scores from separate invocations
+  would become ambiguous.
+- Synchronize before replay: rejected because it could create a newer dataset version than the one
+  recorded by the source manifest.
+- Allow CLI overrides: rejected because changed immutable inputs would no longer be a replay.
+
+## Decision 14: Separate Langfuse client ownership and persist an atomic recovery journal
+
+**Decision**: Extract typed Langfuse client construction/current-client access into
+`observability/langfuse_client.py`, shared by telemetry and evaluation adapters. Persist a validated
+`evaluation-journal.json` before preflight and after every terminal transition, then materialize final
+JSON/Markdown from the journal. Provide `recover-evaluation` for uncatchable interruption.
+
+**Rationale**: The existing 590-line telemetry module is already beyond the repository split
+threshold. Client lifecycle and project identity form a cohesive boundary independent of span
+instrumentation. Atomic checkpoints preserve completed evaluation evidence when a process cannot
+reach normal finalization.
+
+**Alternatives considered**:
+
+- Add an accessor directly to `telemetry.py`: rejected because it extends an oversized module and
+  couples evaluation APIs to instrumentation details.
+- Rewrite one final artifact only at process exit: rejected because `SIGKILL`, runner loss, or host
+  termination can skip finalization.
+- Store orchestration state in PostgreSQL: rejected for feature 003 because the local artifact is the
+  portable workflow handoff and no cross-worker resume is required.

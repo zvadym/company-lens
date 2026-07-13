@@ -4,34 +4,25 @@ import re
 import time
 import uuid
 from collections.abc import Callable
-from typing import Protocol, cast
+from typing import Protocol
 
 from company_lens.agent.events import AgentExecutionEvent
-from company_lens.agent.schemas import (
-    AgentState,
-    CalculationBranch,
-    ExecutionPlan,
-    ExecutionPolicy,
-    ResearchFrame,
-    ResearchRoute,
-)
-from company_lens.evals.deterministic import (
-    ObservedCaseResult,
-    ObservedCompany,
+from company_lens.agent.schemas import AgentState, ExecutionPolicy
+from company_lens.evals.golden import GoldenDataset, GoldenDatasetCase
+from company_lens.evals.models import (
+    CaseObservation,
     ObservedGoldenResults,
     ObservedNodeAttempt,
     ObservedNodeLatency,
     ObservedOperationalMetrics,
-    ObservedTrajectoryEvent,
 )
-from company_lens.evals.golden import (
-    ExpectedRoute,
-    ExpectedTool,
-    GoldenDataset,
-    GoldenDatasetCase,
+from company_lens.evals.observation import (
+    case_observation_from_state,
+    infrastructure_case_observation,
+    observed_result_from_observation,
+    observed_result_from_state,
 )
 from company_lens.observability.telemetry import ModelUsageRecord, collect_model_usage
-from company_lens.retrieval.adaptive_schemas import ResolvedQuery
 
 
 class GoldenResearchAgent(Protocol):
@@ -45,6 +36,29 @@ class GoldenResearchAgent(Protocol):
     ) -> AgentState: ...
 
 
+def run_golden_agent_observations(
+    dataset: GoldenDataset,
+    agent: GoldenResearchAgent,
+    *,
+    policy: ExecutionPolicy,
+    max_cases: int | None = None,
+    case_ids: tuple[str, ...] = (),
+    session_prefix: str = "golden-eval",
+    run_token: str | None = None,
+) -> tuple[CaseObservation, ...]:
+    cases = select_golden_cases(dataset, case_ids=case_ids, max_cases=max_cases)
+    token = run_token or uuid.uuid4().hex[:12]
+    return tuple(
+        _run_case(
+            case,
+            agent,
+            policy=policy,
+            session_id=_case_session_id(session_prefix, token, case.id),
+        )
+        for case in cases
+    )
+
+
 def run_golden_agent_dataset(
     dataset: GoldenDataset,
     agent: GoldenResearchAgent,
@@ -55,26 +69,27 @@ def run_golden_agent_dataset(
     session_prefix: str = "golden-eval",
     run_token: str | None = None,
 ) -> ObservedGoldenResults:
-    cases = _selected_cases(dataset, case_ids=case_ids, max_cases=max_cases)
-    token = run_token or uuid.uuid4().hex[:12]
-    results = tuple(
-        _run_case(
-            case,
-            agent,
-            policy=policy,
-            session_id=_case_session_id(session_prefix, token, case.id),
-        )
-        for case in cases
+    observations = run_golden_agent_observations(
+        dataset,
+        agent,
+        policy=policy,
+        max_cases=max_cases,
+        case_ids=case_ids,
+        session_prefix=session_prefix,
+        run_token=run_token,
     )
+    failed = [item.case_id for item in observations if item.outcome == "infrastructure_error"]
+    if failed:
+        raise ValueError(f"golden case execution failed: {', '.join(failed)}")
     return ObservedGoldenResults(
         schema_version=1,
         dataset_name=dataset.name,
         dataset_version=dataset.version,
-        results=results,
+        results=tuple(observed_result_from_observation(item) for item in observations),
     )
 
 
-def _selected_cases(
+def select_golden_cases(
     dataset: GoldenDataset,
     *,
     case_ids: tuple[str, ...],
@@ -99,10 +114,10 @@ def _run_case(
     *,
     policy: ExecutionPolicy,
     session_id: str,
-) -> ObservedCaseResult:
+) -> CaseObservation:
     user_turns = [turn for turn in case.conversation if turn.role == "user"]
-    if len(user_turns) != len(case.conversation):
-        raise ValueError(f"{case.id} contains assistant turns, which the live runner cannot seed")
+    if len(user_turns) != len(case.conversation) or not user_turns:
+        return infrastructure_case_observation(case, failure_code="invalid_case_conversation")
 
     state: AgentState | None = None
     started = time.perf_counter()
@@ -113,13 +128,24 @@ def _run_case(
         if first_event_ms is None:
             first_event_ms = _elapsed_ms(started)
 
-    with collect_model_usage() as model_usage:
-        for turn in user_turns:
-            state = agent.run(turn.content, session_id=session_id, policy=policy, observer=observe)
+    try:
+        with collect_model_usage() as model_usage:
+            for turn in user_turns:
+                state = agent.run(
+                    turn.content,
+                    session_id=session_id,
+                    policy=policy,
+                    observer=observe,
+                )
+    except Exception:
+        return infrastructure_case_observation(
+            case,
+            failure_code="agent_execution_failed",
+        )
     if state is None:
-        raise ValueError(f"{case.id} does not contain a user turn")
-    return observed_result_from_state(
-        case.id,
+        return infrastructure_case_observation(case, failure_code="agent_state_unavailable")
+    return case_observation_from_state(
+        case,
         state,
         operational=_operational_metrics(
             state,
@@ -128,132 +154,6 @@ def _run_case(
             time_to_first_event_ms=first_event_ms,
             model_usage=tuple(model_usage),
         ),
-    )
-
-
-def observed_result_from_state(
-    case_id: str,
-    state: AgentState,
-    *,
-    operational: ObservedOperationalMetrics | None = None,
-) -> ObservedCaseResult:
-    frame = state.get("research_frame")
-    resolved = _resolved_query(state, frame)
-    plan = state.get("execution_plan")
-    route = _observed_route(state, frame, resolved, plan)
-    return ObservedCaseResult(
-        case_id=case_id,
-        companies=_observed_companies(frame, resolved),
-        metrics=resolved.metrics if resolved is not None else (),
-        operation=_observed_operation(frame, plan),
-        route=route,
-        tools=_observed_tools(plan),
-        trajectory=_observed_trajectory(state),
-        operational=operational,
-    )
-
-
-def _resolved_query(state: AgentState, frame: ResearchFrame | None) -> ResolvedQuery | None:
-    if frame is not None:
-        return frame.resolved_query
-    return state.get("resolved_query")
-
-
-def _observed_companies(
-    frame: ResearchFrame | None,
-    resolved: ResolvedQuery | None,
-) -> tuple[ObservedCompany, ...]:
-    if frame is not None and frame.company_targets:
-        return tuple(
-            ObservedCompany(
-                mention=target.mention,
-                status=target.status,
-                ticker=target.ticker,
-                source=target.source,
-            )
-            for target in frame.company_targets
-        )
-    if resolved is None:
-        return ()
-    return tuple(
-        ObservedCompany(
-            mention=entity.mention,
-            status=entity.status,
-            ticker=None,
-            source="current_question",
-        )
-        for entity in resolved.entities
-        if entity.kind in {"company", "public_company"}
-    )
-
-
-def _observed_route(
-    state: AgentState,
-    frame: ResearchFrame | None,
-    resolved: ResolvedQuery | None,
-    plan: ExecutionPlan | None,
-) -> ExpectedRoute | None:
-    if plan is None and _has_unresolved_company_target(frame, resolved):
-        return ResearchRoute.UNSUPPORTED.value
-    route: ResearchRoute | None = plan.route if plan is not None else None
-    if route is None:
-        analysis = state.get("analysis")
-        route = analysis.route if analysis is not None else None
-    return route.value if route is not None else None
-
-
-def _has_unresolved_company_target(
-    frame: ResearchFrame | None,
-    resolved: ResolvedQuery | None,
-) -> bool:
-    if frame is not None and frame.company_targets:
-        return any(target.status != "resolved" for target in frame.company_targets)
-    if resolved is None:
-        return False
-    return any(
-        entity.status != "resolved"
-        for entity in resolved.entities
-        if entity.kind in {"company", "public_company"}
-    )
-
-
-def _observed_operation(frame: ResearchFrame | None, plan: ExecutionPlan | None) -> str | None:
-    operations: list[str] = []
-    if plan is not None:
-        operations.extend(
-            branch.operation for branch in plan.branches if isinstance(branch, CalculationBranch)
-        )
-    if not operations and frame is not None and frame.follow_up_operation is not None:
-        operations.append(frame.follow_up_operation)
-    unique = tuple(dict.fromkeys(operations))
-    return unique[0] if len(unique) == 1 else None
-
-
-def _observed_tools(plan: ExecutionPlan | None) -> tuple[ExpectedTool, ...]:
-    if plan is None:
-        return ()
-    tools = tuple(
-        cast(ExpectedTool, branch.kind)
-        for branch in plan.branches
-        if branch.kind
-        in {
-            "retrieve_documents",
-            "query_financial_facts",
-            "query_macro_series",
-            "calculate_metrics",
-            "generate_chart_spec",
-        }
-    )
-    return tuple(dict.fromkeys(tools))
-
-
-def _observed_trajectory(state: AgentState) -> tuple[ObservedTrajectoryEvent, ...]:
-    return tuple(
-        ObservedTrajectoryEvent(
-            node=event.node,
-            status=event.status.value,
-        )
-        for event in state.get("trajectory", ())
     )
 
 
@@ -269,8 +169,7 @@ def _operational_metrics(
         ObservedNodeAttempt(node=_node_name(item.node), attempts=item.attempts)
         for item in state.get("node_attempts", ())
     )
-    usage = _model_usage_totals(model_usage)
-    # Model usage comes from telemetry; graph tool calls remain the fallback for older fakes.
+    input_tokens, output_tokens, total_tokens, cost_usd = _model_usage_totals(model_usage)
     tool_calls_used = state.get("tool_calls_used", 0)
     return ObservedOperationalMetrics(
         total_latency_ms=total_latency_ms,
@@ -285,10 +184,10 @@ def _operational_metrics(
         api_calls=len(model_usage) if model_usage else tool_calls_used,
         retry_count=sum(max(0, item.attempts - 1) for item in node_attempts),
         node_attempts=node_attempts,
-        input_tokens=usage[0],
-        output_tokens=usage[1],
-        total_tokens=usage[2],
-        cost_usd=usage[3],
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        cost_usd=cost_usd,
         policy_max_tool_calls=policy.max_tool_calls,
         policy_max_repair_attempts=policy.max_repair_attempts,
         policy_max_retries_per_node=policy.max_retries_per_node,
@@ -326,6 +225,13 @@ def _case_session_id(prefix: str, run_token: str, case_id: str) -> str:
 
 
 def _safe_session_part(value: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._:-]+", "-", value.strip())
-    cleaned = cleaned.strip(".:-_")
-    return cleaned
+    return re.sub(r"[^A-Za-z0-9._:-]+", "-", value.strip()).strip(".:-_")
+
+
+__all__ = [
+    "GoldenResearchAgent",
+    "observed_result_from_state",
+    "run_golden_agent_dataset",
+    "run_golden_agent_observations",
+    "select_golden_cases",
+]

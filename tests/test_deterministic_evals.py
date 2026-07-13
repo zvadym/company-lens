@@ -47,8 +47,8 @@ def test_deterministic_evaluator_reports_missing_results(tmp_path: Path) -> None
     report = evaluate_golden_results(GOLDEN_CORE_DATASET, results_path)
 
     assert report.passed is False
-    assert report.missing_results == ("crossdoc_cloudflare_risks_2024_2025_001",)
-    assert report.metrics.missing_result_rate == 0.142857
+    assert report.missing_results == ("crossdoc_datadog_risks_2023_2024_002",)
+    assert report.metrics.missing_result_rate == 0.071429
 
 
 def test_regression_gate_reports_threshold_failures(tmp_path: Path) -> None:
@@ -419,6 +419,100 @@ def _core_results() -> dict[str, Any]:
                         "mention": "Cloudflare",
                         "status": "resolved",
                         "ticker": "NET",
+                        "source": "current_question",
+                    }
+                ],
+                "route": "rag_only",
+                "tools": ["retrieve_documents"],
+            },
+            {
+                "case_id": "structured_datadog_revenue_2024_002",
+                "companies": [
+                    {
+                        "mention": "Datadog",
+                        "status": "resolved",
+                        "ticker": "DDOG",
+                        "source": "current_question",
+                    }
+                ],
+                "metrics": ["revenue"],
+                "route": "structured_only",
+                "tools": ["query_financial_facts"],
+            },
+            {
+                "case_id": "document_datadog_2024_risk_factors_002",
+                "companies": [
+                    {
+                        "mention": "Datadog",
+                        "status": "resolved",
+                        "ticker": "DDOG",
+                        "source": "current_question",
+                    }
+                ],
+                "route": "rag_only",
+                "tools": ["retrieve_documents"],
+            },
+            {
+                "case_id": "hybrid_datadog_growth_and_risks_2024_002",
+                "companies": [
+                    {
+                        "mention": "Datadog",
+                        "status": "resolved",
+                        "ticker": "DDOG",
+                        "source": "current_question",
+                    }
+                ],
+                "metrics": ["revenue"],
+                "operation": "year_over_year_growth",
+                "route": "hybrid",
+                "tools": ["query_financial_facts", "calculate_metrics", "retrieve_documents"],
+            },
+            {
+                "case_id": "ambiguous_mercury_revenue_growth_002",
+                "companies": [
+                    {
+                        "mention": "Mercury",
+                        "status": "ambiguous",
+                        "source": "current_question",
+                    }
+                ],
+                "metrics": ["revenue"],
+                "route": "unsupported",
+            },
+            {
+                "case_id": "abstention_datadog_revenue_2040_002",
+                "companies": [
+                    {
+                        "mention": "Datadog",
+                        "status": "resolved",
+                        "ticker": "DDOG",
+                        "source": "current_question",
+                    }
+                ],
+                "metrics": ["revenue"],
+                "route": "unsupported",
+            },
+            {
+                "case_id": "adversarial_cloudflare_unknown_evidence_002",
+                "companies": [
+                    {
+                        "mention": "Cloudflare",
+                        "status": "resolved",
+                        "ticker": "NET",
+                        "source": "current_question",
+                    }
+                ],
+                "metrics": ["revenue"],
+                "route": "structured_only",
+                "tools": ["query_financial_facts", "validate_citations"],
+            },
+            {
+                "case_id": "crossdoc_datadog_risks_2023_2024_002",
+                "companies": [
+                    {
+                        "mention": "Datadog",
+                        "status": "resolved",
+                        "ticker": "DDOG",
                         "source": "current_question",
                     }
                 ],

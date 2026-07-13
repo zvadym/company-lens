@@ -44,6 +44,15 @@ def test_docker_compose_langfuse_env_prefers_project_key_then_standard_key() -> 
             assert environment["COMPANY_LENS_LANGFUSE_BASE_URL"] == (
                 "${COMPANY_LENS_LANGFUSE_BASE_URL:-${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}}"
             )
+            assert environment["COMPANY_LENS_LANGFUSE_PROJECT_ID"] == (
+                "${COMPANY_LENS_LANGFUSE_PROJECT_ID:-}"
+            )
+
+
+def test_langfuse_project_id_uses_explicit_evaluation_setting() -> None:
+    settings = Settings(_env_file=None, langfuse_project_id="project-testing")
+
+    assert settings.langfuse_project_id == "project-testing"
 
 
 def test_dev_compose_wires_optional_reranker_service() -> None:

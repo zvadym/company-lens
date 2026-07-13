@@ -9,6 +9,8 @@ cases:
   # The current turn changes output form only, so the previous task context is safe to reuse.
   - id: followup_safe_inheritance_chart_001
     category: follow_up
+    citation_mode: required
+    citation_scenario: valid
     conversation:
       - role: user
         content: Show Cloudflare revenue growth over the last four quarters.
@@ -40,6 +42,8 @@ cases:
   # The current turn supplies a new company target while keeping the prior task shape.
   - id: followup_replace_company_preserve_task_001
     category: follow_up
+    citation_mode: required
+    citation_scenario: semantic_mismatch_attempt
     conversation:
       - role: user
         content: Show Cloudflare revenue growth over the last four quarters.
@@ -73,6 +77,8 @@ cases:
   # "Add" should extend the previous comparison instead of replacing it with one company.
   - id: followup_add_company_to_comparison_001
     category: follow_up
+    citation_mode: required
+    citation_scenario: valid
     conversation:
       - role: user
         content: Compare Cloudflare and Datadog revenue growth over the last eight quarters.
@@ -109,6 +115,7 @@ cases:
   # A new unresolved company mention must block prior-company reuse.
   - id: followup_unresolved_company_no_previous_reuse_001
     category: follow_up
+    citation_mode: not_applicable
     conversation:
       - role: user
         content: Show Netflix revenue growth.

@@ -24,7 +24,7 @@ Repository-authored source of truth for one Langfuse dataset.
 | `conversation` | ConversationTurn[] | Non-empty; follow-up cases contain at least two user turns |
 | `expected` | ExpectedBehavior | Existing company/metric/operation/route/tool/follow-up contract |
 | `citation_mode` | `required` or `not_applicable` | Defaults to `required` when omitted |
-| `citation_scenario` | enum/null | `valid`, `missing_attempt`, `unknown_evidence_attempt`, or `semantic_mismatch_attempt` |
+| `citation_scenario` | enum/null | `valid`, `missing_attempt`, `unknown_evidence_attempt`, or `semantic_mismatch_attempt`; the latter three are challenge attempts |
 | `notes` | string/null | Reviewed author note; no secrets or provider payloads |
 
 Validation invariants:
@@ -36,6 +36,21 @@ Validation invariants:
   scenarios occur, and the total is between 18 and 25.
 
 ## Synchronization Models
+
+### LangfuseProjectIdentity
+
+Verified before any Langfuse dataset read/write, score-config mutation, or provider-backed case call.
+
+| Field | Type | Rules |
+|---|---|---|
+| `expected_project_id` | string/null | Required configuration; null is an explicit missing marker in failed preflight artifacts |
+| `resolved_project_id` | string/null | Returned by Langfuse's public project endpoint; null when identity is unavailable |
+| `resolved_project_name` | string/null | Privacy-safe diagnostic metadata only; ID remains authoritative |
+| `checked_at` | UTC datetime | Records the completed lookup attempt even when unavailable |
+| `status` | enum | `verified`, `mismatched`, or `unavailable` |
+
+The check passes only when both IDs are equal. Missing configuration, authentication failure,
+unavailable identity, or mismatch is an infrastructure failure before remote mutation.
 
 ### SynchronizedDatasetItem
 
@@ -66,6 +81,7 @@ Identity invariants:
 | `repository_version` | integer | GoldenDataset.version |
 | `repository_hash` | SHA-256 | Full validated dataset hash |
 | `langfuse_dataset_id` | string | Remote dataset ID |
+| `langfuse_project_id` | string | Equal to the verified expected/resolved project ID |
 | `version_timestamp` | UTC datetime | Exact item-version timestamp passed to `get_dataset` |
 | `active_item_ids` | string[] | Sorted and unique |
 | `active_item_hashes` | map | Item ID to content hash |
@@ -95,7 +111,7 @@ hashes. All selected snapshots must validate before live agent construction.
 | `data_type` | `BOOLEAN`, `NUMERIC`, or `CATEGORICAL` | `TEXT` is not used for foundation quality metrics |
 | `minimum` / `maximum` | number/null | Required for numeric rates: 0.0 to 1.0 |
 | `categories` | string[] | Required for categorical `gate_status` |
-| `applicability` | enum | `always`, `citation_required`, `follow_up`, `required_tools`, or `prohibited_tools` |
+| `applicability` | enum | `always`, `citation_required`, `follow_up`, `required_tools`, `prohibited_tools`, or `operational_metrics` |
 | `aggregation` | string/null | Run metric/check source; absent for item-only scores |
 | `description` | string | Stable semantic definition |
 
@@ -109,6 +125,10 @@ hashes. All selected snapshots must validate before live agent construction.
 
 An existing config with the same name but incompatible type/range/categories is an infrastructure
 error. Semantic changes require a new canonical score name.
+
+The manifest records score-config preflight status as `verified` or `failed`. `verified` requires one
+binding for every applicable score definition; `failed` uses an empty binding list as the explicit
+unavailable marker and cannot be replayed.
 
 ## Observation and Evaluation Models
 
@@ -186,7 +206,10 @@ partial/errored -> gate not_evaluated
 Immutable execution fingerprint containing:
 
 - execution ID, commit SHA, source ref, environment, service version;
-- dataset source paths/versions/hashes and exact Langfuse snapshots/item IDs;
+- optional `replay_of_execution_id` and required source manifest fingerprint for replay executions;
+- verified expected/resolved Langfuse project ID and verification timestamp;
+- dataset source paths/versions/hashes/selected case IDs plus preflight state and exact Langfuse
+  snapshots/item IDs or explicit unavailable markers;
 - gate name/version/hash and score contract version/hash/config bindings;
 - model names and reasoning settings;
 - prompt names/sources/versions/content hashes when used;
@@ -195,6 +218,86 @@ Immutable execution fingerprint containing:
 - workflow run URL/actor when available.
 
 It contains no credentials, raw prompts, answers, provider payloads, passages, or exception text.
+
+Manifest invariants:
+
+- `manifest_fingerprint` is the SHA-256 of canonical manifest content excluding the fingerprint field.
+- A normal execution synchronizes and pins snapshots before freezing the manifest.
+- If preflight fails, the manifest still freezes all local inputs and explicit project/snapshot/config
+  unavailable states; it is stored locally but cannot be used for replay.
+- A replay validates local hashes and reads the exact recorded snapshots without any dataset,
+  dataset-item, stale-item, or score-config mutation.
+- Replay creates a new `execution_id`; `replay_of_execution_id` identifies the source execution, and
+  immutable manifest fields cannot be overridden from the CLI.
+- Replay is allowed only when project identity is `verified`, every dataset preflight state is
+  `verified`, every exact snapshot is present, and all required score-config bindings are present.
+
+### EvaluationRecoveryJournal
+
+Atomically replaced orchestration checkpoint used before final artifacts exist and after
+interruption.
+
+| Field | Type | Rules |
+|---|---|---|
+| `schema_version` | integer | Starts at 1 |
+| `execution_id` | UUID string | Matches the active execution |
+| `sequence` | integer | Starts at 0 and increases by exactly one per replacement |
+| `updated_at` | UTC datetime | Monotonic checkpoint timestamp |
+| `manifest` | EvaluationRunManifest/null | Null only before normal preflight has frozen a manifest |
+| `project_identity` | LangfuseProjectIdentity/null | Null only before the project lookup completes |
+| `phase` | enum | `initialized`, `project_verified`, `preflighted`, `running`, `reporting`, or `terminal` |
+| `status` | enum | `running`, `completed`, `partial`, or `errored` |
+| `gate_status` | enum | `pending`, `passed`, `failed`, or `not_evaluated` |
+| `reporting_status` | enum | `not_requested`, `pending`, `succeeded`, or `failed`; independent of evaluation status/gate |
+| `reporting_target` | ReportingTarget/null | Exact `{repository, pr_number}` when reporting is requested; otherwise null |
+| `dataset_runs` | DatasetEvaluationRun[] | At most one current record per selected dataset |
+| `terminal_cases` | CaseIdentity[] | Unique `{dataset_name, case_id}` identities with terminal observations |
+| `failure_codes` | string[] | Sanitized allowlisted reasons only |
+| `reporting_failure_codes` | string[] | Sanitized reporting-only reasons; empty unless reporting failed |
+
+Allowed state matrix:
+
+| Phase | Evaluation status | Gate status | Reporting status |
+|---|---|---|---|
+| `initialized` | `running` | `pending` | `not_requested` or `pending` |
+| `project_verified` | `running` | `pending` | `not_requested` or `pending` |
+| `preflighted` | `running` | `pending` | `not_requested` or `pending` |
+| `running` | `running` | `pending` | `not_requested` or `pending` |
+| `reporting` | `completed`, `partial`, or `errored` | derived from evaluation status | `pending` |
+| `terminal` | `completed`, `partial`, or `errored` | derived from evaluation status | `not_requested`, `succeeded`, or `failed` |
+
+`completed` evaluation status permits gate `passed|failed`; `partial|errored` requires
+`not_evaluated`. A workflow with a PR target stores the exact repository/PR pair, starts with
+reporting `pending`, and must finish `succeeded|failed`; a run without a PR target remains
+`not_requested` with a null target.
+
+`project_verified`, `preflighted`, and `running` require verified project identity. `preflighted` and
+`running` additionally require verified snapshots for every selected dataset and verified
+score-config bindings. `reporting` requires a frozen manifest but explicitly permits failed project,
+snapshot, or score-config markers so the PR can safely explain why the gate was not evaluated. Any
+preflight failure transitions to `reporting/pending` when a reporting target exists, or directly to
+`terminal/not_requested` otherwise; provider-backed case execution remains forbidden.
+
+Journal invariants:
+
+- Write a complete candidate to a sibling temporary file, validate it, `fsync`, and atomically
+  replace `evaluation-journal.json`; never edit the active file in place.
+- Existing terminal case and dataset-run records cannot disappear or change identity in a later
+  sequence; only defined state transitions may enrich them.
+- Case identity is always the structured pair `{dataset_name, case_id}`; a bare case ID is never a
+  journal identity because uniqueness is guaranteed only within one dataset.
+- `SIGINT` and `SIGTERM` append a sanitized interruption failure code, set evaluation
+  `partial|errored` plus `not_evaluated`, checkpoint, and materialize partial artifacts. The journal
+  then enters `reporting/pending` when a reporting target exists, or `terminal/not_requested` when it
+  does not.
+- PR reporting may update only `sequence`, `updated_at`, `phase`, `reporting_status`, and
+  `reporting_failure_codes`. It cannot change evaluation status/gate, manifest, dataset runs, case
+  identities, scores, or already materialized execution JSON.
+- `recover-evaluation` validates the last journal, advances interrupted evaluation state to
+  `partial|errored` plus `not_evaluated`, chooses `reporting/pending` or `terminal/not_requested`
+  from the stored target, and materializes partial artifacts without provider calls or Langfuse
+  mutation. A truncated temporary file is ignored; an invalid active journal fails closed and is
+  never presented as trustworthy output.
 
 ### EvaluationExecution
 
@@ -208,7 +311,7 @@ It contains no credentials, raw prompts, answers, provider payloads, passages, o
 | `manifest` | EvaluationRunManifest | Immutable after provider execution begins |
 | `runs` | DatasetEvaluationRun[] | One per selected repository dataset |
 | `failure_codes` | string[] | Sanitized execution-level reasons |
-| `artifact_paths` | object | JSON and Markdown relative paths |
+| `artifact_paths` | object | Journal, JSON, and Markdown relative paths |
 
 Umbrella rules:
 

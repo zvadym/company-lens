@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://company-lens.local/schemas/evaluation-journal.v1.json",
+  "title": "CompanyLens Evaluation Recovery Journal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "execution_id",
+    "sequence",
+    "updated_at",
+    "project_identity",
+    "manifest",
+    "phase",
+    "status",
+    "gate_status",
+    "reporting_status",
+    "reporting_target",
+    "dataset_runs",
+    "terminal_cases",
+    "failure_codes",
+    "reporting_failure_codes"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "execution_id": { "type": "string", "format": "uuid" },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "project_identity": {
+      "anyOf": [
+        { "$ref": "https://company-lens.local/schemas/evaluation-execution.v1.json#/$defs/projectIdentity" },
+        { "type": "null" }
+      ]
+    },
+    "manifest": {
+      "anyOf": [
+        { "$ref": "https://company-lens.local/schemas/evaluation-execution.v1.json#/$defs/manifest" },
+        { "type": "null" }
+      ]
+    },
+    "phase": {
+      "enum": ["initialized", "project_verified", "preflighted", "running", "reporting", "terminal"]
+    },
+    "status": { "enum": ["running", "completed", "partial", "errored"] },
+    "gate_status": { "enum": ["pending", "passed", "failed", "not_evaluated"] },
+    "reporting_status": { "enum": ["not_requested", "pending", "succeeded", "failed"] },
+    "reporting_target": {
+      "anyOf": [
+        { "$ref": "#/$defs/reportingTarget" },
+        { "type": "null" }
+      ]
+    },
+    "dataset_runs": {
+      "type": "array",
+      "items": { "$ref": "https://company-lens.local/schemas/evaluation-execution.v1.json#/$defs/datasetRun" }
+    },
+    "terminal_cases": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/caseIdentity" }
+    },
+    "failure_codes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+    },
+    "reporting_failure_codes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+    }
+  },
+  "$defs": {
+    "caseIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dataset_name", "case_id"],
+      "properties": {
+        "dataset_name": { "type": "string", "minLength": 1 },
+        "case_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "reportingTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "pr_number"],
+      "properties": {
+        "repository": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$" },
+        "pr_number": { "type": "integer", "minimum": 1 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "phase": { "const": "initialized" } } },
+      "then": {
+        "properties": {
+          "manifest": { "type": "null" },
+          "project_identity": { "type": "null" },
+          "status": { "const": "running" },
+          "gate_status": { "const": "pending" },
+          "reporting_status": { "enum": ["not_requested", "pending"] }
+        }
+      },
+      "else": {
+        "properties": {
+          "project_identity": {
+            "$ref": "https://company-lens.local/schemas/evaluation-execution.v1.json#/$defs/projectIdentity"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": { "enum": ["preflighted", "running", "reporting", "terminal"] }
+        }
+      },
+      "then": {
+        "properties": {
+          "manifest": { "$ref": "https://company-lens.local/schemas/evaluation-execution.v1.json#/$defs/manifest" }
+        }
+      },
+      "else": { "properties": { "manifest": { "type": "null" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": { "enum": ["initialized", "project_verified", "preflighted", "running"] }
+        }
+      },
+      "then": {
+        "properties": {
+          "status": { "const": "running" },
+          "gate_status": { "const": "pending" },
+          "reporting_status": { "enum": ["not_requested", "pending"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": { "enum": ["project_verified", "preflighted", "running"] }
+        }
+      },
+      "then": {
+        "properties": {
+          "project_identity": {
+            "allOf": [
+              { "$ref": "https://company-lens.local/schemas/evaluation-execution.v1.json#/$defs/projectIdentity" },
+              { "properties": { "status": { "const": "verified" } } }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": { "enum": ["preflighted", "running"] }
+        }
+      },
+      "then": {
+        "properties": {
+          "manifest": {
+            "allOf": [
+              { "$ref": "https://company-lens.local/schemas/evaluation-execution.v1.json#/$defs/manifest" },
+              {
+                "properties": {
+                  "project_identity": {
+                    "allOf": [
+                      { "$ref": "https://company-lens.local/schemas/evaluation-execution.v1.json#/$defs/projectIdentity" },
+                      { "properties": { "status": { "const": "verified" } } }
+                    ]
+                  },
+                  "datasets": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "allOf": [
+                        { "$ref": "https://company-lens.local/schemas/evaluation-execution.v1.json#/$defs/manifestDataset" },
+                        {
+                          "properties": {
+                            "preflight_status": { "const": "verified" },
+                            "snapshot": {
+                              "$ref": "https://company-lens.local/schemas/evaluation-execution.v1.json#/$defs/datasetSnapshot"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "score_contract": {
+                    "allOf": [
+                      { "$ref": "https://company-lens.local/schemas/evaluation-execution.v1.json#/$defs/scoreContractManifest" },
+                      { "properties": { "config_status": { "const": "verified" } } }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "phase": { "const": "reporting" } } },
+      "then": {
+        "properties": {
+          "status": { "enum": ["completed", "partial", "errored"] },
+          "reporting_status": { "const": "pending" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "phase": { "const": "terminal" } } },
+      "then": {
+        "properties": {
+          "status": { "enum": ["completed", "partial", "errored"] },
+          "reporting_status": { "enum": ["not_requested", "succeeded", "failed"] }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "completed" } } },
+      "then": { "properties": { "gate_status": { "enum": ["passed", "failed"] } } }
+    },
+    {
+      "if": { "properties": { "status": { "enum": ["partial", "errored"] } } },
+      "then": { "properties": { "gate_status": { "const": "not_evaluated" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "running" } } },
+      "then": { "properties": { "gate_status": { "const": "pending" } } }
+    },
+    {
+      "if": { "properties": { "reporting_status": { "const": "failed" } } },
+      "then": { "properties": { "reporting_failure_codes": { "minItems": 1 } } },
+      "else": { "properties": { "reporting_failure_codes": { "maxItems": 0 } } }
+    },
+    {
+      "if": { "properties": { "reporting_status": { "const": "not_requested" } } },
+      "then": { "properties": { "reporting_target": { "type": "null" } } },
+      "else": { "properties": { "reporting_target": { "$ref": "#/$defs/reportingTarget" } } }
+    }
+  ]
+}

@@ -13,7 +13,8 @@ and produces privacy-safe JSON, Markdown, and optional PR-comment summaries. The
 reuses the current live agent runner, `AnswerValidation`, operational metrics, PostgreSQL-backed
 research sessions, and versioned YAML gates. It adds a typed orchestration layer, Langfuse adapter,
 score contract, citation applicability, exact snapshot manifest, and explicit separation between
-quality failures and evaluation-infrastructure failures.
+quality failures and evaluation-infrastructure failures. It also adds fail-closed Langfuse project
+identity, manifest-driven replay, and an atomic recovery journal for interruption-safe artifacts.
 
 ## Technical Context
 
@@ -22,9 +23,9 @@ quality failures and evaluation-infrastructure failures.
 **Primary Dependencies**: Pydantic 2, Langfuse Python SDK `>=4.9.1,<5`, OpenTelemetry, LangGraph,
 SQLAlchemy, PyYAML, GitHub Actions
 
-**Storage**: Repository YAML for datasets/gates/score contracts; JSON and Markdown run artifacts;
-Langfuse datasets, dataset runs, traces, score configs, and scores; PostgreSQL for live agent data
-and durable research sessions
+**Storage**: Repository YAML for datasets/gates/score contracts; JSON recovery journal plus JSON and
+Markdown run artifacts; Langfuse datasets, dataset runs, traces, score configs, and scores;
+PostgreSQL for live agent data and durable research sessions
 
 **Testing**: pytest, strict mypy, Ruff; fake Langfuse boundary for unit/contract tests; manual live
 workflow validation against the Testing environment
@@ -41,7 +42,8 @@ tool, retry, token, and cost budgets from `eval-full.v1.yaml`
 **Constraints**: Repository data is authoritative; no LLM-as-judge; no automatic required PR gate;
 no raw provider prompts/payloads, retrieved passages, hidden reasoning, invalid drafts, credentials,
 or exception internals in reports/comments; incomplete infrastructure runs cannot emit a quality
-pass/fail verdict
+pass/fail verdict; every Langfuse dataset/score operation and provider call requires verified
+expected project identity; replay never mutates synchronized datasets
 
 **Scale/Scope**: Two initial repository datasets, eight categories, 18-25 total cases, one Langfuse
 dataset run per selected dataset, and one umbrella evaluation execution per manual invocation
@@ -58,7 +60,8 @@ dataset run per selected dataset, and one umbrella evaluation execution per manu
 - **Source lineage and citation safety: PASS.** Evaluation observes `AnswerValidation` reason codes
   and lineage checks without exporting raw evidence passages or invalid drafts.
 - **Durable research sessions: PASS.** Live cases continue through isolated PostgreSQL-backed
-  sessions. The workflow runs migrations and research setup before agent execution.
+  sessions. The workflow runs migrations and research setup before agent execution, while the
+  evaluation recovery journal preserves orchestration state across process interruption.
 - **Observable, tested delivery: PASS.** Langfuse datasets/runs/scores use typed contracts and exact
   version metadata. Reports expose sanitized failure codes, and focused tests cover adapters,
   orchestration, failure states, privacy, and CLI behavior.
@@ -78,6 +81,7 @@ specs/003-langfuse-evaluation-foundation/
 │   ├── langfuse-mapping.md
 │   ├── manual-workflow.md
 │   ├── evaluation-execution.schema.json
+│   ├── evaluation-journal.schema.json
 │   └── score-contract.schema.json
 └── tasks.md
 ```
@@ -99,48 +103,78 @@ evals/
 src/company_lens/evals/
 ├── __init__.py
 ├── golden.py                 # dataset loading, validation, coverage summary
-├── models.py                 # observed, report, execution, manifest models
+├── models.py                 # observed, report, execution, manifest/journal models
 ├── agent_runner.py           # isolated case/session execution and exception capture
 ├── observation.py            # privacy-safe AgentState projection
 ├── checks.py                 # deterministic item and aggregate evaluation
 ├── gates.py                  # evaluation-gate loading and threshold application
-├── reporting.py              # JSON/Markdown/PR-safe summaries
-├── langfuse_sync.py          # dataset and score-config synchronization
+├── score_contract.py         # repository score-contract loading and hashing
+├── reporting.py              # journal and JSON/Markdown rendering
+├── langfuse_mapping.py        # canonical item/score IDs and payload hashes
+├── langfuse_scores.py         # score-config reconciliation and publication
+├── langfuse_sync.py           # project verification and dataset synchronization
 ├── langfuse_experiment.py    # pinned experiment and score publication adapter
-├── orchestrator.py           # multi-dataset preflight/run/finalize state machine
+├── github_reporting.py        # typed canonical PR-comment adapter
+├── orchestrator.py           # preflight/replay/run/recovery state machine
 ├── cli.py                    # evaluation parser registration and handlers
 └── deterministic.py          # compatibility facade for existing imports
+
+src/company_lens/observability/
+├── langfuse_client.py         # typed client ownership and project identity
+└── telemetry.py               # instrumentation using shared client lifecycle
+
+src/company_lens/
+├── config.py                  # expected Langfuse project setting
+└── cli.py                     # top-level evaluation command dispatch/signals
 
 .github/workflows/
 └── eval-full.yml             # manual Langfuse evaluation and optional PR report
 
 tests/
+├── evals/
+│   ├── __init__.py
+│   ├── fakes_langfuse.py
+│   ├── test_models.py
+│   ├── test_score_contract.py
+│   ├── test_langfuse_mapping.py
+│   ├── test_langfuse_sync.py
+│   ├── test_agent_observation.py
+│   ├── test_langfuse_experiment.py
+│   ├── test_evaluation_orchestrator.py
+│   ├── test_evaluation_reporting.py
+│   ├── test_github_reporting.py
+│   ├── test_evaluation_workflow.py
+│   ├── test_run_evaluation_cli.py
+│   ├── test_sync_evaluation_cli.py
+│   └── test_contract_schemas.py
+├── test_agent_cli.py
+├── test_config.py
 ├── test_golden_dataset.py
 ├── test_golden_agent_runner.py
 ├── test_deterministic_evals.py
-├── test_langfuse_eval_sync.py
-├── test_langfuse_experiment.py
-├── test_evaluation_orchestrator.py
-├── test_evaluation_reporting.py
-└── test_evaluation_cli.py
+└── test_observability_security.py
 ```
 
 **Structure Decision**: Keep evaluation logic under the existing `company_lens.evals` boundary and
 repository contracts under `evals/`. Split the current 958-line deterministic module, 331-line
-runner, and evaluation portions of the 1,163-line CLI before adding behavior. `deterministic.py`
-remains a narrow re-export facade so existing internal imports can migrate without one large change.
-No database migration or frontend change is required.
+runner, and evaluation portions of the 1,163-line CLI before adding behavior. Extract Langfuse client
+ownership from the 590-line telemetry module into `observability/langfuse_client.py`, leaving
+telemetry focused on instrumentation. `deterministic.py` remains a narrow re-export facade so
+existing internal imports can migrate without one large change. No database migration or frontend
+change is required.
 
 ## Implementation Design
 
 ### 1. Repository Contracts
 
 - Extend each golden case with effective `citation_mode` (`required` by default or
-  `not_applicable`) and optional `citation_scenario` used only for coverage auditing.
+  `not_applicable`) and optional `citation_scenario` used only for coverage auditing. The three
+  non-valid scenario values are challenge attempts, never expected invalid final answers.
 - Add seven reviewed core cases so every existing category has at least two cases while the four
   existing follow-up cases remain unchanged, producing 18 total cases.
 - Add `evals/score-contracts/foundation.v1.yaml`. Every entry defines canonical name, item/run
-  scope, Langfuse data type, bounds/categories, applicability, aggregation, and evaluator version.
+  scope, Langfuse data type, bounds/categories, applicability, and aggregation; the contract-level
+  evaluator version applies to every definition.
 - Rename internal gate types/functions from regression terminology to evaluation-gate terminology;
   preserve the existing gate YAML shape and metrics.
 
@@ -148,6 +182,9 @@ No database migration or frontend change is required.
 
 - Validate all selected repository datasets and the score contract before initializing the live
   research agent or making provider calls.
+- Require `COMPANY_LENS_LANGFUSE_PROJECT_ID`. Resolve the project associated with the configured
+  project-scoped key through Langfuse's public project endpoint and compare its ID before any dataset
+  read/write or provider call. Missing, unavailable, or mismatched identity fails closed.
 - Map one repository dataset name to one Langfuse dataset name. Map each case to a project-unique
   UUIDv5 derived from `company-lens:<dataset-name>:<case-id>`.
 - Canonicalize each synchronized item payload and store its SHA-256 content hash in metadata.
@@ -188,28 +225,51 @@ No database migration or frontend change is required.
 ### 5. Multi-Dataset Orchestration and Artifacts
 
 - Preflight every selected dataset first; if any preflight fails, run zero provider-backed cases.
+- Freeze explicit project/snapshot/score-config failure markers on preflight failure. With a reporting
+  target, transition the errored/not-evaluated execution to `reporting/pending` so a sanitized PR
+  summary can explain the infrastructure failure; without a target, transition directly to
+  `terminal/not_requested`.
 - Create one execution ID and immutable manifest shared by all dataset-specific runs. The manifest
   records code, dataset snapshots/hashes, gate, score contract/config IDs, model/configuration,
   prompt/parser/index versions, execution policy, environment, and workflow metadata.
+- For `--manifest` replay, validate the source manifest and all local hashes, fetch each exact remote
+  snapshot read-only, reject runtime overrides of immutable inputs, and create a new execution ID
+  with `replay_of_execution_id` plus the source manifest fingerprint. Replay performs no sync,
+  archive, score-config mutation, or dataset-item mutation.
+- Create `evaluation-journal.json` before project/preflight access and atomically replace it after
+  every terminal project check, dataset preflight, case, dataset-run, and PR-reporting transition.
+  Journal sequence numbers are monotonic, terminal records are append-only by identity, and every
+  checkpoint validates before replacing the previous file.
+- Initialize journal reporting state and exact target from paired optional `--repository` and
+  `--pr-number`: `pending` with `{repository, pr_number}` when supplied and `not_requested` with null
+  target otherwise. Evaluation execution never calls GitHub directly.
 - Execute pinned datasets sequentially. A quality failure does not stop later datasets; an
   infrastructure failure marks the umbrella execution partial and leaves its gate not evaluated.
-- Write `evaluation-execution.json` and `evaluation-summary.md` atomically. Exit `0` for passed,
-  `1` for evaluated quality failure, and `2` for infrastructure/not-evaluated failure.
+- Materialize `evaluation-execution.json` and `evaluation-summary.md` atomically from the latest
+  journal. `SIGINT`/`SIGTERM` writes an interruption checkpoint and partial artifacts, then enters
+  `reporting/pending` when a target exists or `terminal/not_requested` otherwise; an uncatchable stop
+  leaves the last valid journal for `recover-evaluation`. Exit `0` for passed, `1` for evaluated
+  quality failure, and `2` for infrastructure/not-evaluated failure.
 
 ### 6. Manual GitHub Workflow and PR Summary
 
 - Retain `workflow_dispatch`, replace free-form dataset paths with a constrained
   `dataset_scope` choice (`all`, `core`, `follow_up`), and add optional numeric `pr_number`.
-- Require Langfuse and provider credentials from the Testing environment. Continue to run
-  migrations and initialize PostgreSQL-backed research persistence.
-- Run the orchestrator while capturing its exit code, upload artifacts unconditionally, optionally
-  create/update one comment identified by a stable HTML marker, then reproduce the captured exit
-  code in the final step.
+- Require Langfuse credentials, expected Langfuse project ID, and provider credentials from the
+  Testing environment. Continue to run migrations and initialize PostgreSQL-backed research
+  persistence.
+- Run the orchestrator while capturing its exit code, recover missing final artifacts when possible,
+  optionally create/update one comment identified by a stable HTML marker, upload the resulting
+  reporting-terminal artifacts unconditionally, then reproduce the captured exit code in the final
+  step unless recovery/reporting requires infrastructure exit `2`.
 - The comment contains execution/gate status, SHA/ref, dataset counts, aggregate scores, sanitized
   failed-case reasons, artifact URL, and Langfuse run URLs. It never includes raw prompts, answers,
   passages, payloads, or exception text.
 - Before commenting, verify that the PR belongs to the current repository and its head SHA equals
   the evaluated commit. A mismatch is a reporting infrastructure failure, never a valid summary.
+- `report-evaluation-pr` requires the matching recovery journal in reporting/pending state. It
+  terminalizes only reporting status and sanitized reporting failure codes; evaluation status,
+  gate, manifest, runs, scores, final JSON/Markdown, and Langfuse records remain immutable.
 - Keep this workflow out of required branch-protection checks for feature 003.
 
 ## Testing Strategy
@@ -218,13 +278,16 @@ No database migration or frontend change is required.
   IDs/hashes, duplicate/unknown fields, and 18-25 total count.
 - Deterministic tests: citation applicability/denominators, behavior vs infrastructure outcomes,
   gate `passed|failed|not_evaluated`, score applicability, and privacy-safe reason output.
-- Langfuse adapter tests: create/upsert/archive, exact-version refetch, mismatch fail-closed,
-  score-config compatibility, deterministic score IDs, complete-run publication, partial-run
-  suppression, and flush behavior using fakes at the adapter boundary.
+- Langfuse adapter tests: project-identity mismatch before writes, create/upsert/archive,
+  exact-version refetch, mismatch fail-closed, score-config compatibility, deterministic score IDs,
+  complete-run publication, partial-run suppression, and flush behavior using fakes at the adapter
+  boundary.
 - Orchestrator tests: all preflights precede agent calls, one run per dataset, shared execution ID,
-  completed/partial/errored transitions, exit codes, and artifact preservation.
+  manifest replay without remote mutation, completed/partial/errored transitions, injected
+  interruption boundaries, journal recovery, exit codes, and artifact preservation.
 - Workflow/report tests: stable PR marker, one canonical comment, links and required fields,
-  permission/reporting failure isolation, and forbidden-content scans.
+  exact reporting-target match, reporting success/failure journal terminalization, immutable
+  evaluation verdict/artifacts, permission/reporting failure isolation, and forbidden-content scans.
 - Existing agent runner, deterministic evaluator, observability-security, and CLI tests remain green;
   `make check` is the commit gate.
 

@@ -6,7 +6,8 @@ This guide describes the intended end-to-end validation after implementation. Co
 ## Prerequisites
 
 - `.env` exists and contains the required CompanyLens, OpenAI, SEC, PostgreSQL, and Langfuse values.
-- Langfuse credentials target the intended Testing project.
+- `COMPANY_LENS_LANGFUSE_PROJECT_ID` identifies the intended Testing project, and the configured
+  project-scoped credentials belong to that exact project.
 - Docker and Python 3.12 are available.
 - GitHub manual validation has a `Testing` environment with matching secrets.
 
@@ -77,6 +78,7 @@ company-lens sync-evaluation-datasets \
 
 Expected:
 
+- the public project lookup returns the configured expected project ID before any dataset write;
 - one Langfuse dataset per repository dataset;
 - every repository case appears once with matching content hash;
 - stale items are archived;
@@ -105,32 +107,71 @@ Expected:
 - Langfuse shows one dataset run with item traces and applicable deterministic scores;
 - `evaluation-execution.json` validates against
   `contracts/evaluation-execution.schema.json`;
+- `evaluation-journal.json` validates against `contracts/evaluation-journal.schema.json` and reaches
+  a terminal sequence;
 - `evaluation-summary.md` contains no raw answer, prompt, evidence passage, provider payload,
   exception text, credential, or stack trace;
 - exit code is `0`, `1`, or `2` according to the CLI contract.
 
-## 7. Validate Failure Semantics
+## 7. Replay the Recorded Manifest
+
+Use the execution artifact from the small live evaluation:
+
+```bash
+company-lens run-evaluation \
+  --manifest artifacts/evaluations/manual-smoke/evaluation-execution.json \
+  --output-dir artifacts/evaluations/manual-smoke-replay \
+  --pretty
+```
+
+Expected:
+
+- the replay creates a new execution ID with `replay_of_execution_id` and the source manifest
+  fingerprint;
+- local dataset, gate, score-contract, model, prompt/parser/index, policy, project, and snapshot
+  fingerprints match the source manifest;
+- the exact recorded Langfuse snapshots are fetched read-only;
+- no dataset/item/archive/score-config mutation occurs;
+- a mismatch or unavailable snapshot causes zero provider calls and exit `2`.
+
+## 8. Validate Failure and Recovery Semantics
 
 Use focused tests rather than intentionally damaging shared remote data:
 
 ```bash
 pytest -q \
-  tests/test_langfuse_eval_sync.py \
-  tests/test_langfuse_experiment.py \
-  tests/test_evaluation_orchestrator.py \
-  tests/test_evaluation_reporting.py
+  tests/evals/test_langfuse_sync.py \
+  tests/evals/test_langfuse_experiment.py \
+  tests/evals/test_evaluation_orchestrator.py \
+  tests/evals/test_evaluation_reporting.py \
+  tests/evals/test_run_evaluation_cli.py
 ```
 
 The tests must prove:
 
 - remote hash mismatch causes zero provider calls and exit `2`;
+- wrong expected project ID causes zero remote writes, zero provider calls, and exit `2`;
+- with a PR target, wrong-project or snapshot preflight failure still reaches `reporting/pending` and
+  can publish a sanitized not-evaluated PR summary; without a target it reaches
+  `terminal/not_requested`;
 - captured missing answer is a behavior failure and can produce exit `1`;
 - provider/evaluator failure yields partial/errored plus `gate_status=not_evaluated` and exit `2`;
 - incomplete SDK item results never produce aggregate quality scores;
 - not-applicable citation cases emit no citation score and do not enter the denominator;
-- partial artifacts survive and remain privacy-safe.
+- every injected terminal-transition interruption leaves a valid, monotonic, privacy-safe journal;
+- `SIGINT`/`SIGTERM` materializes partial artifacts, and `recover-evaluation` reconstructs them from
+  the last valid journal without provider or Langfuse calls.
 
-## 8. Run the Manual GitHub Workflow
+Example recovery command:
+
+```bash
+company-lens recover-evaluation \
+  --journal artifacts/evaluations/interrupted/evaluation-journal.json \
+  --output-dir artifacts/evaluations/interrupted \
+  --pretty
+```
+
+## 9. Run the Manual GitHub Workflow
 
 In GitHub Actions, open the evaluation workflow, select **Run workflow**, choose the branch/ref and
 `dataset_scope`, optionally supply a PR number, and run it.
@@ -140,11 +181,24 @@ Expected:
 - one Langfuse dataset run per selected repository dataset;
 - all runs share one execution ID and manifest fingerprint;
 - one artifact bundle is uploaded even when evaluation fails;
+- the bundle includes the journal and recovered partial JSON/Markdown when interruption occurred;
 - when a PR number is supplied, exactly one canonical comment is created or updated;
+- the journal target exactly matches the repository/PR and reporting finishes `succeeded|failed`;
+- infrastructure/preflight failure comments show `not_evaluated` without requiring verified remote
+  snapshots or exposing raw errors, and show Langfuse run output as `unavailable` when no experiment
+  run was created;
+- an injected reporting failure leaves evaluation status, gate, manifest, runs, scores, final JSON,
+  and Langfuse records unchanged while the workflow exits `2`;
 - the final workflow result reflects the orchestrator exit code but is not configured as a required
   branch-protection check by this feature.
 
-## 9. Inspect Langfuse
+This final check is environment-only: it requires the repository's `Testing` environment, live
+project-scoped Langfuse/OpenAI credentials, and a real PR head ref. Local implementation validation
+covers the workflow contract, fake-backed project mismatch/sync/experiment/reporting paths, exact
+execution/journal schemas, immutable reporting, and read-only replay; it does not claim that a live
+Testing workflow was executed from a developer machine.
+
+## 10. Inspect Langfuse
 
 For each linked dataset run, verify:
 

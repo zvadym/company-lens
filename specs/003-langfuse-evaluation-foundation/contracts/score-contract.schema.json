@@ -43,7 +43,8 @@
             "citation_required",
             "follow_up",
             "required_tools",
-            "prohibited_tools"
+            "prohibited_tools",
+            "operational_metrics"
           ]
         },
         "aggregation": { "type": "string", "minLength": 1 },

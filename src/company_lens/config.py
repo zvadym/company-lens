@@ -28,6 +28,7 @@ class Settings(BaseSettings):
         default="https://cloud.langfuse.com",
         validation_alias=AliasChoices("COMPANY_LENS_LANGFUSE_BASE_URL", "LANGFUSE_BASE_URL"),
     )
+    langfuse_project_id: str | None = Field(default=None)
     prompt_manifest_path: Path = Field(default=Path("prompts/manifest.yaml"))
     prompt_version: str = Field(default="research-v1", min_length=1)
     langfuse_prompts_enabled: bool = Field(default=False)

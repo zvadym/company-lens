@@ -1,5 +1,16 @@
 # Contract: Repository to Langfuse Mapping
 
+## Project Identity Preflight
+
+`COMPANY_LENS_LANGFUSE_PROJECT_ID` is required for every synchronization, normal evaluation, and
+replay. Before any dataset read/write, score-config mutation, or provider-backed case call, use the
+configured project-scoped credentials with Langfuse's public `GET /api/public/projects` endpoint and
+require the returned project ID to equal the configured value. Project name is diagnostic only.
+
+Missing expected ID, invalid credentials, unavailable identity, organization-scoped credentials, or
+an ID mismatch fails closed. The sanitized report may include expected/resolved IDs but never API
+keys or raw authorization errors.
+
 ## Dataset Mapping
 
 One GoldenDataset maps to one Langfuse dataset with the same `name`.
@@ -50,6 +61,10 @@ After all upserts/archives:
 6. Store the timestamp, IDs, hashes, and archived stale IDs in the manifest.
 
 No selected dataset may begin a provider-backed task until every selected snapshot passes.
+
+For manifest replay, skip all upsert/archive and score-config reconciliation steps. Fetch each
+recorded `version_timestamp`, require the recorded project/dataset IDs and active IDs/hashes to match,
+and fail before provider calls on any mismatch.
 
 ## Experiment Mapping
 
@@ -119,7 +134,8 @@ post-run completeness verification, except `gate_status=not_evaluated` on a part
 
 - Dataset items use deterministic UUIDv5 IDs.
 - Dataset-run names include the unique execution ID; rerunning the same execution ID is rejected
-  locally unless an explicit future resume contract is added.
+  locally. Manifest replay always creates a new execution ID and records the source execution ID and
+  manifest fingerprint.
 - Scores use UUIDv5 IDs from `<dataset-run-id>:<scope>:<score-name>[:<case-id>]`.
 - Every score write sends the full immutable payload and associated score-config ID.
 

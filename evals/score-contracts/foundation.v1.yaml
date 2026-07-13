@@ -1,0 +1,41 @@
+name: company-lens-foundation
+version: 1
+evaluator_version: foundation-deterministic-v1
+scores:
+  - {name: case_pass, scope: item, data_type: BOOLEAN, applicability: always, description: Overall applicable deterministic checks pass.}
+  - {name: company_pass, scope: item, data_type: BOOLEAN, applicability: always, description: Company targets match.}
+  - {name: metric_pass, scope: item, data_type: BOOLEAN, applicability: always, description: Metrics match.}
+  - {name: operation_pass, scope: item, data_type: BOOLEAN, applicability: always, description: Operation matches.}
+  - {name: route_pass, scope: item, data_type: BOOLEAN, applicability: always, description: Route matches.}
+  - {name: required_tools_pass, scope: item, data_type: BOOLEAN, applicability: required_tools, description: All required tools ran.}
+  - {name: prohibited_tools_pass, scope: item, data_type: BOOLEAN, applicability: prohibited_tools, description: No prohibited tool ran.}
+  - {name: follow_up_safety_pass, scope: item, data_type: BOOLEAN, applicability: follow_up, description: Follow-up context was reused safely.}
+  - {name: citation_valid, scope: item, data_type: BOOLEAN, applicability: citation_required, description: Citation validation passed.}
+  - {name: operational_budget_pass, scope: item, data_type: BOOLEAN, applicability: operational_metrics, description: Operational budgets passed.}
+  - {name: case_pass_rate, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: case_pass, description: Passed case rate.}
+  - {name: company_accuracy, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: company_pass, description: Company check pass rate.}
+  - {name: metric_accuracy, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: metric_pass, description: Metric check pass rate.}
+  - {name: operation_accuracy, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: operation_pass, description: Operation check pass rate.}
+  - {name: route_accuracy, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: route_pass, description: Route check pass rate.}
+  - {name: required_tool_recall, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: required_tools, description: Required tool recall.}
+  - {name: prohibited_tool_pass_rate, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: prohibited_tools_pass, description: Prohibited tool pass rate.}
+  - {name: follow_up_safety_accuracy, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: follow_up_safety_pass, description: Follow-up safety pass rate.}
+  - {name: citation_validity_pass_rate, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: citation_valid, description: Citation validity rate over required cases.}
+  - {name: operational_metrics_presence_rate, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: operational_metrics, description: Operational metrics presence rate.}
+  - {name: operational_budget_pass_rate, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: operational_budget_pass, description: Operational budget pass rate.}
+  - {name: missing_result_rate, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: missing_results, description: Missing result rate.}
+  - {name: category_document_retrieval, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: category_document_retrieval, description: Document retrieval category pass rate.}
+  - {name: category_structured_financial, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: category_structured_financial, description: Structured financial category pass rate.}
+  - {name: category_hybrid, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: category_hybrid, description: Hybrid category pass rate.}
+  - {name: category_cross_document, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: category_cross_document, description: Cross-document category pass rate.}
+  - {name: category_ambiguous_entity, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: category_ambiguous_entity, description: Ambiguous entity category pass rate.}
+  - {name: category_missing_or_abstain, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: category_missing_or_abstain, description: Missing data category pass rate.}
+  - {name: category_adversarial, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: category_adversarial, description: Adversarial category pass rate.}
+  - {name: category_follow_up, scope: run, data_type: NUMERIC, minimum: 0, maximum: 1, applicability: always, aggregation: category_follow_up, description: Follow-up category pass rate.}
+  - name: gate_status
+    scope: run
+    data_type: CATEGORICAL
+    categories: [passed, failed, not_evaluated]
+    applicability: always
+    aggregation: gate
+    description: Trusted evaluation gate status.

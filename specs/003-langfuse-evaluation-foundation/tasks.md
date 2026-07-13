@@ -24,9 +24,9 @@ sync workflow both depend on them.
 
 **Purpose**: Prepare dependency, artifact, and test-support boundaries without changing behavior.
 
-- [ ] T001 Raise the supported Langfuse SDK floor to `>=4.9.1,<5` in `pyproject.toml` and confirm the resolved SDK exposes versioned dataset retrieval and experiment APIs
-- [ ] T002 [P] Exclude generated evaluation run artifacts under `artifacts/evaluations/` in `.gitignore`
-- [ ] T003 [P] Create reusable typed Langfuse dataset, score-config, experiment, and failure fakes in `tests/evals/__init__.py` and `tests/evals/fakes_langfuse.py`
+- [X] T001 Raise the supported Langfuse SDK floor to `>=4.9.1,<5` in `pyproject.toml` and confirm the resolved SDK exposes versioned dataset retrieval and experiment APIs
+- [X] T002 [P] Exclude generated evaluation run artifacts under `artifacts/evaluations/` in `.gitignore`
+- [X] T003 [P] Create reusable typed Langfuse project-identity, dataset, score-config, experiment, mutation-counter, and failure fakes in `tests/evals/__init__.py` and `tests/evals/fakes_langfuse.py`
 
 ---
 
@@ -39,27 +39,27 @@ splits, and implement fail-closed Langfuse preflight primitives shared by all st
 
 ### Foundational Tests
 
-- [ ] T004 [P] Add failing tests for citation-mode defaults, citation-scenario validation, source-path/hash metadata, and backward-compatible golden loading in `tests/test_golden_dataset.py`
-- [ ] T005 [P] Add failing tests for execution/run state invariants, sanitized infrastructure outcomes, citation observations, manifests, and `passed|failed|not_evaluated` gate states in `tests/evals/test_models.py`
-- [ ] T006 [P] Add failing tests for score-contract uniqueness, type/range/category rules, applicability, 35-character names, canonical hashing, and incompatible semantic changes in `tests/evals/test_score_contract.py`
-- [ ] T007 [P] Add failing tests for deterministic UUIDv5 item/score IDs, canonical Langfuse payloads, active/stale mapping, and content hashes in `tests/evals/test_langfuse_mapping.py`
-- [ ] T008 [P] Add failing adapter tests for dataset create/upsert/archive, score-config reconciliation, exact-version readback, partial sync, concurrent mismatch, and zero-provider-call preflight failure in `tests/evals/test_langfuse_sync.py`
+- [X] T004 [P] Add failing tests for citation-mode defaults, citation-scenario validation, source-path/hash metadata, and backward-compatible golden loading in `tests/test_golden_dataset.py`
+- [X] T005 [P] Add failing tests for execution/run state invariants, sanitized infrastructure outcomes, citation observations, strict normal/replay manifests, the full journal phase/status/gate/reporting matrix, dataset-scoped terminal case identities, monotonic recovery journals, and `pending|passed|failed|not_evaluated` gate states in `tests/evals/test_models.py`
+- [X] T006 [P] Add failing tests for score-contract uniqueness, type/range/category rules, applicability, 35-character names, canonical hashing, and incompatible semantic changes in `tests/evals/test_score_contract.py`
+- [X] T007 [P] Add failing tests for deterministic UUIDv5 item/score IDs, canonical Langfuse payloads, active/stale mapping, and content hashes in `tests/evals/test_langfuse_mapping.py`
+- [X] T008 [P] Add failing adapter tests for key-associated project lookup/mismatch before mutation, dataset create/upsert/archive, score-config reconciliation, exact-version readback, read-only replay, partial sync, concurrent mismatch, mutation counts, and zero-provider-call preflight failure in `tests/evals/test_langfuse_sync.py`
 
 ### Foundational Implementation
 
-- [ ] T009 Extend `GoldenDatasetCase` with effective citation mode/scenario, source-aware loading, canonical hashing, and coverage-summary fields in `src/company_lens/evals/golden.py`
-- [ ] T010 Extract observed, citation, score, report, snapshot, manifest, dataset-run, and execution Pydantic models from `src/company_lens/evals/deterministic.py` into `src/company_lens/evals/models.py`
-- [ ] T011 Implement repository-authored score-contract models/loaders in `src/company_lens/evals/score_contract.py` and create all item/run definitions from `contracts/langfuse-mapping.md` in `evals/score-contracts/foundation.v1.yaml`
-- [ ] T012 [P] Rename regression-gate types/functions to evaluation-gate terminology and extract threshold/budget logic into `src/company_lens/evals/gates.py` while preserving the reviewed shapes of `evals/gates/eval-fast.v1.yaml` and `evals/gates/eval-full.v1.yaml`
-- [ ] T013 [P] Extract pure per-case checks and aggregate/category metric calculations from `src/company_lens/evals/deterministic.py` into `src/company_lens/evals/checks.py` without changing existing results
-- [ ] T014 Extract deterministic Markdown formatting into `src/company_lens/evals/reporting.py` and reduce `src/company_lens/evals/deterministic.py` to a compatibility facade with stable public re-exports
-- [ ] T015 [P] Add a failing privacy/configuration test for retrieving the configured Langfuse client without exposing credentials or raw configuration errors in `tests/test_observability_security.py`
-- [ ] T016 Expose a typed current-Langfuse-client accessor and sanitized missing-client error from `src/company_lens/observability/telemetry.py` for adapter dependency injection
-- [ ] T017 Implement deterministic repository-to-Langfuse item mapping, canonical serialization, UUIDv5 identities, and hashes in `src/company_lens/evals/langfuse_mapping.py`
-- [ ] T018 Implement score-config lookup/create/compatibility checks and deterministic full-payload score publication in `src/company_lens/evals/langfuse_scores.py`
-- [ ] T019 Implement all-datasets-first synchronization, stale-item archival, exact timestamp pinning/readback, and snapshot verification in `src/company_lens/evals/langfuse_sync.py`
-- [ ] T020 Extract existing evaluation parser registration/handlers from `src/company_lens/cli.py` into `src/company_lens/evals/cli.py`, preserving `validate-golden-dataset`, `run-golden-agent`, and `evaluate-golden-results` behavior and updating `tests/test_agent_cli.py`
-- [ ] T021 Run the foundational suite in `tests/test_golden_dataset.py`, `tests/test_deterministic_evals.py`, `tests/evals/test_models.py`, `tests/evals/test_score_contract.py`, `tests/evals/test_langfuse_mapping.py`, `tests/evals/test_langfuse_sync.py`, and `tests/test_observability_security.py`
+- [X] T009 Extend `GoldenDatasetCase` with effective citation mode/scenario, source-aware loading, canonical hashing, and coverage-summary fields in `src/company_lens/evals/golden.py`
+- [X] T010 Extract observed, citation, score, report, project-identity, snapshot, normal/replay manifest, recovery-journal, dataset-run, and execution Pydantic models from `src/company_lens/evals/deterministic.py` into `src/company_lens/evals/models.py`
+- [X] T011 Implement repository-authored score-contract models/loaders in `src/company_lens/evals/score_contract.py` and create all item/run definitions from `contracts/langfuse-mapping.md` in `evals/score-contracts/foundation.v1.yaml`
+- [X] T012 [P] Rename regression-gate types/functions to evaluation-gate terminology and extract threshold/budget logic into `src/company_lens/evals/gates.py` while preserving the reviewed shapes of `evals/gates/eval-fast.v1.yaml` and `evals/gates/eval-full.v1.yaml`
+- [X] T013 [P] Extract pure per-case checks and aggregate/category metric calculations from `src/company_lens/evals/deterministic.py` into `src/company_lens/evals/checks.py` without changing existing results
+- [X] T014 Extract deterministic Markdown formatting into `src/company_lens/evals/reporting.py` and reduce `src/company_lens/evals/deterministic.py` to a compatibility facade with stable public re-exports
+- [X] T015 [P] Add failing settings/client tests for required evaluation project ID, project-scoped identity lookup, shared client lifecycle, and sanitized missing/mismatched-client errors in `tests/test_config.py` and `tests/test_observability_security.py`
+- [X] T016 Extract typed Langfuse client construction, lifecycle, current-client access, and public project-identity verification from `src/company_lens/observability/telemetry.py` into `src/company_lens/observability/langfuse_client.py`; add `COMPANY_LENS_LANGFUSE_PROJECT_ID` wiring in `src/company_lens/config.py`, `.env.example`, and `docker-compose.yml`
+- [X] T017 Implement deterministic repository-to-Langfuse item mapping, canonical serialization, UUIDv5 identities, and hashes in `src/company_lens/evals/langfuse_mapping.py`
+- [X] T018 Implement score-config lookup/create/compatibility checks and deterministic full-payload score publication in `src/company_lens/evals/langfuse_scores.py`
+- [X] T019 Implement project-identity-first synchronization, stale-item archival, exact timestamp pinning/readback, snapshot verification, and mutation-free recorded-snapshot replay loading in `src/company_lens/evals/langfuse_sync.py`
+- [X] T020 Extract existing evaluation parser registration/handlers from `src/company_lens/cli.py` into `src/company_lens/evals/cli.py`, preserving `validate-golden-dataset`, `run-golden-agent`, and `evaluate-golden-results` behavior and updating `tests/test_agent_cli.py`
+- [X] T021 Run the foundational suite in `tests/test_golden_dataset.py`, `tests/test_deterministic_evals.py`, `tests/evals/test_models.py`, `tests/evals/test_score_contract.py`, `tests/evals/test_langfuse_mapping.py`, `tests/evals/test_langfuse_sync.py`, and `tests/test_observability_security.py`
 
 **Checkpoint**: Existing deterministic commands remain green; exact repository/Langfuse preflight
 and score contracts are usable by US1 and US2 without provider-backed calls.
@@ -79,22 +79,22 @@ verify exit codes `1` and `2` and aggregate suppression.
 
 ### Tests for User Story 1
 
-- [ ] T022 [P] [US1] Add failing tests for privacy-safe `AgentState` projection, answer presence, citation validity/reason codes, unknown evidence IDs, and not-applicable citation omission in `tests/evals/test_agent_observation.py`
-- [ ] T023 [P] [US1] Add failing tests for isolated case sessions, multi-turn reuse within one case, captured missing-answer behavior failure, and sanitized provider/runner infrastructure outcomes in `tests/test_golden_agent_runner.py`
-- [ ] T024 [P] [US1] Add failing tests for pinned `DatasetClient.run_experiment`, applicable score-config IDs, deterministic score IDs, dropped-item/evaluator detection, dataset-run linkage, partial-run `not_evaluated`, and flush behavior in `tests/evals/test_langfuse_experiment.py`
-- [ ] T025 [P] [US1] Add failing tests for all-preflights-before-agent, one run per dataset, shared execution ID/manifest, sequential datasets, completed/partial/errored transitions, gate derivation, and atomic artifacts in `tests/evals/test_evaluation_orchestrator.py`
-- [ ] T026 [P] [US1] Add failing CLI contract tests for repeatable datasets, per-dataset max cases, policy/manifest metadata, output paths, sanitized errors, and exit codes `0|1|2` in `tests/evals/test_run_evaluation_cli.py`
+- [X] T022 [P] [US1] Add failing tests for privacy-safe `AgentState` projection, answer presence, citation validity/reason codes, unknown evidence IDs, and not-applicable citation omission in `tests/evals/test_agent_observation.py`
+- [X] T023 [P] [US1] Add failing tests for isolated case sessions, multi-turn reuse within one case, captured missing-answer behavior failure, and sanitized provider/runner infrastructure outcomes in `tests/test_golden_agent_runner.py`
+- [X] T024 [P] [US1] Add failing tests for pinned `DatasetClient.run_experiment`, applicable score-config IDs, deterministic score IDs, dropped-item/evaluator detection, dataset-run linkage, partial-run `not_evaluated`, and flush behavior in `tests/evals/test_langfuse_experiment.py`
+- [X] T025 [P] [US1] Add failing tests for project/all-dataset preflights before agent calls, target-aware preflight-failure transitions to `reporting/pending` or `terminal/not_requested`, one run per dataset, shared execution ID/manifest, read-only replay with a new linked execution, sequential datasets, every injected journal transition/interruption, recovery materialization, completed/partial/errored transitions, gate derivation, and atomic artifacts in `tests/evals/test_evaluation_orchestrator.py`
+- [X] T026 [P] [US1] Add failing CLI contract tests for normal/replay mutual exclusion, immutable replay overrides, repeatable datasets, per-dataset max cases, paired optional repository/PR reporting target, policy/manifest metadata, `recover-evaluation`, output paths, sanitized errors, signals, and exit codes `0|1|2` in `tests/evals/test_run_evaluation_cli.py`
 
 ### Implementation for User Story 1
 
-- [ ] T027 [US1] Implement the privacy-safe `AgentState` to `CaseObservation` projection and citation classification in `src/company_lens/evals/observation.py`
-- [ ] T028 [US1] Refactor case selection/execution in `src/company_lens/evals/agent_runner.py` to use `observation.py`, preserve isolated durable sessions, collect operational metrics, and capture sanitized terminal outcomes without dropping cases
-- [ ] T029 [P] [US1] Implement pinned dataset experiment execution, item evaluator adaptation, post-run cardinality/linkage/score verification, and trusted run-score publication in `src/company_lens/evals/langfuse_experiment.py`
-- [ ] T030 [P] [US1] Implement atomic privacy-safe `evaluation-execution.json` and `evaluation-summary.md` rendering, forbidden-content guards, and bounded failure reasons in `src/company_lens/evals/reporting.py`
-- [ ] T031 [US1] Implement the multi-dataset preflight/run/finalize state machine, immutable manifest construction, quality-vs-infrastructure classification, and exit-code mapping in `src/company_lens/evals/orchestrator.py`
-- [ ] T032 [US1] Add the `run-evaluation` parser/handler from `contracts/evaluation-cli.md` to `src/company_lens/evals/cli.py` and wire dispatch through `src/company_lens/cli.py`
-- [ ] T033 [US1] Publish the stable execution/orchestration surface and compatibility exports from `src/company_lens/evals/__init__.py`
-- [ ] T034 [US1] Run the US1 focused suite in `tests/evals/test_agent_observation.py`, `tests/test_golden_agent_runner.py`, `tests/evals/test_langfuse_experiment.py`, `tests/evals/test_evaluation_orchestrator.py`, and `tests/evals/test_run_evaluation_cli.py`
+- [X] T027 [US1] Implement the privacy-safe `AgentState` to `CaseObservation` projection and citation classification in `src/company_lens/evals/observation.py`
+- [X] T028 [US1] Refactor case selection/execution in `src/company_lens/evals/agent_runner.py` to use `observation.py`, preserve isolated durable sessions, collect operational metrics, and capture sanitized terminal outcomes without dropping cases
+- [X] T029 [P] [US1] Implement pinned dataset experiment execution, item evaluator adaptation, post-run cardinality/linkage/score verification, and trusted run-score publication in `src/company_lens/evals/langfuse_experiment.py`
+- [X] T030 [P] [US1] Implement validated sequence-monotonic atomic `evaluation-journal.json` checkpoints with independent reporting state/failure codes, dataset-scoped terminal case identities, target-aware recovery transitions, recovery materialization, privacy-safe `evaluation-execution.json`/`evaluation-summary.md` rendering, forbidden-content guards, and bounded failure reasons in `src/company_lens/evals/reporting.py`
+- [X] T031 [US1] Implement project-aware normal preflight, immutable manifest construction, mutation-free manifest replay with a new linked execution, optional PR reporting-intent initialization, multi-dataset run/finalize state transitions, journal checkpoints, target-aware graceful interruption, quality-vs-infrastructure classification, and exit-code mapping in `src/company_lens/evals/orchestrator.py`
+- [X] T032 [US1] Add the normal/replay `run-evaluation` and `recover-evaluation` parsers/handlers from `contracts/evaluation-cli.md` to `src/company_lens/evals/cli.py` and wire dispatch plus `SIGINT`/`SIGTERM` handling through `src/company_lens/cli.py`
+- [X] T033 [US1] Publish the stable execution/orchestration surface and compatibility exports from `src/company_lens/evals/__init__.py`
+- [X] T034 [US1] Run the US1 focused suite in `tests/evals/test_agent_observation.py`, `tests/test_golden_agent_runner.py`, `tests/evals/test_langfuse_experiment.py`, `tests/evals/test_evaluation_orchestrator.py`, and `tests/evals/test_run_evaluation_cli.py`
 
 **Checkpoint**: The P1 MVP is independently runnable and visible in Langfuse/local artifacts, with
 no PR comment requirement and no LLM-as-judge behavior.
@@ -112,13 +112,13 @@ timestamps are reported, and an injected mismatch exits `2` without provider cal
 
 ### Tests for User Story 2
 
-- [ ] T035 [P] [US2] Add failing CLI tests for default/repeated datasets, dry-run no-write behavior, verified sync JSON, stale reporting, output-file handling, and infrastructure exit code `2` in `tests/evals/test_sync_evaluation_cli.py`
+- [X] T035 [P] [US2] Add failing CLI tests for required expected project ID, wrong-project zero-write behavior, default/repeated datasets, dry-run no-write behavior, verified sync JSON, stale reporting, output-file handling, and infrastructure exit code `2` in `tests/evals/test_sync_evaluation_cli.py`
 
 ### Implementation for User Story 2
 
-- [ ] T036 [US2] Add the `sync-evaluation-datasets` parser/handler from `contracts/evaluation-cli.md` to `src/company_lens/evals/cli.py` using the foundational sync and score-config services
-- [ ] T037 [US2] Document deterministic IDs, active/archive semantics, dry-run, exact-version verification, and repository ownership in `evals/datasets/golden/README.md`
-- [ ] T038 [US2] Run US2 idempotency and mismatch validation in `tests/evals/test_langfuse_sync.py` and `tests/evals/test_sync_evaluation_cli.py`
+- [X] T036 [US2] Add the `sync-evaluation-datasets` parser/handler from `contracts/evaluation-cli.md` to `src/company_lens/evals/cli.py` using the foundational sync and score-config services
+- [X] T037 [US2] Document deterministic IDs, active/archive semantics, dry-run, exact-version verification, and repository ownership in `evals/datasets/golden/README.md`
+- [X] T038 [US2] Run US2 idempotency and mismatch validation in `tests/evals/test_langfuse_sync.py` and `tests/evals/test_sync_evaluation_cli.py`
 
 **Checkpoint**: Dataset synchronization is independently usable and testable without running the
 agent or depending on US3/US4.
@@ -137,15 +137,15 @@ the evaluation artifact or gate result.
 
 ### Tests for User Story 3
 
-- [ ] T039 [P] [US3] Add failing tests for PR repository/head-SHA validation, canonical marker lookup/create/update, duplicate detection, sanitized body generation, and API/permission failures in `tests/evals/test_github_reporting.py`
-- [ ] T040 [P] [US3] Add a failing workflow contract test for `workflow_dispatch` inputs, Testing secrets, permissions, fixed dataset allowlist, captured exit code, unconditional artifact upload, optional report step, and final status propagation in `tests/evals/test_evaluation_workflow.py`
+- [X] T039 [P] [US3] Add failing tests for PR repository/head-SHA validation, canonical marker lookup/create/update, duplicate detection, sanitized body generation with created-run links and unavailable markers, API/permission failures, and reporting success/failure outcomes in `tests/evals/test_github_reporting.py`
+- [X] T040 [P] [US3] Add a failing workflow contract test for `workflow_dispatch` inputs, Testing credentials/expected project ID, permissions, fixed dataset allowlist, captured exit code, signal forwarding, conditional recovery, paired repository/PR intent, sanitized preflight-failure reporting without provider calls, matching-target enforcement, reporting terminalization before unconditional journal/artifact upload, immutable execution JSON, and final status propagation in `tests/evals/test_evaluation_workflow.py`
 
 ### Implementation for User Story 3
 
-- [ ] T041 [US3] Implement typed GitHub PR lookup/comment reporting with the stable marker and privacy-safe errors in `src/company_lens/evals/github_reporting.py`
-- [ ] T042 [US3] Add a `report-evaluation-pr` handler that reads the existing JSON/Markdown artifacts without mutating their gate result in `src/company_lens/evals/cli.py`
-- [ ] T043 [US3] Replace free-form dataset input with `all|core|follow_up`, add optional PR number, run the orchestrator, upload artifacts, report the matching PR, and propagate exit codes in `.github/workflows/eval-full.yml`
-- [ ] T044 [US3] Run the US3 focused suite in `tests/evals/test_github_reporting.py` and `tests/evals/test_evaluation_workflow.py`
+- [X] T041 [US3] Implement typed GitHub PR lookup/comment reporting with the stable marker and privacy-safe errors in `src/company_lens/evals/github_reporting.py`
+- [X] T042 [US3] Add the contracted `report-evaluation-pr` parser/handler that validates matching execution/journal artifacts, renders only allowlisted typed fields, and atomically terminalizes only journal reporting state/failure codes while proving execution JSON bytes and evaluation fields remain unchanged in `src/company_lens/evals/cli.py`
+- [X] T043 [US3] Replace free-form dataset input with `all|core|follow_up`, pass the optional repository/PR pair to initialize reporting intent, verify the Testing Langfuse project ID, run the orchestrator with signal forwarding, recover missing final artifacts from the journal, invoke `report-evaluation-pr` with matching artifacts, upload the reporting-terminal artifact directory unconditionally, and propagate exit codes in `.github/workflows/eval-full.yml`
+- [X] T044 [US3] Run the US3 focused suite in `tests/evals/test_github_reporting.py` and `tests/evals/test_evaluation_workflow.py`
 
 **Checkpoint**: A manual workflow run can produce exactly one trustworthy PR summary, while PR
 reporting remains optional and non-required by feature 003.
@@ -163,14 +163,14 @@ and framework-neutral expected behavior.
 
 ### Tests for User Story 4
 
-- [ ] T045 [US4] Replace starter-count assertions with failing foundation coverage, citation-mode/scenario, category-minimum, and framework-neutrality tests in `tests/test_golden_dataset.py`
+- [X] T045 [US4] Replace starter-count assertions with failing foundation coverage, citation-mode/challenge-attempt semantics, category-minimum, citation-valid expected-answer, and framework-neutrality tests in `tests/test_golden_dataset.py`
 
 ### Implementation for User Story 4
 
-- [ ] T046 [US4] Annotate the existing seven core cases and four follow-up cases with reviewed effective citation modes/scenarios in `evals/datasets/golden/core.v1.yaml` and `evals/datasets/golden/follow_up.v1.yaml`
-- [ ] T047 [US4] Add seven reviewed core cases covering the second case in each non-follow-up category and all missing citation scenarios within the 18-case total in `evals/datasets/golden/core.v1.yaml`
-- [ ] T048 [US4] Document category and citation-scenario authoring rules plus the 18-25 coverage invariant in `evals/datasets/golden/README.md`
-- [ ] T049 [US4] Run golden validation and deterministic regression tests in `tests/test_golden_dataset.py`, `tests/test_deterministic_evals.py`, and `tests/test_golden_agent_runner.py`
+- [X] T046 [US4] Annotate the existing seven core cases and four follow-up cases with reviewed effective citation modes/scenarios in `evals/datasets/golden/core.v1.yaml` and `evals/datasets/golden/follow_up.v1.yaml`
+- [X] T047 [US4] Add seven reviewed core cases covering the second case in each non-follow-up category and the missing/unknown-evidence/semantic-mismatch citation challenge attempts, each expecting a valid final answer, within the 18-case total in `evals/datasets/golden/core.v1.yaml`
+- [X] T048 [US4] Document category and citation-scenario authoring rules plus the 18-25 coverage invariant in `evals/datasets/golden/README.md`
+- [X] T049 [US4] Run golden validation and deterministic regression tests in `tests/test_golden_dataset.py`, `tests/test_deterministic_evals.py`, and `tests/test_golden_agent_runner.py`
 
 **Checkpoint**: The initial foundation dataset has balanced critical coverage and remains the sole
 reviewed source of truth for synchronized Langfuse items.
@@ -182,13 +182,13 @@ reviewed source of truth for synchronized Langfuse items.
 **Purpose**: Finish operational documentation, contract/security checks, graph freshness, and
 end-to-end validation across all selected stories.
 
-- [ ] T050 [P] Add the manual evaluation, required environment values, Langfuse dataset/run/score inspection, exit-code triage, and privacy guidance to `docs/operations.md`
-- [ ] T051 [P] Add forbidden-content scans across JSON, Markdown, score comments, CLI errors, and PR bodies in `tests/evals/test_evaluation_reporting.py` and `tests/test_observability_security.py`
-- [ ] T052 [P] Validate generated execution artifacts and repository score contracts against `specs/003-langfuse-evaluation-foundation/contracts/evaluation-execution.schema.json` and `specs/003-langfuse-evaluation-foundation/contracts/score-contract.schema.json` in `tests/evals/test_contract_schemas.py`
-- [ ] T053 Execute the non-provider setup, golden validation, sync dry-run, exact-sync idempotency, and focused failure scenarios from `specs/003-langfuse-evaluation-foundation/quickstart.md`, correcting command/document drift in that file
-- [ ] T054 Run `graphify update .` and review generated impact for the evaluation modules recorded in `graphify-out/graph.json`
-- [ ] T055 Run the full repository quality gate with `make check` and resolve all failures in the files changed by feature 003
-- [ ] T056 Run `.github/workflows/eval-full.yml` manually against a Testing PR/ref, verify artifacts plus Langfuse dataset-run links and one canonical PR comment, and record any environment-only limitation in `specs/003-langfuse-evaluation-foundation/quickstart.md`
+- [X] T050 [P] Add normal/replay/recovery evaluation, required environment and expected Langfuse project ID, dataset/run/score/journal inspection, exit-code triage, interruption recovery, and privacy guidance to `docs/operations.md`
+- [X] T051 [P] Add forbidden-content scans across JSON, Markdown, score comments, CLI errors, and PR bodies in `tests/evals/test_evaluation_reporting.py` and `tests/test_observability_security.py`
+- [X] T052 [P] Validate generated execution artifacts, every allowed journal phase/status/gate/reporting/target combination including reporting with failed preflight markers, representative rejected combinations including running with those same failed markers, strict nested manifests, and repository score contracts against `specs/003-langfuse-evaluation-foundation/contracts/evaluation-execution.schema.json`, `specs/003-langfuse-evaluation-foundation/contracts/evaluation-journal.schema.json`, and `specs/003-langfuse-evaluation-foundation/contracts/score-contract.schema.json` in `tests/evals/test_contract_schemas.py`
+- [X] T053 Execute the non-provider setup, golden validation, wrong-project zero-write check, sync dry-run, exact-sync idempotency, read-only manifest replay, journal recovery, and focused failure scenarios from `specs/003-langfuse-evaluation-foundation/quickstart.md`, correcting command/document drift in that file
+- [X] T054 Run `graphify update .` and review generated impact for the evaluation modules recorded in `graphify-out/graph.json`
+- [X] T055 Run the full repository quality gate with `make check` and resolve all failures in the files changed by feature 003
+- [ ] T056 Run `.github/workflows/eval-full.yml` manually against a Testing PR/ref, verify expected project identity, exact reporting target/status, journal/final artifacts, Langfuse dataset-run links, recovery behavior, immutable evaluation output across reporting, and one canonical PR comment, and record any environment-only limitation in `specs/003-langfuse-evaluation-foundation/quickstart.md`
 
 ---
 
@@ -227,14 +227,15 @@ end-to-end validation across all selected stories.
 
 | Requirements | Primary tasks |
 |---|---|
-| FR-001-FR-005, FR-026, FR-028, FR-030 | T004, T007-T009, T017-T019, T035-T038 |
-| FR-006-FR-014, FR-018-FR-021, FR-027 | T022-T034 |
+| FR-001-FR-005, FR-026, FR-028, FR-030, FR-033 | T003-T004, T007-T009, T015-T019, T035-T038, T040, T043, T050, T053, T056 |
+| FR-006-FR-014, FR-018-FR-021, FR-027, FR-032, FR-034 | T005, T010, T022-T034, T040, T043, T050-T053, T056 |
 | FR-015, FR-022-FR-024, FR-029 | T045-T049 |
 | FR-016 | T011, T024, T051-T052 |
 | FR-017 | T022-T030, T039-T044, T050-T052 |
 | FR-025 | T022-T031 |
 | FR-031 | T006, T010-T011, T018, T024, T052 |
-| SC-001-SC-014 | T021, T034, T038, T044, T049, T051-T056 |
+| FR-035 | T005, T030, T039-T044, T051-T053, T056 |
+| SC-001-SC-017 | T021, T034, T038, T044, T049, T051-T056 |
 
 ---
 

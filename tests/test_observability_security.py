@@ -5,10 +5,18 @@ import json
 import logging
 from contextlib import contextmanager
 
+import pytest
 from langfuse import LangfuseOtelSpanAttributes
 
 from company_lens.observability import telemetry
 from company_lens.observability.context import bind_context
+from company_lens.observability.langfuse_client import (
+    LangfuseClientUnavailable,
+    current_langfuse_client,
+    reset_langfuse_client,
+    set_langfuse_client,
+    verify_langfuse_project,
+)
 from company_lens.observability.logging import JsonFormatter
 from company_lens.observability.telemetry import (
     ModelUsageRecord,
@@ -277,6 +285,41 @@ def test_langfuse_export_filter_keeps_meaningful_observations_and_drops_noise() 
     assert not telemetry._should_export_langfuse_span(  # noqa: SLF001
         _FakeReadableSpan({"http.method": "GET", "http.route": "/api/v1/health"})
     )
+
+
+def test_shared_langfuse_client_fails_with_sanitized_error_when_missing() -> None:
+    reset_langfuse_client()
+
+    with pytest.raises(LangfuseClientUnavailable, match="Langfuse client is not configured"):
+        current_langfuse_client()
+
+
+def test_project_identity_is_verified_without_exposing_credentials() -> None:
+    from tests.evals.fakes_langfuse import FakeLangfuse
+
+    client = FakeLangfuse()
+    set_langfuse_client(client)
+    try:
+        project = verify_langfuse_project(client, "project-testing")
+    finally:
+        reset_langfuse_client()
+
+    assert project.id == "project-testing"
+    assert project.name == "Testing"
+
+
+def test_project_identity_supports_langfuse_sdk_projects_container() -> None:
+    class ProjectsApi:
+        @staticmethod
+        def get():
+            return {"data": [{"id": "project-testing", "name": "Testing"}]}
+
+    class Client:
+        api = type("Api", (), {"projects": ProjectsApi()})()
+
+    project = verify_langfuse_project(Client(), "project-testing")
+
+    assert project.id == "project-testing"
 
 
 class _FakeSpan:
