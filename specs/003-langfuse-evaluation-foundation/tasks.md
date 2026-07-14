@@ -188,7 +188,7 @@ end-to-end validation across all selected stories.
 - [X] T053 Execute the non-provider setup, golden validation, wrong-project zero-write check, sync dry-run, exact-sync idempotency, read-only manifest replay, journal recovery, and focused failure scenarios from `specs/003-langfuse-evaluation-foundation/quickstart.md`, correcting command/document drift in that file
 - [X] T054 Run `graphify update .` and review generated impact for the evaluation modules recorded in `graphify-out/graph.json`
 - [X] T055 Run the full repository quality gate with `make check` and resolve all failures in the files changed by feature 003
-- [ ] T056 Run `.github/workflows/eval-full.yml` manually against a Testing PR/ref, verify expected project identity, exact reporting target/status, journal/final artifacts, Langfuse dataset-run links, recovery behavior, immutable evaluation output across reporting, and one canonical PR comment, and record any environment-only limitation in `specs/003-langfuse-evaluation-foundation/quickstart.md`
+- [X] T056 Run `.github/workflows/eval-full.yml` manually against a Testing PR/ref, verify expected project identity, exact reporting target/status, journal/final artifacts, Langfuse dataset-run links, recovery behavior, immutable evaluation output across reporting, and one canonical PR comment, and record any environment-only limitation in `specs/003-langfuse-evaluation-foundation/quickstart.md`
 
 ---
 

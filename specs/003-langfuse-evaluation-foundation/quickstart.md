@@ -195,8 +195,23 @@ Expected:
 This final check is environment-only: it requires the repository's `Testing` environment, live
 project-scoped Langfuse/OpenAI credentials, and a real PR head ref. Local implementation validation
 covers the workflow contract, fake-backed project mismatch/sync/experiment/reporting paths, exact
-execution/journal schemas, immutable reporting, and read-only replay; it does not claim that a live
-Testing workflow was executed from a developer machine.
+execution/journal schemas, immutable reporting, and read-only replay.
+
+Live validation completed on 2026-07-14 using commit `2b3096ee45489bb3396fcb30cfb1aac3592c1046`,
+PR `#68`, `dataset_scope=core`, and `max_cases=1`:
+
+- GitHub workflow run `29326562368` completed successfully with exit `0`;
+- expected and resolved Langfuse project IDs matched project `Company lens`;
+- the artifact bundle contained the terminal journal, immutable execution JSON, and Markdown summary;
+- execution `51b307b9-0dae-4782-afec-11deb8a9e6eb` completed with `gate_status=passed`;
+- Langfuse dataset `company-lens-core-golden` contained all 14 repository items, while the bounded
+  experiment selected exactly one item;
+- Langfuse API verification returned the selected experiment item, nine applicable item-level
+  boolean scores, and 21 run-level scores including categorical `gate_status=passed`;
+- the workflow published exactly one canonical marker comment to PR `#68` with matching commit,
+  artifact, and Langfuse dataset-run links;
+- the conditional recovery step completed without replacing the already complete execution
+  artifacts; injected recovery and immutable-reporting paths remain covered by automated tests.
 
 ## 10. Inspect Langfuse
 
