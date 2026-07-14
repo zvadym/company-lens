@@ -35,6 +35,27 @@ def sync_dataset(
     expected_project_id: str | None,
 ) -> DatasetSyncResult:
     try:
+        return _sync_dataset(
+            client,
+            dataset,
+            score_contract,
+            expected_project_id=expected_project_id,
+        )
+    except LangfuseSyncError:
+        raise
+    except Exception as exc:
+        # Fern-generated API errors do not share a stable public base class across SDK releases.
+        raise LangfuseSyncError("dataset_sync_failed") from exc
+
+
+def _sync_dataset(
+    client: Any,
+    dataset: GoldenDataset,
+    score_contract: ScoreContract,
+    *,
+    expected_project_id: str | None,
+) -> DatasetSyncResult:
+    try:
         project = verify_langfuse_project(client, expected_project_id)
     except LangfuseProjectMismatch as exc:
         raise LangfuseSyncError("project_mismatch") from exc
@@ -43,8 +64,7 @@ def sync_dataset(
 
     mapped = tuple(map_golden_case(dataset, case) for case in dataset.cases)
     expected = {item.id: item for item in mapped}
-    existing = _existing_items(client, dataset.name)
-    stale_ids = tuple(sorted(set(existing) - set(expected)))
+    # Dataset creation is idempotent by name and avoids SDK-specific 404 types on first sync.
     client.create_dataset(
         name=dataset.name,
         description=dataset.description,
@@ -55,6 +75,8 @@ def sync_dataset(
             "content_hash": dataset.content_hash,
         },
     )
+    existing = _existing_items(client, dataset.name)
+    stale_ids = tuple(sorted(set(existing) - set(expected)))
     timestamps: list[datetime] = []
     for item in mapped:
         created = _upsert_item(client, dataset.name, item, status="ACTIVE")

@@ -5,6 +5,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from company_lens.config import Settings
 from company_lens.evals.orchestrator import EvaluationRequest, run_evaluation
 from tests.evals.fakes_langfuse import FakeLangfuse
@@ -19,12 +21,24 @@ class ScoreConfigFailureClient(FakeLangfuse):
         raise SdkError("invalid request")
 
 
+class DatasetReadFailureClient(FakeLangfuse):
+    def get_dataset(self, name: str, **kwargs: Any) -> Any:
+        raise SdkError("dataset request failed")
+
+
 class NeverCalledAgent:
     def run(self, *_: Any, **__: Any) -> Any:
         raise AssertionError("agent must not run after a failed preflight")
 
 
-def test_score_config_sdk_failure_materializes_terminal_artifacts(tmp_path: Path) -> None:
+type FailureClient = type[ScoreConfigFailureClient] | type[DatasetReadFailureClient]
+
+
+@pytest.mark.parametrize("client_type", [ScoreConfigFailureClient, DatasetReadFailureClient])
+def test_sdk_failure_materializes_terminal_artifacts(
+    tmp_path: Path,
+    client_type: FailureClient,
+) -> None:
     outcome = run_evaluation(
         EvaluationRequest(
             dataset_paths=(Path("evals/datasets/golden/core.v1.yaml"),),
@@ -35,7 +49,7 @@ def test_score_config_sdk_failure_materializes_terminal_artifacts(tmp_path: Path
             commit_sha="abcdef1",
         ),
         settings=Settings(langfuse_project_id="project-testing", _env_file=None),
-        client=ScoreConfigFailureClient(),
+        client=client_type(),
         agent_provider=_agent_provider(),
     )
 

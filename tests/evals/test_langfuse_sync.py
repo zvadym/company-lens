@@ -13,6 +13,17 @@ DATASET = Path("evals/datasets/golden/core.v1.yaml")
 SCORE_CONTRACT = Path("evals/score-contracts/foundation.v1.yaml")
 
 
+class SdkNotFoundError(Exception):
+    pass
+
+
+class StrictFreshDatasetClient(FakeLangfuse):
+    def get_dataset(self, name: str, **kwargs: object):
+        if name not in self.datasets:
+            raise SdkNotFoundError("dataset not found")
+        return super().get_dataset(name, **kwargs)
+
+
 def test_sync_rejects_wrong_project_before_mutation() -> None:
     client = FakeLangfuse(project_id="wrong-project")
 
@@ -40,3 +51,18 @@ def test_sync_is_idempotent_and_returns_verified_snapshot() -> None:
     assert first.snapshot.active_item_ids == second.snapshot.active_item_ids
     assert len(first.snapshot.active_item_ids) == len(dataset.cases)
     assert set(client.datasets[dataset.name].items) == set(first.snapshot.active_item_ids)
+
+
+def test_sync_creates_fresh_dataset_before_first_read() -> None:
+    client = StrictFreshDatasetClient()
+    dataset = load_golden_dataset(DATASET)
+
+    result = sync_dataset(
+        client,
+        dataset,
+        load_score_contract(SCORE_CONTRACT),
+        expected_project_id="project-testing",
+    )
+
+    assert result.snapshot.langfuse_dataset_id == f"dataset-{dataset.name}"
+    assert client.counters.dataset_writes == 1
