@@ -23,21 +23,27 @@ class ReconciledScoreConfigs:
 
 
 def reconcile_score_configs(client: Any, contract: ScoreContract) -> ReconciledScoreConfigs:
-    existing = {_value(item, "name"): item for item in _list_score_configs(client)}
-    bindings: list[ScoreConfigBinding] = []
-    for definition in contract.scores:
-        config = existing.get(definition.name)
-        if config is None:
-            config = _create_score_config(client, definition)
-        elif not _compatible(config, definition):
-            raise ScoreConfigError(f"incompatible_score_config:{definition.name}")
-        config_id = _value(config, "id")
-        if not isinstance(config_id, str) or not config_id:
-            raise ScoreConfigError(f"missing_score_config_id:{definition.name}")
-        bindings.append(
-            ScoreConfigBinding(score_name=definition.name, langfuse_config_id=config_id)
-        )
-    return ReconciledScoreConfigs(bindings=tuple(bindings))
+    try:
+        existing = {_value(item, "name"): item for item in _list_score_configs(client)}
+        bindings: list[ScoreConfigBinding] = []
+        for definition in contract.scores:
+            config = existing.get(definition.name)
+            if config is None:
+                config = _create_score_config(client, definition)
+            elif not _compatible(config, definition):
+                raise ScoreConfigError(f"incompatible_score_config:{definition.name}")
+            config_id = _value(config, "id")
+            if not isinstance(config_id, str) or not config_id:
+                raise ScoreConfigError(f"missing_score_config_id:{definition.name}")
+            bindings.append(
+                ScoreConfigBinding(score_name=definition.name, langfuse_config_id=config_id)
+            )
+        return ReconciledScoreConfigs(bindings=tuple(bindings))
+    except ScoreConfigError:
+        raise
+    except Exception as exc:
+        # Fern-generated API errors do not share a stable public base class across SDK releases.
+        raise ScoreConfigError("score_config_reconciliation_failed") from exc
 
 
 def _list_score_configs(client: Any) -> list[Any]:
@@ -58,17 +64,18 @@ def _list_score_configs(client: Any) -> list[Any]:
 
 def _create_score_config(client: Any, definition: ScoreDefinition) -> Any:
     direct = getattr(client, "create_score_config", None)
-    categories = [
-        {"label": label, "value": float(index)} for index, label in enumerate(definition.categories)
-    ]
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "name": definition.name,
         "data_type": definition.data_type,
-        "min_value": definition.minimum,
-        "max_value": definition.maximum,
-        "categories": categories or None,
         "description": definition.description,
     }
+    if definition.data_type == "NUMERIC":
+        kwargs.update(min_value=definition.minimum, max_value=definition.maximum)
+    elif definition.data_type == "CATEGORICAL":
+        kwargs["categories"] = [
+            {"label": label, "value": float(index)}
+            for index, label in enumerate(definition.categories)
+        ]
     if direct is not None:
         # Test doubles accept label/value objects too, matching the public API shape.
         return direct(**kwargs)
