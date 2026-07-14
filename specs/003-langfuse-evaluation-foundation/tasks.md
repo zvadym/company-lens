@@ -190,6 +190,16 @@ end-to-end validation across all selected stories.
 - [X] T055 Run the full repository quality gate with `make check` and resolve all failures in the files changed by feature 003
 - [X] T056 Run `.github/workflows/eval-full.yml` manually against a Testing PR/ref, verify expected project identity, exact reporting target/status, journal/final artifacts, Langfuse dataset-run links, recovery behavior, immutable evaluation output across reporting, and one canonical PR comment, and record any environment-only limitation in `specs/003-langfuse-evaluation-foundation/quickstart.md`
 
+## Phase 8: Live Full-Suite Remediation
+
+**Purpose**: Correct evaluator false negatives and parser resilience issues exposed by the first
+18-case live execution without hiding genuine agent-quality or budget failures.
+
+- [X] T057 Clarify every follow-up prompt and expected operation in `evals/datasets/golden/follow_up.v1.yaml`, require explicit inherited operations in `src/company_lens/evals/golden.py`, and add contract tests
+- [X] T058 Make deterministic follow-up company rules accept reviewed name/ticker aliases while preserving status/source checks, extract the cohesive logic to `src/company_lens/evals/follow_up_checks.py`, and add ticker-only regression tests
+- [X] T059 Classify schema-invalid OpenAI structured output as a recoverable provider response and verify the workflow retries it within policy
+- [ ] T060 Run targeted follow-up and infrastructure smoke evaluations, inspect the resulting Langfuse runs and canonical PR comment, then rerun the full 18-case workflow when targeted behavior is trustworthy
+
 ---
 
 ## Dependencies and Execution Order
@@ -205,6 +215,7 @@ end-to-end validation across all selected stories.
 - **US4 (Phase 6)**: Depends on T009 and may run in parallel with US1/US2; it should complete before
   the final full workflow validation.
 - **Polish (Phase 7)**: Depends on all stories selected for delivery.
+- **Live Remediation (Phase 8)**: Depends on the first full live workflow execution after Phase 7.
 
 ### Foundational Internal Order
 
@@ -235,7 +246,8 @@ end-to-end validation across all selected stories.
 | FR-025 | T022-T031 |
 | FR-031 | T006, T010-T011, T018, T024, T052 |
 | FR-035 | T005, T030, T039-T044, T051-T053, T056 |
-| SC-001-SC-017 | T021, T034, T038, T044, T049, T051-T056 |
+| FR-036-FR-037 | T057-T060 |
+| SC-001-SC-017 | T021, T034, T038, T044, T049, T051-T056, T060 |
 
 ---
 

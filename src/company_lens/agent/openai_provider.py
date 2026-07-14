@@ -15,7 +15,7 @@ from openai import (
 )
 from openai.types.responses import EasyInputMessageParam, ResponseInputParam
 from openai.types.shared_params import Reasoning
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from company_lens.agent.model import (
     ModelMessage,
@@ -487,6 +487,13 @@ def _map_provider_error(exc: Exception) -> ModelProviderError:
             AgentErrorSeverity.TERMINAL,
             "openai_auth",
             "OpenAI authentication or permission check failed.",
+        )
+    if isinstance(exc, ValidationError):
+        return _error(
+            AgentErrorCategory.PROVIDER_RESPONSE,
+            AgentErrorSeverity.RECOVERABLE,
+            "openai_invalid_structured_output",
+            "OpenAI returned structured output that did not match the response schema.",
         )
     if isinstance(exc, BadRequestError):
         return _error(

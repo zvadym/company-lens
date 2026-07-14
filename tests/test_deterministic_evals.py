@@ -10,6 +10,7 @@ from company_lens.evals.deterministic import (
     evaluate_golden_results,
     load_regression_gate,
 )
+from tests.evals.follow_up_fixtures import follow_up_results
 
 GOLDEN_CORE_DATASET = Path("evals/datasets/golden/core.v1.yaml")
 GOLDEN_FOLLOW_UP_DATASET = Path("evals/datasets/golden/follow_up.v1.yaml")
@@ -204,7 +205,7 @@ def test_required_tools_can_be_checked_from_trajectory(tmp_path: Path) -> None:
 
 
 def test_follow_up_results_pass_safety_checks(tmp_path: Path) -> None:
-    results_path = _write_results(tmp_path, _follow_up_results())
+    results_path = _write_results(tmp_path, follow_up_results())
 
     report = evaluate_golden_results(GOLDEN_FOLLOW_UP_DATASET, results_path)
 
@@ -213,7 +214,7 @@ def test_follow_up_results_pass_safety_checks(tmp_path: Path) -> None:
 
 
 def test_follow_up_reuse_of_prohibited_company_fails(tmp_path: Path) -> None:
-    payload = copy.deepcopy(_follow_up_results())
+    payload = copy.deepcopy(follow_up_results())
     replace_case = payload["results"][1]
     replace_case["companies"].append(
         {
@@ -518,82 +519,6 @@ def _core_results() -> dict[str, Any]:
                 ],
                 "route": "rag_only",
                 "tools": ["retrieve_documents"],
-            },
-        ],
-    }
-
-
-def _follow_up_results() -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "dataset_name": "company-lens-follow-up-golden",
-        "dataset_version": 1,
-        "results": [
-            {
-                "case_id": "followup_safe_inheritance_chart_001",
-                "companies": [
-                    {
-                        "mention": "Cloudflare",
-                        "status": "resolved",
-                        "ticker": "NET",
-                        "source": "follow_up_context",
-                    }
-                ],
-                "metrics": ["revenue"],
-                "route": "calculation",
-                "tools": ["query_financial_facts", "calculate_metrics", "generate_chart_spec"],
-            },
-            {
-                "case_id": "followup_replace_company_preserve_task_001",
-                "companies": [
-                    {
-                        "mention": "Datadog",
-                        "status": "resolved",
-                        "ticker": "DDOG",
-                        "source": "current_question",
-                    }
-                ],
-                "metrics": ["revenue"],
-                "route": "calculation",
-                "tools": ["query_financial_facts", "calculate_metrics"],
-            },
-            {
-                "case_id": "followup_add_company_to_comparison_001",
-                "companies": [
-                    {
-                        "mention": "Cloudflare",
-                        "status": "resolved",
-                        "ticker": "NET",
-                        "source": "follow_up_context",
-                    },
-                    {
-                        "mention": "Datadog",
-                        "status": "resolved",
-                        "ticker": "DDOG",
-                        "source": "follow_up_context",
-                    },
-                    {
-                        "mention": "MongoDB",
-                        "status": "resolved",
-                        "ticker": "MDB",
-                        "source": "current_question",
-                    },
-                ],
-                "metrics": ["revenue"],
-                "route": "calculation",
-                "tools": ["query_financial_facts", "calculate_metrics"],
-            },
-            {
-                "case_id": "followup_unresolved_company_no_previous_reuse_001",
-                "companies": [
-                    {
-                        "mention": "Globex",
-                        "status": "unresolved",
-                        "source": "current_question",
-                    }
-                ],
-                "metrics": ["revenue"],
-                "route": "unsupported",
             },
         ],
     }

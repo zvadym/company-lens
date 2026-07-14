@@ -202,6 +202,16 @@ class ExpectedBehavior(GoldenModel):
             raise ValueError("operation must use lowercase snake_case")
         return cleaned
 
+    @model_validator(mode="after")
+    def validate_follow_up_inheritance(self) -> ExpectedBehavior:
+        if (
+            self.follow_up is not None
+            and "operation" in self.follow_up.inherit
+            and self.operation is None
+        ):
+            raise ValueError("inheriting an operation requires an expected operation")
+        return self
+
 
 class GoldenDatasetCase(GoldenModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*_[0-9]{3}$")

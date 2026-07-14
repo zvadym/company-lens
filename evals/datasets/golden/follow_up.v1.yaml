@@ -13,7 +13,7 @@ cases:
     citation_scenario: valid
     conversation:
       - role: user
-        content: Show Cloudflare revenue growth over the last four quarters.
+        content: Show Cloudflare quarter-over-quarter revenue growth over the last four quarters.
       - role: user
         content: Make it a chart.
     expected:
@@ -24,10 +24,12 @@ cases:
           source: follow_up_context
       metrics:
         - revenue
+      operation: quarter_over_quarter_growth
       follow_up:
         inherit:
           - companies
           - metrics
+          - operation
         add:
           - chart
         must_not_resolve_terms_as_company:
@@ -46,7 +48,7 @@ cases:
     citation_scenario: semantic_mismatch_attempt
     conversation:
       - role: user
-        content: Show Cloudflare revenue growth over the last four quarters.
+        content: Show Cloudflare quarter-over-quarter revenue growth over the last four quarters.
       - role: user
         content: Do the same for Datadog.
     expected:
@@ -57,9 +59,11 @@ cases:
           source: current_question
       metrics:
         - revenue
+      operation: quarter_over_quarter_growth
       follow_up:
         inherit:
           - metrics
+          - operation
         replace_companies:
           from:
             - Cloudflare
@@ -81,7 +85,7 @@ cases:
     citation_scenario: valid
     conversation:
       - role: user
-        content: Compare Cloudflare and Datadog revenue growth over the last eight quarters.
+        content: Compare Cloudflare and Datadog quarter-over-quarter revenue growth over the last eight quarters.
       - role: user
         content: Add MongoDB too.
     expected:
@@ -100,10 +104,12 @@ cases:
           source: current_question
       metrics:
         - revenue
+      operation: quarter_over_quarter_growth
       follow_up:
         inherit:
           - companies
           - metrics
+          - operation
         add_companies:
           - MongoDB
       route:
@@ -118,7 +124,7 @@ cases:
     citation_mode: not_applicable
     conversation:
       - role: user
-        content: Show Netflix revenue growth.
+        content: Show Netflix year-over-year revenue growth.
       - role: user
         content: Do the same for Globex.
     expected:
@@ -128,9 +134,11 @@ cases:
           source: current_question
       metrics:
         - revenue
+      operation: year_over_year_growth
       follow_up:
         inherit:
           - metrics
+          - operation
         prohibited_companies:
           - Netflix
         must_not_reuse_previous_company: true

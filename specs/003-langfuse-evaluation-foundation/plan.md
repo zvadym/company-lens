@@ -170,8 +170,11 @@ change is required.
 - Extend each golden case with effective `citation_mode` (`required` by default or
   `not_applicable`) and optional `citation_scenario` used only for coverage auditing. The three
   non-valid scenario values are challenge attempts, never expected invalid final answers.
-- Add seven reviewed core cases so every existing category has at least two cases while the four
-  existing follow-up cases remain unchanged, producing 18 total cases.
+- Add seven reviewed core cases so every existing category has at least two cases, producing 18
+  total cases. Clarify the four follow-up prompts with explicit QoQ/YoY operations and require
+  operation inheritance so `operation_accuracy` measures a reviewed, unambiguous contract.
+- Match reviewed company identities by canonical name or ticker in deterministic follow-up checks
+  while preserving independent status and source validation.
 - Add `evals/score-contracts/foundation.v1.yaml`. Every entry defines canonical name, item/run
   scope, Langfuse data type, bounds/categories, applicability, and aggregation; the contract-level
   evaluator version applies to every definition.

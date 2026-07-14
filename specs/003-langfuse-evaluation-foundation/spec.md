@@ -157,6 +157,8 @@ An agent developer can add reviewed critical cases to the repository dataset so 
 - **FR-033**: Synchronization and evaluation MUST require an expected Langfuse project ID and verify that the configured project-scoped credentials resolve to that exact project before any remote write or provider-backed case call; missing, unavailable, or mismatched identity MUST fail closed as infrastructure with a not-evaluated gate.
 - **FR-034**: The orchestrator MUST atomically persist a privacy-safe recovery journal before remote preflight and after every terminal preflight, case, dataset-run, and reporting transition; graceful interruption MUST materialize partial JSON and Markdown artifacts, and uncatchable interruption MUST leave the latest valid journal checkpoint from which partial artifacts can be recovered.
 - **FR-035**: Optional PR reporting MUST maintain an exact repository/PR target and a separate journal status of not requested, pending, succeeded, or failed; the reporting command MUST reject a target mismatch, MAY atomically advance only reporting status and sanitized reporting failure codes, and MUST NOT change evaluation status, gate status, manifest, runs, scores, or the final execution JSON.
+- **FR-036**: Follow-up golden cases that inherit an operation MUST define that operation explicitly, and deterministic company checks MUST treat a reviewed company name and ticker as equivalent identities without weakening status or source checks.
+- **FR-037**: Structured model output that fails response-schema validation MUST be classified as a recoverable provider-response failure and retried within the existing per-node policy; exhausted retries MUST remain a sanitized terminal outcome.
 
 ### Key Entities
 

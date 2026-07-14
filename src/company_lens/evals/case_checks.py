@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from company_lens.evals.company_matching import (
+    find_observed_company,
+    observed_company_display_key,
+)
+from company_lens.evals.follow_up_checks import check_follow_up
 from company_lens.evals.gates import EvaluationGate
-from company_lens.evals.golden import ExpectedCompany, GoldenDatasetCase
-from company_lens.evals.models import CaseEvaluation, ObservedCaseResult, ObservedCompany
+from company_lens.evals.golden import GoldenDatasetCase
+from company_lens.evals.models import CaseEvaluation, ObservedCaseResult
 from company_lens.evals.operational_checks import (
     check_operational_budgets,
     operational_checks_enabled,
@@ -34,7 +39,7 @@ def evaluate_case(
         "prohibited_tools": _check_prohibited_tools(case, observed, failures),
     }
     if case.expected.follow_up is not None:
-        checks["follow_up_safety"] = _check_follow_up(case, observed, failures)
+        checks["follow_up_safety"] = check_follow_up(case, observed, failures)
     if operational_checks_enabled(observed, gate):
         checks["operational_budgets"] = check_operational_budgets(observed, gate, failures)
 
@@ -61,7 +66,7 @@ def _check_companies(
     passed = True
     matched_indexes: set[int] = set()
     for expected in case.expected.companies:
-        actual_index, actual = _find_observed_company(expected, observed.companies)
+        actual_index, actual = find_observed_company(expected, observed.companies)
         if actual is None:
             failures.append(f"missing company target {expected.mention}")
             passed = False
@@ -79,7 +84,7 @@ def _check_companies(
             passed = False
 
     unexpected = sorted(
-        _observed_company_display_key(company)
+        observed_company_display_key(company)
         for index, company in enumerate(observed.companies)
         if index not in matched_indexes
     )
@@ -155,55 +160,6 @@ def _check_prohibited_tools(
     return False
 
 
-def _check_follow_up(
-    case: GoldenDatasetCase,
-    observed: ObservedCaseResult,
-    failures: list[str],
-) -> bool:
-    follow_up = case.expected.follow_up
-    if follow_up is None:
-        return True
-
-    passed = True
-    mentions = {_normalize_key(company.mention) for company in observed.companies}
-    reused = sorted({_normalize_key(item) for item in follow_up.prohibited_companies} & mentions)
-    if reused:
-        failures.append(f"reused prohibited follow-up companies: {', '.join(reused)}")
-        passed = False
-    resolved_terms = sorted(
-        {_normalize_key(item) for item in follow_up.must_not_resolve_terms_as_company} & mentions
-    )
-    if resolved_terms:
-        failures.append(f"resolved non-company terms as companies: {', '.join(resolved_terms)}")
-        passed = False
-    missing_added = sorted({_normalize_key(item) for item in follow_up.add_companies} - mentions)
-    if missing_added:
-        failures.append(f"missing added follow-up companies: {', '.join(missing_added)}")
-        passed = False
-    if follow_up.replace_companies is not None:
-        replaced_from = {_normalize_key(item) for item in follow_up.replace_companies.from_}
-        replaced_to = {_normalize_key(item) for item in follow_up.replace_companies.to}
-        still_present = sorted(replaced_from & mentions)
-        missing_replacements = sorted(replaced_to - mentions)
-        if still_present:
-            failures.append(f"kept replaced follow-up companies: {', '.join(still_present)}")
-            passed = False
-        if missing_replacements:
-            failures.append(
-                f"missing replacement follow-up companies: {', '.join(missing_replacements)}"
-            )
-            passed = False
-    missing = sorted(
-        expected.mention
-        for expected in case.expected.companies
-        if _find_observed_company(expected, observed.companies)[1] is None
-    )
-    if missing:
-        failures.append(f"missing expected follow-up targets: {', '.join(missing)}")
-        passed = False
-    return passed
-
-
 def _missing_case_checks(case: GoldenDatasetCase) -> dict[str, bool]:
     checks = {
         "result_present": False,
@@ -217,36 +173,3 @@ def _missing_case_checks(case: GoldenDatasetCase) -> dict[str, bool]:
     if case.expected.follow_up is not None:
         checks["follow_up_safety"] = False
     return checks
-
-
-def _find_observed_company(
-    expected: ExpectedCompany,
-    observed_companies: tuple[ObservedCompany, ...],
-) -> tuple[int, ObservedCompany | None]:
-    expected_keys = {_normalize_key(expected.mention)}
-    if expected.ticker:
-        expected_keys.add(_normalize_key(expected.ticker))
-    candidates = [
-        (index, observed)
-        for index, observed in enumerate(observed_companies)
-        if expected_keys & _observed_company_keys(observed)
-    ]
-    for index, observed in candidates:
-        if observed.status == expected.status and observed.source == expected.source:
-            return index, observed
-    return candidates[0] if candidates else (-1, None)
-
-
-def _observed_company_keys(company: ObservedCompany) -> set[str]:
-    keys = {_normalize_key(company.mention)}
-    if company.ticker:
-        keys.add(_normalize_key(company.ticker))
-    return keys
-
-
-def _observed_company_display_key(company: ObservedCompany) -> str:
-    return _normalize_key(company.ticker or company.mention)
-
-
-def _normalize_key(value: str) -> str:
-    return " ".join(value.split()).casefold()

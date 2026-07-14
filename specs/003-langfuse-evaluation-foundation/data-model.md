@@ -22,7 +22,7 @@ Repository-authored source of truth for one Langfuse dataset.
 | `id` | string | Existing stable snake-case pattern ending in a three-digit suffix |
 | `category` | enum | One of the eight existing golden categories |
 | `conversation` | ConversationTurn[] | Non-empty; follow-up cases contain at least two user turns |
-| `expected` | ExpectedBehavior | Existing company/metric/operation/route/tool/follow-up contract |
+| `expected` | ExpectedBehavior | Company/metric/operation/route/tool/follow-up contract; inherited operations must be explicit and reviewed |
 | `citation_mode` | `required` or `not_applicable` | Defaults to `required` when omitted |
 | `citation_scenario` | enum/null | `valid`, `missing_attempt`, `unknown_evidence_attempt`, or `semantic_mismatch_attempt`; the latter three are challenge attempts |
 | `notes` | string/null | Reviewed author note; no secrets or provider payloads |
