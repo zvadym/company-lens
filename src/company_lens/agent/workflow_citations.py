@@ -151,11 +151,7 @@ def _citation_repair_exhausted_update(
     started: float,
 ) -> dict[str, object]:
     attempts_used = state.get("repair_attempts", 0)
-    fallback_update = _citation_fallback_update(
-        state,
-        started,
-        structured_only=attempts_used > 0,
-    )
+    fallback_update = _citation_fallback_update(state, started)
     if fallback_update is not None:
         return {
             **fallback_update,
@@ -197,21 +193,8 @@ def _citation_repair_failure_answer(state: AgentState) -> str:
 def _citation_fallback_update(
     state: AgentState,
     started: float,
-    *,
-    structured_only: bool = False,
 ) -> dict[str, object] | None:
     evidence = state.get("evidence", ())
-    if structured_only:
-        evidence = tuple(
-            item
-            for item in evidence
-            if item.kind
-            in {
-                EvidenceKind.CALCULATION,
-                EvidenceKind.FINANCIAL_FACT,
-                EvidenceKind.MACRO_OBSERVATION,
-            }
-        )
     fallback = _deterministic_fallback_answer(evidence)
     if fallback is None or fallback == state.get("draft_answer"):
         return None

@@ -159,7 +159,7 @@ def test_repair_prompt_includes_invalid_claim_previews_for_sec_label_answers() -
     assert "Item 1. Business / Overview" in repair_context
 
 
-def test_repair_exhaustion_does_not_expose_unvalidated_fallback_answer() -> None:
+def test_repair_exhaustion_uses_validated_extractive_document_fallback() -> None:
     analysis = QuestionAnalysis(
         normalized_question="What is in Cloudflare's report?",
         route=ResearchRoute.RAG_ONLY,
@@ -188,12 +188,12 @@ def test_repair_exhaustion_does_not_expose_unvalidated_fallback_answer() -> None
         policy=ExecutionPolicy(max_repair_attempts=1),
     )
 
-    assert result["status"] is AgentRunStatus.ABSTAINED
+    assert result["status"] is AgentRunStatus.COMPLETED
     assert result["repair_attempts"] == 1
+    assert result["answer_validation"].valid is True
     assert result["final_answer"] is not None
-    assert "citation-safe answer" in result["final_answer"]
-    assert "unsupported_number" in result["final_answer"]
     assert "999 USD" not in result["final_answer"]
-    assert "## Result" not in result["final_answer"]
-    assert "Cloudflare identified competition" not in result["final_answer"]
-    assert [error.code for error in result["errors"]] == ["citation_repair_exhausted"]
+    assert "## Result" in result["final_answer"]
+    assert "Cloudflare identified competition" in result["final_answer"]
+    assert "[document:cloudflare-risk]" in result["final_answer"]
+    assert result["errors"] == ()

@@ -13,6 +13,16 @@ def _reconcile_analysis_with_plan(
 
     represented = _represented_capabilities(plan)
     if (
+        "unsupported_analysis_normalized" in analysis.reason_codes
+        and plan.route is not ResearchRoute.UNSUPPORTED
+        and represented
+    ):
+        return _analysis_for_represented_plan(
+            analysis,
+            plan,
+            represented,
+        )
+    if (
         not DETERMINISTIC_PLAN_REASON_CODES.isdisjoint(plan.reason_codes)
         and plan.route is not ResearchRoute.UNSUPPORTED
     ):
