@@ -75,15 +75,20 @@ def _normalize_and_validate_plan(
             if set(branch.depends_on) != set(branch.input_refs):
                 raise ValueError("Calculation dependencies must equal input references.")
             for reference in branch.input_refs:
-                source_branch = by_id[reference]
+                source_branch = by_id.get(reference)
+                if source_branch is None:
+                    raise ValueError("Unknown calculation input reference.")
                 if not isinstance(source_branch, (FinancialFactsBranch, MacroSeriesBranch)):
                     raise ValueError("Calculations require numeric source branches.")
                 _validate_single_series_request(source_branch)
         if isinstance(branch, ChartBranch):
             chart_refs = _chart_references(branch)
             for reference in chart_refs:
+                dataset_branch = by_id.get(reference)
+                if dataset_branch is None:
+                    raise ValueError("Unknown chart dataset reference.")
                 if not isinstance(
-                    by_id[reference],
+                    dataset_branch,
                     (FinancialFactsBranch, MacroSeriesBranch, CalculationBranch),
                 ):
                     raise ValueError("Chart requires numeric dataset references.")

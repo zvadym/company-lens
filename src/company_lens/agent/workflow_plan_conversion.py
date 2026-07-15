@@ -3,6 +3,10 @@ from __future__ import annotations
 # mypy: disable-error-code="name-defined,no-any-return,misc,untyped-decorator"
 # ruff: noqa: F403, F405, I001, UP037
 from company_lens.agent.workflow_context import *
+from company_lens.agent.workflow_plan_references import (
+    _canonicalize_model_branch_references,
+    _source_dataset_aliases,
+)
 
 
 def _reconcile_analysis_with_plan(
@@ -100,9 +104,16 @@ def _canonicalize_plan_route(plan: ExecutionPlan) -> ExecutionPlan:
 
 
 def _domain_execution_plan(model_plan: ModelExecutionPlan) -> ExecutionPlan:
+    branch_ids = {item.branch_id for item in model_plan.branches}
+    dataset_aliases = _source_dataset_aliases(model_plan.branches, branch_ids)
     branches: list[ExecutionBranch] = []
     for item in model_plan.branches:
-        branches.append(_domain_execution_branch(item))
+        canonical_item = _canonicalize_model_branch_references(
+            item,
+            branch_ids,
+            dataset_aliases,
+        )
+        branches.append(_domain_execution_branch(canonical_item))
     return ExecutionPlan(
         route=model_plan.route,
         branches=tuple(branches),
