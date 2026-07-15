@@ -55,9 +55,13 @@ def _merge_follow_up_if_needed(
 ) -> ResolvedQuery:
     if (
         analysis is not None
-        and analysis.is_follow_up
         and memory is not None
         and _has_follow_up_memory_context(memory)
+        and (
+            analysis.is_follow_up
+            or _question_references_previous_work(resolved.query)
+            or _question_requests_add_series(resolved.query)
+        )
     ):
         previous = (
             _recent_company_context(memory)
@@ -144,8 +148,10 @@ def _should_add_to_existing_company_set(
         return False
     if not _recent_company_ids(memory):
         return False
-    return _analysis_requests_add_series(analysis) or _question_requests_add_series(
-        analysis.normalized_question
+    return (
+        _analysis_requests_add_series(analysis)
+        or _question_requests_add_series(resolved.query)
+        or _question_requests_add_series(analysis.normalized_question)
     )
 
 

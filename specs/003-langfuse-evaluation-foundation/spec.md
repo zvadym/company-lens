@@ -159,6 +159,9 @@ An agent developer can add reviewed critical cases to the repository dataset so 
 - **FR-035**: Optional PR reporting MUST maintain an exact repository/PR target and a separate journal status of not requested, pending, succeeded, or failed; the reporting command MUST reject a target mismatch, MAY atomically advance only reporting status and sanitized reporting failure codes, and MUST NOT change evaluation status, gate status, manifest, runs, scores, or the final execution JSON.
 - **FR-036**: Follow-up golden cases that inherit an operation MUST define that operation explicitly, and deterministic company checks MUST treat a reviewed company name and ticker as equivalent identities without weakening status or source checks.
 - **FR-037**: Structured model output that fails response-schema validation MUST be classified as a recoverable provider-response failure and retried within the existing per-node policy; exhausted retries MUST remain a sanitized terminal outcome.
+- **FR-038**: On-demand company preparation MUST derive typed financial-fact and document requirements from the analyzed agent capabilities; a financial-only route MUST NOT ingest SEC filings, process documents, or create embeddings.
+- **FR-039**: Follow-up resolution MUST deterministically inherit, replace, or extend company sets from the current resolved companies and explicit add/include intent, preserve compatible metrics and operations, and record provenance separately for each final company target.
+- **FR-040**: Completing or skipping on-demand preparation MUST enrich prepared tickers through deterministic local resolution and MUST NOT repeat model-based company extraction solely because preparation ran.
 
 ### Key Entities
 
@@ -194,6 +197,8 @@ An agent developer can add reviewed critical cases to the repository dataset so 
 - **SC-015**: In automated tests, a valid Langfuse key associated with a project ID different from the configured expected project ID causes zero remote writes and zero provider-backed case calls.
 - **SC-016**: After each injected interruption boundary following a completed terminal transition, the recovery journal validates against its contract, contains all and only completed terminal records, exposes no forbidden content, and can materialize a partial execution with a not-evaluated gate.
 - **SC-017**: Every workflow run with a PR target and valid matching execution/journal artifacts ends with journal reporting status succeeded or failed; an injected reporting failure leaves the previously materialized execution JSON byte-for-byte unchanged while the workflow exits `2` and the journal records only the sanitized reporting failure.
+- **SC-018**: The targeted four-case follow-up evaluation reaches `1.0` for company accuracy, metric accuracy, operation accuracy, follow-up safety accuracy, and citation validity pass rate without increasing evaluation-gate thresholds.
+- **SC-019**: Financial-only follow-up traces contain zero SEC document-processing and embedding operations, perform no duplicate post-preparation model company extraction, and pass the existing operational budgets.
 
 ## Assumptions
 

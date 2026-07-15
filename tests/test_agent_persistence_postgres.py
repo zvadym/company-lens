@@ -32,6 +32,7 @@ from company_lens.db.models import ResearchSession
 from company_lens.db.session import build_session_factory
 from company_lens.financials.schemas import FinancialFactQuery, FinancialFactQueryResult
 from company_lens.ingestion.on_demand import CompanyDataPreparationResult
+from company_lens.ingestion.preparation_requirements import CompanyDataPreparationRequirements
 from company_lens.macro.schemas import FredSeriesQuery, FredSeriesResult
 from company_lens.retrieval.adaptive_schemas import (
     AdaptiveRetrievalRequest,
@@ -91,6 +92,7 @@ class NoDataTools:
         company_ids: tuple[str, ...],
         index_name: str,
         index_version: str,
+        requirements: CompanyDataPreparationRequirements,
     ) -> CompanyDataPreparationResult:
         return CompanyDataPreparationResult(
             status="skipped",

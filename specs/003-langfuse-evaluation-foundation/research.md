@@ -255,3 +255,57 @@ reach normal finalization.
   termination can skip finalization.
 - Store orchestration state in PostgreSQL: rejected for feature 003 because the local artifact is the
   portable workflow handoff and no cross-worker resume is required.
+
+## Decision 15: Scope on-demand preparation by required agent capabilities
+
+**Decision**: Represent financial-fact and document preparation as independent typed requirements.
+Run SEC filing ingestion, document processing, and embedding indexing only when the analyzed route
+requires document evidence.
+
+**Rationale**: The targeted follow-up trace used 242,308 tokens, of which 230,612 were embeddings,
+for a financial calculation that needed no document evidence. Preparing every data path violates the
+deterministic-data-path principle and creates production cost that evaluation should expose rather
+than hide.
+
+**Alternatives considered**:
+
+- Increase evaluation budgets: rejected because it accepts unnecessary production work.
+- Prewarm all evaluation companies: rejected because it makes CI unrepresentative of a new-company
+  production request.
+- Keep one all-data readiness check: rejected because facts-only readiness does not require indexed
+  document chunks.
+
+## Decision 16: Make follow-up company-set semantics deterministic and provenance per target
+
+**Decision**: Preserve the pre-merge current query and apply inherit, replace, or extend semantics
+from explicit current companies plus deterministic add/include markers. Assign company-target source
+individually by comparing the current and merged query.
+
+**Rationale**: Live traces showed that replace could lose the inherited metric and add could retain
+only the new company. The existing frame also assigned one source to every target, making a correct
+mixed previous/new set impossible to represent.
+
+**Alternatives considered**:
+
+- Depend only on model reason codes: rejected because valid language produced inconsistent codes in
+  live runs.
+- Correct the observed result in the evaluator: rejected because the production state would remain
+  wrong.
+- Mark every company in an add turn as current: rejected because it loses auditable memory
+  provenance.
+
+## Decision 17: Resolve prepared tickers locally without repeating LLM extraction
+
+**Decision**: After preparation or readiness detection, enrich the existing current query through
+the deterministic local ticker resolver and perform follow-up finalization once before planning.
+
+**Rationale**: Current preparation reruns question resolution and company extraction whenever a
+ticker is prepared or skipped. Langfuse showed duplicate entity-extraction generations per turn.
+Local ticker resolution already provides the required local company row without another model call.
+
+**Alternatives considered**:
+
+- Rerun extraction only for newly downloaded tickers: rejected because the ticker itself is already
+  a sufficient deterministic lookup key.
+- Leave duplicate calls and raise the API-call limit: rejected because it preserves unnecessary
+  latency and nondeterminism.

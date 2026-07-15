@@ -422,6 +422,16 @@ def record_cache_access(*, cache: str, hits: int, misses: int) -> None:
     span.set_attribute("company_lens.cache.misses", misses)
 
 
+def record_company_preparation_requirements(
+    *,
+    financial_facts: bool,
+    documents: bool,
+) -> None:
+    span = trace.get_current_span()
+    span.set_attribute("company_lens.preparation.requires_financial_facts", financial_facts)
+    span.set_attribute("company_lens.preparation.requires_documents", documents)
+
+
 def record_retrieval(*, strategy: str, result_count: int, context_count: int) -> None:
     if _retrieval_results is not None:
         _retrieval_results.record(result_count, {"strategy": strategy, "stage": "retrieved"})

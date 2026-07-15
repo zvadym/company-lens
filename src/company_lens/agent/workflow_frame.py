@@ -20,6 +20,7 @@ def _build_research_frame(
     question: str,
     analysis: QuestionAnalysis | None,
     resolved: ResolvedQuery,
+    current_resolved: ResolvedQuery | None = None,
     memory: SessionMemory | None,
 ) -> ResearchFrame | None:
     if analysis is None:
@@ -31,8 +32,14 @@ def _build_research_frame(
         company_targets=_company_targets_from_resolved(
             resolved,
             source=_company_target_source(analysis, resolved, memory),
+            current_resolved=current_resolved,
         ),
-        inherited_from_previous=_inherited_previous_company_target(analysis, resolved, memory),
+        inherited_from_previous=_inherited_previous_company_target(
+            analysis,
+            resolved,
+            memory,
+            current_resolved=current_resolved,
+        ),
         follow_up_operation=_previous_growth_operation(memory) if analysis.is_follow_up else None,
         follow_up_window=_previous_calculation_window(memory) if analysis.is_follow_up else None,
     )
@@ -52,6 +59,7 @@ def _ensure_research_frame(
         question=state["question"],
         analysis=analysis,
         resolved=resolved,
+        current_resolved=state.get("current_resolved_query"),
         memory=memory,
     )
     assert built is not None
@@ -62,6 +70,7 @@ def _company_targets_from_resolved(
     resolved: ResolvedQuery,
     *,
     source: CompanyTargetSource,
+    current_resolved: ResolvedQuery | None = None,
 ) -> tuple[CompanyTarget, ...]:
     targets: list[CompanyTarget] = []
     seen_company_ids: set[uuid.UUID] = set()
@@ -85,7 +94,12 @@ def _company_targets_from_resolved(
                 ticker=ticker,
                 display_name=display_name,
                 status=entity.status,
-                source=source,
+                source=_target_source(
+                    entity=entity,
+                    company_id=company_id,
+                    default=source,
+                    current_resolved=current_resolved,
+                ),
             )
         )
     for company_id in resolved.company_ids:
@@ -96,10 +110,49 @@ def _company_targets_from_resolved(
                 mention=str(company_id),
                 company_id=company_id,
                 status="resolved",
-                source=source,
+                source=(
+                    "current_question"
+                    if current_resolved is not None and company_id in current_resolved.company_ids
+                    else "follow_up_context"
+                    if current_resolved is not None
+                    else source
+                ),
             )
         )
     return tuple(targets)
+
+
+def _target_source(
+    *,
+    entity: EntityResolution,
+    company_id: uuid.UUID | None,
+    default: CompanyTargetSource,
+    current_resolved: ResolvedQuery | None,
+) -> CompanyTargetSource:
+    if current_resolved is None:
+        return default
+    if company_id is not None and company_id in current_resolved.company_ids:
+        return "current_question"
+    entity_keys = _company_entity_identity_keys(entity)
+    if any(
+        entity_keys.intersection(_company_entity_identity_keys(current_entity))
+        for current_entity in current_resolved.entities
+        if current_entity.kind in {"company", "public_company"}
+    ):
+        return "current_question"
+    return "follow_up_context"
+
+
+def _company_entity_identity_keys(entity: EntityResolution) -> set[str]:
+    keys = {f"mention:{entity.mention.casefold()}"}
+    if entity.canonical_value:
+        keys.add(f"canonical:{entity.canonical_value.casefold()}")
+    for candidate in entity.candidates:
+        if candidate.id is not None:
+            keys.add(f"id:{candidate.id}")
+        if candidate.canonical_value:
+            keys.add(f"canonical:{candidate.canonical_value.casefold()}")
+    return keys
 
 
 def _entity_company_id(entity: EntityResolution) -> uuid.UUID | None:
@@ -144,9 +197,20 @@ def _inherited_previous_company_target(
     analysis: QuestionAnalysis,
     resolved: ResolvedQuery,
     memory: SessionMemory | None,
+    *,
+    current_resolved: ResolvedQuery | None = None,
 ) -> bool:
     if not analysis.is_follow_up or memory is None or memory.last_resolved_query is None:
         return False
+    if current_resolved is not None:
+        return any(
+            target.source == "follow_up_context"
+            for target in _company_targets_from_resolved(
+                resolved,
+                source="follow_up_context",
+                current_resolved=current_resolved,
+            )
+        )
     previous_ids = set(memory.last_resolved_query.company_ids)
     return bool(resolved.company_ids and set(resolved.company_ids).issubset(previous_ids))
 
@@ -156,6 +220,8 @@ __all__ = (
     "_build_research_frame",
     "_ensure_research_frame",
     "_company_targets_from_resolved",
+    "_target_source",
+    "_company_entity_identity_keys",
     "_entity_company_id",
     "_entity_public_ticker",
     "_uuid_or_none",

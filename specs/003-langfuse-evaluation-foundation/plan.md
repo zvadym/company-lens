@@ -37,7 +37,9 @@ PostgreSQL dev stack
 
 **Performance Goals**: Complete all repository/Langfuse preflight checks before provider calls;
 support 18-25 selected cases; default to one case at a time; preserve existing per-case latency,
-tool, retry, token, and cost budgets from `eval-full.v1.yaml`
+tool, retry, token, and cost budgets from `eval-full.v1.yaml`; financial-only follow-ups perform no
+SEC document processing or embedding calls and do not repeat model-based company extraction after
+preparation
 
 **Constraints**: Repository data is authoritative; no LLM-as-judge; no automatic required PR gate;
 no raw provider prompts/payloads, retrieved passages, hidden reasoning, invalid drafts, credentials,
@@ -56,7 +58,9 @@ dataset run per selected dataset, and one umbrella evaluation execution per manu
   validation result. Missing answers or evidence are represented explicitly rather than replaced by
   model-memory judgments.
 - **Deterministic data paths: PASS.** Existing route, tool, company, metric, operation, follow-up,
-  citation, and operational checks remain deterministic. LLM-as-judge is excluded.
+  citation, and operational checks remain deterministic. Follow-up inherit/replace/extend behavior
+  and preparation scope are derived from typed state plus explicit capabilities rather than model
+  reason codes alone. LLM-as-judge is excluded.
 - **Source lineage and citation safety: PASS.** Evaluation observes `AnswerValidation` reason codes
   and lineage checks without exporting raw evidence passages or invalid drafts.
 - **Durable research sessions: PASS.** Live cases continue through isolated PostgreSQL-backed
@@ -72,6 +76,7 @@ dataset run per selected dataset, and one umbrella evaluation execution per manu
 
 ```text
 specs/003-langfuse-evaluation-foundation/
+├── follow-up-remediation-design.md
 ├── plan.md
 ├── research.md
 ├── data-model.md
@@ -275,6 +280,28 @@ change is required.
   gate, manifest, runs, scores, final JSON/Markdown, and Langfuse records remain immutable.
 - Keep this workflow out of required branch-protection checks for feature 003.
 
+### 7. Follow-up Correctness and Capability-Aware Preparation
+
+- Introduce `CompanyDataPreparationRequirements` in a focused ingestion module extracted from the
+  existing 280-line on-demand preparation implementation. It independently declares whether
+  financial facts and/or SEC documents plus embeddings are required.
+- Derive requirements from `QuestionAnalysis.required_capabilities`. Calculations and charts do not
+  imply document preparation; only the `documents` capability enables SEC filing ingestion,
+  document processing, and embedding indexing.
+- Make readiness requirement-specific. Existing financial facts satisfy facts-only preparation even
+  when no indexed chunks exist; document requests retain the existing chunk/index readiness check.
+- Retain the unmerged current-turn query through resolution. Finalize follow-up context at the end
+  of `prepare_company_data`, including its no-external-work path, before planning.
+- Determine company-set semantics from explicit current companies and deterministic add/include
+  markers, with model reason codes as supporting signals: no current company inherits, a current
+  company replaces, and add/include extends.
+- Build `ResearchFrame.company_targets` with source per target by comparing the pre-merge current
+  query with the final merged query. Mixed prior/new sets must preserve mixed provenance.
+- Replace post-preparation model re-extraction with deterministic local ticker resolution and merge.
+  This preserves local company enrichment while removing duplicate entity-extraction generations.
+- Preserve current metrics when explicit and otherwise inherit prior metrics; preserve the current
+  plan operation with the existing frame fallback for inherited calculations.
+
 ## Testing Strategy
 
 - Dataset tests: citation defaults/enums, category minimums, citation-scenario matrix, deterministic
@@ -293,15 +320,24 @@ change is required.
   evaluation verdict/artifacts, permission/reporting failure isolation, and forbidden-content scans.
 - Existing agent runner, deterministic evaluator, observability-security, and CLI tests remain green;
   `make check` is the commit gate.
+- Preparation tests verify facts-only, documents-only, combined, and requirement-specific readiness
+  paths and assert that unrequested SEC/processing/embedding services are never invoked.
+- Follow-up workflow tests cover inherit, replace, and extend, mixed company provenance, metric and
+  operation inheritance, and the absence of post-preparation LLM extraction.
+- Live acceptance runs the four follow-up cases first and requires all deterministic, citation, and
+  operational checks to pass without threshold changes before the full 18-case workflow runs.
 
 ## Post-Design Constitution Re-check
 
 *GATE: PASS.* The design keeps factual evaluation deterministic, preserves citation lineage through
 typed validation summaries, uses PostgreSQL-backed live sessions, avoids public sensitive content,
-and adds focused contract/unit/integration coverage. No constitution exception is required.
+and adds focused contract/unit/integration coverage. Capability-aware preparation strengthens the
+constitution's deterministic-data-path requirement by preventing narrative ingestion for
+structured-only questions. No constitution exception is required.
 
 ## Complexity Tracking
 
 No constitution violations require justification. The added modules split existing oversized
-evaluation/CLI responsibilities along stable contracts rather than introducing a new service or
-storage system.
+evaluation/CLI responsibilities and extract preparation requirements/readiness from the 280-line
+on-demand ingestion module along stable contracts rather than introducing a new service or storage
+system.

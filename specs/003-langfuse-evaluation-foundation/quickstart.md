@@ -222,3 +222,30 @@ For each linked dataset run, verify:
 - completed runs have aggregate/category scores and gate status;
 - partial runs show `not_evaluated` without misleading aggregate quality scores;
 - no LLM-as-judge, annotation queue, or calibration output was created.
+
+## 11. Validate Follow-up Remediation
+
+Run focused preparation, workflow, and evaluator tests before the full repository gate:
+
+```bash
+pytest -q \
+  tests/test_on_demand_preparation.py \
+  tests/agent_workflow/test_preparation_resolution.py \
+  tests/agent_workflow/test_prepared_followup_ticker.py \
+  tests/agent_workflow/test_followup_company_sets.py \
+  tests/evals/test_follow_up_checks.py
+make check
+```
+
+Expected:
+
+- facts-only preparation performs no SEC filing, document-processing, or embedding work;
+- document and hybrid requirements still prepare indexed SEC evidence;
+- replace preserves the previous metric/operation while using only the new company;
+- add preserves prior companies and adds the current company with mixed provenance;
+- preparation enrichment does not repeat model-based company extraction.
+
+Then run the manual workflow with `dataset_scope=follow_up`, `max_cases=100`, and PR `#68`.
+Inspect the linked Langfuse run and require all four cases to pass company, metric, operation,
+follow-up safety, citation, and operational-budget checks without changing gate thresholds. Run
+`dataset_scope=all` only after this targeted run passes.

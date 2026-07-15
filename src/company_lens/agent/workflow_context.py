@@ -106,11 +106,13 @@ from company_lens.financials.schemas import (
     FinancialFactQuery,
     FinancialFactQueryResult,
 )
+from company_lens.ingestion.preparation_requirements import CompanyDataPreparationRequirements
 from company_lens.macro.schemas import FredSeriesResult
 from company_lens.observability.context import bind_context
 from company_lens.observability.telemetry import (
     observe_operation,
     record_cache_access,
+    record_company_preparation_requirements,
     record_retrieval,
     record_validation,
 )

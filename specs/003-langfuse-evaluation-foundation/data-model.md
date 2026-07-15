@@ -321,6 +321,33 @@ Umbrella rules:
 - Any infrastructure failure after some work -> execution partial/not_evaluated.
 - Preflight failure before trusted case work -> execution errored/not_evaluated.
 
+## Agent Remediation Models
+
+### CompanyDataPreparationRequirements
+
+Immutable ingestion-owned value used by the agent tool boundary.
+
+| Field | Type | Rules |
+|---|---|---|
+| `financial_facts` | boolean | Enables company-facts readiness and ingestion |
+| `documents` | boolean | Enables SEC filing ingestion, processing, and embedding readiness/indexing |
+
+At least one field must be true for external preparation work. An all-false value is valid at the
+workflow boundary and means preparation is skipped while follow-up context is still finalized.
+
+### Follow-up context inputs
+
+Follow-up finalization consumes two `ResolvedQuery` values without persisting a new database model:
+
+| Value | Meaning |
+|---|---|
+| `current_query` | Companies and constraints resolved from the current user turn before memory merge |
+| `merged_query` | Final inherit/replace/extend result used by planning and observation |
+
+`ResearchFrame.company_targets` derives each target's `source` from these inputs. Current companies
+remain `current_question` (or the existing prepared-ticker source where applicable); companies found
+only in the merged query are `follow_up_context`.
+
 ## Reporting Model
 
 ### PREvaluationSummary

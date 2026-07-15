@@ -51,10 +51,13 @@ from company_lens.agent.schemas import (
     SessionMemory,
 )
 from company_lens.agent.workflow import (
+    _build_research_frame,
+    _entity_company_id,
     _fallback_multi_company_growth_chart_plan,
     _generate_chart_spec,
     _merge_follow_up_if_needed,
     _merge_follow_up_resolution,
+    _merge_prepared_ticker_resolutions,
     _parse_question,
     _plan_request,
     _prepare_company_data,
@@ -70,6 +73,7 @@ from company_lens.financials.schemas import (
     FinancialFactQueryResult,
 )
 from company_lens.ingestion.on_demand import CompanyDataPreparationResult
+from company_lens.ingestion.preparation_requirements import CompanyDataPreparationRequirements
 from company_lens.macro.schemas import (
     FredObservation,
     FredSeriesQuery,

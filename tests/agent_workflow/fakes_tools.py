@@ -48,6 +48,7 @@ class FakeResearchTools:
         company_ids: tuple[str, ...],
         index_name: str,
         index_version: str,
+        requirements: CompanyDataPreparationRequirements,
     ) -> CompanyDataPreparationResult:
         self.calls["prepare"] += 1
         return CompanyDataPreparationResult(

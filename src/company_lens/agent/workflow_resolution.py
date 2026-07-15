@@ -25,14 +25,12 @@ def _resolve_entities(
             analysis,
             runtime.context.tools,
         )
-        memory = state.get("session_memory")
         resolved = _resolve_extracted_company_mentions(
             state,
             runtime,
             resolved,
             analysis,
         )
-        resolved = _merge_follow_up_if_needed(resolved, analysis, memory)
     except ResearchToolError as exc:
         error = exc.error.model_copy(update={"node": "resolve_entities"})
         return {
@@ -54,15 +52,9 @@ def _resolve_entities(
             "node_attempts": (NodeAttempt(node="resolve_entities", attempts=1),),
             "trajectory": (_failed_event("resolve_entities", started),),
         }
-    frame = _build_research_frame(
-        question=state["question"],
-        analysis=state.get("analysis"),
-        resolved=resolved,
-        memory=state.get("session_memory"),
-    )
     return {
+        "current_resolved_query": resolved,
         "resolved_query": resolved,
-        "research_frame": frame,
         "node_attempts": (NodeAttempt(node="resolve_entities", attempts=1),),
         "trajectory": (
             _event(

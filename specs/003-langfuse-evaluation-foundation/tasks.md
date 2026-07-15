@@ -198,7 +198,36 @@ end-to-end validation across all selected stories.
 - [X] T057 Clarify every follow-up prompt and expected operation in `evals/datasets/golden/follow_up.v1.yaml`, require explicit inherited operations in `src/company_lens/evals/golden.py`, and add contract tests
 - [X] T058 Make deterministic follow-up company rules accept reviewed name/ticker aliases while preserving status/source checks, extract the cohesive logic to `src/company_lens/evals/follow_up_checks.py`, and add ticker-only regression tests
 - [X] T059 Classify schema-invalid OpenAI structured output as a recoverable provider response and verify the workflow retries it within policy
-- [ ] T060 Run targeted follow-up and infrastructure smoke evaluations, inspect the resulting Langfuse runs and canonical PR comment, then rerun the full 18-case workflow when targeted behavior is trustworthy
+- [X] T060 Run targeted follow-up and core infrastructure smoke evaluations on commit `79e23219`, inspect the resulting Langfuse runs and canonical PR comment, confirm the evaluator/parser remediation, and isolate the remaining production-agent context/preparation failures before a full rerun
+
+---
+
+## Phase 9: Production Agent Follow-up and Preparation Remediation
+
+**Purpose**: Fix the production-agent defects exposed by trustworthy deterministic evaluation:
+require only the data each capability needs, preserve deterministic follow-up context, avoid duplicate
+model extraction, and retain per-company provenance without weakening any evaluation threshold.
+
+**Independent Test**: The four reviewed follow-up cases score `1.0` for operation accuracy and
+citations, satisfy the existing operational budgets, and show no SEC/document/embedding work or
+duplicate entity extraction for financial-only requests. The full 18-case workflow may run only
+after this focused gate passes.
+
+- [X] T061 [P] [US4] Add failing requirement-scoped readiness and pipeline-selection tests in `tests/test_on_demand_preparation.py`
+- [X] T062 [P] [US4] Add failing inherit/replace/extend company-set, metric/operation retention, and mixed-provenance tests in `tests/agent_workflow/test_followup_company_sets.py` and `tests/agent_workflow/test_preparation_resolution.py`
+- [X] T063 [P] [US4] Add failing capability-forwarding and no-duplicate-model-extraction tests in `tests/agent_workflow/test_prepared_followup_ticker.py`
+- [X] T064 [US4] Extract typed `CompanyDataPreparationRequirements` and requirement-scoped readiness helpers from `src/company_lens/ingestion/on_demand.py` into `src/company_lens/ingestion/preparation_requirements.py`
+- [X] T065 [US4] Refactor `src/company_lens/ingestion/on_demand.py` to execute financial-fact and document pipelines only when required and to apply requirement-scoped readiness
+- [X] T066 [US4] Extend the `ResearchTools.prepare_companies` protocol, SQL adapter, and affected test fakes in `src/company_lens/agent/tools.py` and `tests/` to accept typed preparation requirements
+- [X] T067 [US4] Derive preparation requirements from `AgentCapability` and finalize research context even when no external preparation is needed in `src/company_lens/agent/workflow_preparation.py`
+- [X] T068 [US4] Replace post-preparation model entity extraction with deterministic local ticker enrichment in `src/company_lens/agent/workflow_preparation.py`
+- [X] T069 [US4] Implement deterministic inherit/replace/extend follow-up rules while preserving requested metrics and operations in `src/company_lens/agent/workflow_followup_merge.py` and `src/company_lens/agent/workflow_followup_intent.py`
+- [X] T070 [US4] Build per-company provenance from the pre-merge current query and final merged query in `src/company_lens/agent/workflow_frame.py` and its workflow call sites
+- [X] T071 [US4] Add privacy-safe preparation-requirement details to workflow trajectory and telemetry, with regression coverage in the affected workflow tests
+- [X] T072 [US4] Run the focused remediation tests and the full local quality gate from `specs/003-langfuse-evaluation-foundation/quickstart.md`
+- [X] T073 [US4] Run `graphify update .` and inspect the generated impact for the modified ingestion and workflow modules
+- [ ] T074 [US4] Run the four-case follow-up live workflow, inspect Langfuse traces and the canonical PR comment, and require every deterministic metric and operational budget to pass
+- [ ] T075 [US4] Run the full 18-case live workflow only after T074 passes and record final evidence in `specs/003-langfuse-evaluation-foundation/quickstart.md`
 
 ---
 
@@ -216,6 +245,8 @@ end-to-end validation across all selected stories.
   the final full workflow validation.
 - **Polish (Phase 7)**: Depends on all stories selected for delivery.
 - **Live Remediation (Phase 8)**: Depends on the first full live workflow execution after Phase 7.
+- **Production Agent Remediation (Phase 9)**: Depends on the trustworthy evaluator/parser evidence
+  from Phase 8 and the approved `follow-up-remediation-design.md`.
 
 ### Foundational Internal Order
 
@@ -247,7 +278,9 @@ end-to-end validation across all selected stories.
 | FR-031 | T006, T010-T011, T018, T024, T052 |
 | FR-035 | T005, T030, T039-T044, T051-T053, T056 |
 | FR-036-FR-037 | T057-T060 |
+| FR-038-FR-040 | T061-T075 |
 | SC-001-SC-017 | T021, T034, T038, T044, T049, T051-T056, T060 |
+| SC-018-SC-019 | T061-T075 |
 
 ---
 
@@ -263,6 +296,7 @@ end-to-end validation across all selected stories.
 - US4 can proceed in parallel with US1/US2 after T009.
 - US3 tests T039 and T040 can run in parallel.
 - Polish documentation/security/schema tasks T050-T052 can run in parallel.
+- Phase 9 red tests T061-T063 can be authored in parallel before the sequential production changes.
 
 ## Parallel Example: User Story 1
 
@@ -306,6 +340,8 @@ without it. It does not yet expose the standalone sync command, PR comment, or e
 3. **US3**: Optional canonical PR reporting.
 4. **US4**: Balanced 18-case critical coverage.
 5. **Polish**: Security, schemas, operations, full manual workflow validation.
+6. **Production remediation**: Capability-aware preparation, deterministic follow-up merging,
+   targeted live evidence, then the full 18-case rerun.
 
 ### Commit and Validation Discipline
 

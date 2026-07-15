@@ -566,6 +566,7 @@ class AgentState(TypedDict, total=False):
     messages: Annotated[tuple[SessionMessage, ...], append_tuple]
     session_memory: NotRequired[SessionMemory]
     analysis: NotRequired[QuestionAnalysis | None]
+    current_resolved_query: NotRequired[ResolvedQuery | None]
     resolved_query: NotRequired[ResolvedQuery | None]
     research_frame: NotRequired[ResearchFrame | None]
     execution_plan: NotRequired[ExecutionPlan | None]
