@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # ruff: noqa: F403, F405, I001
 from .context import *
+from company_lens.agent.workflow import _ensure_required_growth_calculations
 
 
 def test_planner_cannot_add_unrequested_document_source_to_structured_query() -> None:
@@ -88,3 +89,41 @@ def test_normalized_unsupported_financial_query_still_drops_unrequested_document
     )
     assert tools.calls["financial"] == 1
     assert tools.calls["retrieval"] == 0
+
+
+def test_hybrid_growth_plan_gets_deterministic_calculation_when_model_omits_it() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question=(
+            "Compare Datadog revenue growth with the principal risks reported for 2024."
+        ),
+        route=ResearchRoute.HYBRID,
+        required_capabilities=(
+            AgentCapability.DOCUMENTS,
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+    )
+    plan = ExecutionPlan(
+        route=ResearchRoute.HYBRID,
+        branches=(
+            _financial_branch(),
+            DocumentRetrievalBranch(
+                branch_id="risks",
+                request=AdaptiveRetrievalRequest(query="Datadog 2024 principal risks"),
+            ),
+        ),
+    )
+    resolved = ResolvedQuery(
+        query="Compare Datadog revenue growth with the principal risks reported for 2024.",
+        company_ids=(COMPANY_ID,),
+        metrics=("revenue",),
+    )
+
+    normalized = _ensure_required_growth_calculations(plan, analysis, resolved)
+
+    calculation = next(
+        branch for branch in normalized.branches if isinstance(branch, CalculationBranch)
+    )
+    assert calculation.operation == "year_over_year_growth"
+    assert calculation.input_refs == ("financial",)
+    assert "inferred_growth_calculation_branch" in normalized.reason_codes

@@ -96,14 +96,20 @@ def _domain_question_analysis(output: ModelQuestionAnalysis) -> QuestionAnalysis
     capabilities = output.required_capabilities
     chart_requested = output.chart_requested
     reason_codes = output.reason_codes
+    route = output.route
     if output.route is ResearchRoute.UNSUPPORTED:
         if capabilities or chart_requested:
             reason_codes = tuple(dict.fromkeys((*reason_codes, "unsupported_analysis_normalized")))
         capabilities = ()
         chart_requested = False
+    elif _growth_calculation_capability_needed(output):
+        capabilities = tuple(dict.fromkeys((*capabilities, AgentCapability.CALCULATIONS)))
+        reason_codes = tuple(dict.fromkeys((*reason_codes, "calculation_capability_inferred")))
+        if route in {ResearchRoute.STRUCTURED_ONLY, ResearchRoute.API_ONLY}:
+            route = ResearchRoute.CALCULATION
     return QuestionAnalysis(
         normalized_question=output.normalized_question,
-        route=output.route,
+        route=route,
         required_capabilities=capabilities,
         chart_requested=chart_requested,
         is_follow_up=output.is_follow_up,
@@ -111,4 +117,34 @@ def _domain_question_analysis(output: ModelQuestionAnalysis) -> QuestionAnalysis
     )
 
 
-__all__ = ("_start_turn", "_parse_question", "_domain_question_analysis")
+def _growth_calculation_capability_needed(output: ModelQuestionAnalysis) -> bool:
+    capabilities = set(output.required_capabilities)
+    if AgentCapability.CALCULATIONS in capabilities:
+        return False
+    if not capabilities.intersection(
+        {AgentCapability.FINANCIAL_FACTS, AgentCapability.MACRO_SERIES}
+    ):
+        return False
+    context = " ".join((output.normalized_question, *output.reason_codes)).casefold()
+    return any(
+        marker in context
+        for marker in (
+            "growth",
+            "quarter-over-quarter",
+            "quarter over quarter",
+            "quarter_over_quarter",
+            "qoq",
+            "year-over-year",
+            "year over year",
+            "year_over_year",
+            "yoy",
+        )
+    )
+
+
+__all__ = (
+    "_start_turn",
+    "_parse_question",
+    "_domain_question_analysis",
+    "_growth_calculation_capability_needed",
+)

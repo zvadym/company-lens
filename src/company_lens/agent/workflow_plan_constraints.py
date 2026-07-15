@@ -63,6 +63,70 @@ def _constrain_plan_sources(
     )
 
 
+def _ensure_required_growth_calculations(
+    plan: ExecutionPlan,
+    analysis: QuestionAnalysis,
+    resolved: ResolvedQuery,
+) -> ExecutionPlan:
+    if (
+        AgentCapability.CALCULATIONS not in analysis.required_capabilities
+        or any(isinstance(branch, CalculationBranch) for branch in plan.branches)
+        or not _explicit_growth_requested(analysis, resolved)
+    ):
+        return plan
+    financial_sources = tuple(
+        branch for branch in plan.branches if isinstance(branch, FinancialFactsBranch)
+    )
+    macro_sources = tuple(
+        branch for branch in plan.branches if isinstance(branch, MacroSeriesBranch)
+    )
+    numeric_sources = financial_sources or macro_sources
+    if not numeric_sources:
+        return plan
+
+    existing_ids = {branch.branch_id for branch in plan.branches}
+    calculations: list[CalculationBranch] = []
+    operation = _requested_growth_operation(analysis, resolved, None)
+    for source in numeric_sources:
+        branch_id = _unique_growth_branch_id(source.branch_id, existing_ids)
+        existing_ids.add(branch_id)
+        calculations.append(
+            CalculationBranch(
+                branch_id=branch_id,
+                operation=operation,
+                input_refs=(source.branch_id,),
+                depends_on=(source.branch_id,),
+            )
+        )
+    chart_index = next(
+        (index for index, branch in enumerate(plan.branches) if isinstance(branch, ChartBranch)),
+        len(plan.branches),
+    )
+    branches = (
+        *plan.branches[:chart_index],
+        *calculations,
+        *plan.branches[chart_index:],
+    )
+    return plan.model_copy(
+        update={
+            "branches": branches,
+            "reason_codes": tuple(
+                dict.fromkeys((*plan.reason_codes, "inferred_growth_calculation_branch"))
+            ),
+        }
+    )
+
+
+def _unique_growth_branch_id(source_id: str, existing_ids: set[str]) -> str:
+    base = f"{source_id}_growth"
+    candidate = base
+    suffix = 2
+    while candidate in existing_ids:
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    return candidate
+
+
 def _allowed_source_capabilities(
     analysis: QuestionAnalysis,
     resolved: ResolvedQuery,
@@ -107,4 +171,7 @@ def _plan_branch_references(branch: ExecutionBranch) -> set[str]:
     return references
 
 
-__all__ = ("_constrain_plan_sources",)
+__all__ = (
+    "_constrain_plan_sources",
+    "_ensure_required_growth_calculations",
+)

@@ -175,6 +175,11 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
             analysis,
             resolved,
         )
+        domain_plan = _ensure_required_growth_calculations(
+            domain_plan,
+            analysis,
+            resolved,
+        )
         domain_plan = _canonicalize_plan_route(domain_plan)
         fallback_plan = _fallback_multi_company_growth_plan(
             analysis,
