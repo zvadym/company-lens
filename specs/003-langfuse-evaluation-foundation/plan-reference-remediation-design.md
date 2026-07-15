@@ -2,7 +2,7 @@
 
 **Date**: 2026-07-15  
 **Feature**: `003-langfuse-evaluation-foundation`  
-**Status**: Approved for implementation
+**Status**: Implemented and live-validated
 
 ## Context
 
@@ -93,3 +93,17 @@ deterministic fallback.
 - No domain `ExecutionPlan` contains source dataset aliases in dependency/reference fields.
 - All existing plan validation and evaluation tests remain green.
 - The targeted live follow-up run completes with a passed gate before another full run is accepted.
+
+## Validation Evidence
+
+- Regression tests reproduce the exact `revenue_qoq_input` alias shape, canonical chart aliases,
+  duplicate aliases, and unknown references.
+- Local validation passed Ruff, formatting, strict mypy for 170 source files, and pytest with
+  `404 passed, 3 skipped`.
+- Targeted follow-up workflow `29445519088` completed all four cases with
+  `gate_status=passed`; Langfuse run `56a0b560-437a-439a-9c77-22ae922a141b` contains four unique
+  item traces.
+- Full workflow `29445921451` completed all 18 cases with `gate_status=passed`, zero infrastructure
+  outcomes, and zero failed citation validations.
+- The canonical Langfuse runs contain exactly 14 core and four follow-up item-to-trace links, with
+  run IDs matching the immutable execution artifact.

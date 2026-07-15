@@ -295,3 +295,41 @@ Evidence links:
 - GitHub workflow: <https://github.com/zvadym/company-lens/actions/runs/29408339807>
 - core Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkj2qu802hnad0cak5vuplt/runs/1ef93ebc-6093-443e-bf43-6339f8fb70c2>
 - follow-up Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkjjeby02zcad0cu4a6axxc/runs/a0bd0cdf-c8dd-4867-a872-715b68c70694>
+
+## 13. Plan Reference Alias Remediation Validation
+
+Manual run `29422586446` exposed a structured-plan variation in
+`followup_replace_company_preserve_task_001`: the source branch used
+`branch_id=revenue_last_five_quarters` and `dataset_ref=revenue_qoq_input`, while the calculation
+used the dataset alias as its input reference. Direct branch-map indexing raised a `KeyError`, so
+the execution correctly ended partial with a not-evaluated gate.
+
+The remediation canonicalizes unique source dataset aliases to branch IDs before domain-plan
+construction and converts unknown references into controlled validation errors. Validation on
+commit `18c9255b697d3594de338a588cb46d611ac3f590` completed on 2026-07-15:
+
+- targeted workflow `29445519088` passed all four follow-up cases with execution
+  `f6c6f08b-aa06-422f-959c-6c780c8097e1`;
+- targeted Langfuse run `56a0b560-437a-439a-9c77-22ae922a141b` contains exactly four unique item
+  traces, including a passing replace-company case with DDOG, revenue, QoQ growth, calculation
+  tools, and valid citations;
+- full workflow `29445921451` passed all 18 cases with execution
+  `136eaec8-7ff6-4205-9e08-2cc21bca7efd`;
+- core Langfuse run `3195c805-73bd-463a-b9a9-726eb181c7f1` contains 14 unique item-to-trace links;
+- follow-up Langfuse run `2b4f82d6-485a-4a0c-972c-3c4a464f631d` contains four unique
+  item-to-trace links;
+- every quality and operational pass rate is `1.0`, `missing_result_rate=0.0`, and no case has an
+  infrastructure or failed-citation outcome;
+- the full run recovered from two OpenAI timeouts and two OpenAI 500 responses through bounded
+  per-node retries without requiring a whole-case replay;
+- local validation passed Ruff, formatting, strict mypy for 170 source files, and pytest with
+  `404 passed, 3 skipped`.
+
+Evidence links:
+
+- failing discovery run: <https://github.com/zvadym/company-lens/actions/runs/29422586446>
+- targeted passing run: <https://github.com/zvadym/company-lens/actions/runs/29445519088>
+- full passing run: <https://github.com/zvadym/company-lens/actions/runs/29445921451>
+- targeted follow-up Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkjjeby02zcad0cu4a6axxc/runs/56a0b560-437a-439a-9c77-22ae922a141b>
+- full core Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkj2qu802hnad0cak5vuplt/runs/3195c805-73bd-463a-b9a9-726eb181c7f1>
+- full follow-up Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkjjeby02zcad0cu4a6axxc/runs/2b4f82d6-485a-4a0c-972c-3c4a464f631d>
