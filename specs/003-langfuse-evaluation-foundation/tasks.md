@@ -80,7 +80,7 @@ verify exit codes `1` and `2` and aggregate suppression.
 ### Tests for User Story 1
 
 - [X] T022 [P] [US1] Add failing tests for privacy-safe `AgentState` projection, answer presence, citation validity/reason codes, unknown evidence IDs, and not-applicable citation omission in `tests/evals/test_agent_observation.py`
-- [X] T023 [P] [US1] Add failing tests for isolated case sessions, multi-turn reuse within one case, captured missing-answer behavior failure, and sanitized provider/runner infrastructure outcomes in `tests/test_golden_agent_runner.py`
+- [X] T023 [P] [US1] Add failing tests for isolated case sessions, multi-turn reuse within one case, captured missing-answer behavior failure, sanitized provider/runner infrastructure outcomes, and a single full-conversation replay in a fresh session after exhausted provider retries in `tests/test_golden_agent_runner.py` and `tests/evals/test_agent_runner_infrastructure.py`
 - [X] T024 [P] [US1] Add failing tests for pinned `DatasetClient.run_experiment`, applicable score-config IDs, deterministic score IDs, dropped-item/evaluator detection, dataset-run linkage, partial-run `not_evaluated`, and flush behavior in `tests/evals/test_langfuse_experiment.py`
 - [X] T025 [P] [US1] Add failing tests for project/all-dataset preflights before agent calls, target-aware preflight-failure transitions to `reporting/pending` or `terminal/not_requested`, one run per dataset, shared execution ID/manifest, read-only replay with a new linked execution, sequential datasets, every injected journal transition/interruption, recovery materialization, completed/partial/errored transitions, gate derivation, and atomic artifacts in `tests/evals/test_evaluation_orchestrator.py`
 - [X] T026 [P] [US1] Add failing CLI contract tests for normal/replay mutual exclusion, immutable replay overrides, repeatable datasets, per-dataset max cases, paired optional repository/PR reporting target, policy/manifest metadata, `recover-evaluation`, output paths, sanitized errors, signals, and exit codes `0|1|2` in `tests/evals/test_run_evaluation_cli.py`
@@ -88,7 +88,7 @@ verify exit codes `1` and `2` and aggregate suppression.
 ### Implementation for User Story 1
 
 - [X] T027 [US1] Implement the privacy-safe `AgentState` to `CaseObservation` projection and citation classification in `src/company_lens/evals/observation.py`
-- [X] T028 [US1] Refactor case selection/execution in `src/company_lens/evals/agent_runner.py` to use `observation.py`, preserve isolated durable sessions, collect operational metrics, and capture sanitized terminal outcomes without dropping cases
+- [X] T028 [US1] Refactor case selection/execution in `src/company_lens/evals/agent_runner.py` to use `observation.py`, preserve isolated durable sessions, collect operational metrics, capture sanitized terminal outcomes without dropping cases, and replay the complete case at most once in a fresh session only after exhausted provider-infrastructure retries
 - [X] T029 [P] [US1] Implement pinned dataset experiment execution, item evaluator adaptation, post-run cardinality/linkage/score verification, and trusted run-score publication in `src/company_lens/evals/langfuse_experiment.py`
 - [X] T030 [P] [US1] Implement validated sequence-monotonic atomic `evaluation-journal.json` checkpoints with independent reporting state/failure codes, dataset-scoped terminal case identities, target-aware recovery transitions, recovery materialization, privacy-safe `evaluation-execution.json`/`evaluation-summary.md` rendering, forbidden-content guards, and bounded failure reasons in `src/company_lens/evals/reporting.py`
 - [X] T031 [US1] Implement project-aware normal preflight, immutable manifest construction, mutation-free manifest replay with a new linked execution, optional PR reporting-intent initialization, multi-dataset run/finalize state transitions, journal checkpoints, target-aware graceful interruption, quality-vs-infrastructure classification, and exit-code mapping in `src/company_lens/evals/orchestrator.py`
@@ -279,8 +279,10 @@ after this focused gate passes.
 | FR-035 | T005, T030, T039-T044, T051-T053, T056 |
 | FR-036-FR-037 | T057-T060 |
 | FR-038-FR-040 | T061-T075 |
+| FR-041 | T023, T028 |
 | SC-001-SC-017 | T021, T034, T038, T044, T049, T051-T056, T060 |
 | SC-018-SC-019 | T061-T075 |
+| SC-020 | T023, T028 |
 
 ---
 

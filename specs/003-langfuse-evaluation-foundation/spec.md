@@ -49,6 +49,7 @@ A maintainer can manually run a live evaluation for selected golden datasets and
 9. **Given** a recorded manifest and unchanged repository and external services, **When** a maintainer re-runs the evaluation from that manifest, **Then** a new linked execution uses the same repository content, exact remote snapshots, gate, model configuration, prompt/parser/index versions, score contract, and execution policy without synchronizing or mutating remote datasets.
 10. **Given** configured credentials are valid but belong to a different Langfuse project than the expected project ID, **When** evaluation preflight runs, **Then** no remote dataset write or provider-backed case call occurs and the execution is errored with a not-evaluated gate.
 11. **Given** the evaluation process is interrupted after work begins, **When** artifacts are collected or execution is recovered, **Then** the latest atomic journal contains every terminal transition completed before interruption and can produce a privacy-safe partial execution artifact.
+12. **Given** a provider-infrastructure failure remains after the configured per-node retries, **When** the execution policy permits retries, **Then** the runner replays the complete case at most once in a fresh isolated session under the same Langfuse dataset item trace; a successful replay is evaluated normally, while a repeated failure remains an infrastructure error with a not-evaluated gate.
 
 ---
 
@@ -162,6 +163,7 @@ An agent developer can add reviewed critical cases to the repository dataset so 
 - **FR-038**: On-demand company preparation MUST derive typed financial-fact and document requirements from the analyzed agent capabilities; a financial-only route MUST NOT ingest SEC filings, process documents, or create embeddings.
 - **FR-039**: Follow-up resolution MUST deterministically inherit, replace, or extend company sets from the current resolved companies and explicit add/include intent, preserve compatible metrics and operations, and record provenance separately for each final company target.
 - **FR-040**: Completing or skipping on-demand preparation MUST enrich prepared tickers through deterministic local resolution and MUST NOT repeat model-based company extraction solely because preparation ran.
+- **FR-041**: When per-node retries are enabled, the evaluation runner MUST replay a complete case at most once after an exhausted provider-infrastructure failure, use a fresh isolated session for the replay, keep both attempts under the same Langfuse dataset item trace, include the replay in operational retry metrics, and classify a repeated failure as infrastructure with a not-evaluated gate; observed behavior failures MUST NOT trigger this replay.
 
 ### Key Entities
 
@@ -199,6 +201,7 @@ An agent developer can add reviewed critical cases to the repository dataset so 
 - **SC-017**: Every workflow run with a PR target and valid matching execution/journal artifacts ends with journal reporting status succeeded or failed; an injected reporting failure leaves the previously materialized execution JSON byte-for-byte unchanged while the workflow exits `2` and the journal records only the sanitized reporting failure.
 - **SC-018**: The targeted four-case follow-up evaluation reaches `1.0` for company accuracy, metric accuracy, operation accuracy, follow-up safety accuracy, and citation validity pass rate without increasing evaluation-gate thresholds.
 - **SC-019**: Financial-only follow-up traces contain zero SEC document-processing and embedding operations, perform no duplicate post-preparation model company extraction, and pass the existing operational budgets.
+- **SC-020**: Automated runner tests prove that one transient provider failure replays the full conversation exactly once in a fresh session and can produce a normal observed result, while two consecutive provider failures produce one sanitized infrastructure outcome with one case-level retry recorded.
 
 ## Assumptions
 

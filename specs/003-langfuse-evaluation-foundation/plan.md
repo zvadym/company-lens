@@ -211,6 +211,10 @@ change is required.
 - Catch provider/runner exceptions inside the task boundary and return sanitized typed
   infrastructure outcomes. This prevents the SDK from dropping item results or recording raw
   exception text as experiment output.
+- If provider infrastructure still fails after per-node retries and the execution policy permits
+  retries, replay the complete case once in a fresh isolated session under the same dataset item
+  trace. Never replay observed behavior failures; a second provider failure remains infrastructure
+  with a not-evaluated gate, and the replay contributes to operational retry metrics.
 - Project `AgentState` to a privacy-safe observed result containing routing/tool/operation signals,
   operational metrics, answer presence, citation-validation status/counts/reason codes, and no raw
   final answer or evidence passage.

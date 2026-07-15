@@ -130,16 +130,23 @@ def _run_case(
 
     try:
         provider_failure = False
+        case_attempts = 0
         with collect_model_usage() as model_usage:
-            for turn in user_turns:
-                state = agent.run(
-                    turn.content,
-                    session_id=session_id,
-                    policy=policy,
-                    observer=observe,
-                )
-                if _has_provider_execution_failure(state):
-                    provider_failure = True
+            for case_attempt in range(1, _case_attempt_limit(policy) + 1):
+                case_attempts = case_attempt
+                provider_failure = False
+                attempt_session_id = _case_attempt_session_id(session_id, case_attempt)
+                for turn in user_turns:
+                    state = agent.run(
+                        turn.content,
+                        session_id=attempt_session_id,
+                        policy=policy,
+                        observer=observe,
+                    )
+                    if _has_provider_execution_failure(state):
+                        provider_failure = True
+                        break
+                if not provider_failure:
                     break
     except Exception:
         return infrastructure_case_observation(
@@ -154,6 +161,7 @@ def _run_case(
         total_latency_ms=_elapsed_ms(started),
         time_to_first_event_ms=first_event_ms,
         model_usage=tuple(model_usage),
+        case_attempts=case_attempts,
     )
     if provider_failure:
         return infrastructure_case_observation(
@@ -188,6 +196,18 @@ def _has_provider_execution_failure(state: AgentState) -> bool:
     )
 
 
+def _case_attempt_limit(policy: ExecutionPolicy) -> int:
+    return 2 if policy.max_retries_per_node > 0 else 1
+
+
+def _case_attempt_session_id(session_id: str, attempt: int) -> str:
+    if attempt == 1:
+        return session_id
+    suffix = f"-retry-{attempt - 1}"
+    prefix = session_id[: 128 - len(suffix)].rstrip(".:-_")
+    return f"{prefix}{suffix}"
+
+
 def _operational_metrics(
     state: AgentState,
     *,
@@ -195,6 +215,7 @@ def _operational_metrics(
     total_latency_ms: int,
     time_to_first_event_ms: int | None,
     model_usage: tuple[ModelUsageRecord, ...] = (),
+    case_attempts: int = 1,
 ) -> ObservedOperationalMetrics:
     node_attempts = tuple(
         ObservedNodeAttempt(node=_node_name(item.node), attempts=item.attempts)
@@ -213,7 +234,9 @@ def _operational_metrics(
         tool_calls_used=tool_calls_used,
         repair_attempts=state.get("repair_attempts", 0),
         api_calls=len(model_usage) if model_usage else tool_calls_used,
-        retry_count=sum(max(0, item.attempts - 1) for item in node_attempts),
+        retry_count=(
+            sum(max(0, item.attempts - 1) for item in node_attempts) + max(0, case_attempts - 1)
+        ),
         node_attempts=node_attempts,
         input_tokens=input_tokens,
         output_tokens=output_tokens,

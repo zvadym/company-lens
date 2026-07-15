@@ -163,6 +163,9 @@ Extends the current observed result with terminal and citation state.
 
 Captured missing answer or agent terminal failure remains `outcome=observed`; its deterministic
 checks fail. Provider/runner/evaluator malfunction uses `outcome=infrastructure_error`.
+`operational.retry_count` includes both per-node retries and the single permitted whole-case replay.
+The replay uses a fresh session but remains part of the same case observation and Langfuse dataset
+item trace; no separate public case-attempt field is required.
 
 ### CaseEvaluation
 
