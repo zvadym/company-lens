@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # ruff: noqa: F403, F405, I001
 from .context import *
+from company_lens.agent.workflow import _normalize_default_chart_window
 
 
 def test_default_chart_window_plots_quarterly_yoy_growth_series_against_macro() -> None:
@@ -121,3 +122,59 @@ def test_default_chart_window_plots_quarterly_yoy_growth_series_against_macro() 
         Decimal("4"),
         Decimal("5"),
     ]
+
+
+def test_normalized_qoq_follow_up_keeps_explicit_growth_operation() -> None:
+    facts = FinancialFactsBranch(
+        branch_id="financial",
+        request=FinancialFactQuery(
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+            period_types=("quarter",),
+            limit=4,
+        ),
+    )
+    growth = CalculationBranch(
+        branch_id="growth",
+        operation="quarter_over_quarter_growth",
+        input_refs=(facts.branch_id,),
+        depends_on=(facts.branch_id,),
+    )
+    plan = ExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=(
+            facts,
+            growth,
+            ChartBranch(
+                branch_id="chart",
+                chart_type="line",
+                dataset_ref=growth.branch_id,
+                depends_on=(growth.branch_id,),
+                title="Cloudflare quarter-over-quarter revenue growth",
+            ),
+        ),
+    )
+    analysis = QuestionAnalysis(
+        normalized_question=(
+            "make the cloudflare quarter_over_quarter revenue growth display into a chart"
+        ),
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+        is_follow_up=True,
+    )
+
+    normalized = _normalize_default_chart_window(
+        plan,
+        analysis,
+        ResolvedQuery(query="Make it a chart.", metrics=("revenue",)),
+    )
+
+    normalized_growth = next(
+        branch for branch in normalized.branches if isinstance(branch, CalculationBranch)
+    )
+    assert normalized_growth.operation == "quarter_over_quarter_growth"

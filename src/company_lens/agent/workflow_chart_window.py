@@ -86,7 +86,13 @@ def _normalize_default_chart_window(
 def _explicit_quarter_growth_requested(question: str) -> bool:
     normalized = question.casefold()
     return any(
-        token in normalized for token in ("quarter-over-quarter", "quarter over quarter", "qoq")
+        token in normalized
+        for token in (
+            "quarter-over-quarter",
+            "quarter over quarter",
+            "quarter_over_quarter",
+            "qoq",
+        )
     )
 
 

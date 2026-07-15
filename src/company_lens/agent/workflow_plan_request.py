@@ -170,7 +170,12 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
         return update
     assert output is not None
     try:
-        domain_plan = _canonicalize_plan_route(_domain_execution_plan(output))
+        domain_plan = _constrain_plan_sources(
+            _domain_execution_plan(output),
+            analysis,
+            resolved,
+        )
+        domain_plan = _canonicalize_plan_route(domain_plan)
         fallback_plan = _fallback_multi_company_growth_plan(
             analysis,
             resolved,

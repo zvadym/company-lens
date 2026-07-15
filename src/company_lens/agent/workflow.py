@@ -44,6 +44,7 @@ _WORKFLOW_MODULE_NAMES = (
     "workflow_plan_validation",
     "workflow_chart_window",
     "workflow_plan_conversion",
+    "workflow_plan_constraints",
     "workflow_branch_utils",
     "workflow_followup_merge",
     "workflow_recent_context",
