@@ -264,3 +264,34 @@ Targeted follow-up validation completed on 2026-07-15 using commit
 - facts-only preparation spans recorded `requires_financial_facts=true` and
   `requires_documents=false`, with no embedding observations;
 - the canonical PR comment and immutable artifact bundle were published successfully.
+
+## 12. Final 18-case Validation
+
+Full live validation completed on 2026-07-15 using commit
+`83d584713f0298c818656305187f99fa44d0e647`, PR `#68`, `dataset_scope=all`, and
+`max_cases=100`:
+
+- GitHub workflow run `29408339807` completed successfully with execution
+  `293f117a-cb39-471e-a709-9b44c8caa362`, `status=completed`, and `gate_status=passed`;
+- the core Langfuse run `1ef93ebc-6093-443e-bf43-6339f8fb70c2` linked exactly 14 unique
+  dataset items to 14 unique traces;
+- the follow-up Langfuse run `a0bd0cdf-c8dd-4867-a872-715b68c70694` linked exactly four unique
+  dataset items to four unique traces;
+- Langfuse API filtering by the shared execution ID returned exactly 18 traces, with zero
+  infrastructure outcomes and zero failed citation validations;
+- every aggregate quality and operational pass rate was `1.0`; `missing_result_rate` was `0.0`;
+- the 2035 projection case remained `route=unsupported`, `operation=null`, and used no tools;
+- the unresolved Globex follow-up retained only the current unresolved Globex identity, used no
+  tools, and did not reuse any previous company;
+- the terminal recovery journal contained 18 unique terminal cases and recorded PR reporting as
+  `succeeded` with no reporting failure codes;
+- the immutable artifact run IDs exactly matched the canonical dataset-run IDs returned by the
+  Langfuse dataset-run-item API;
+- local validation passed Ruff, formatting, strict mypy for 169 source files, and pytest with
+  `400 passed, 3 skipped`; the CI check, web check, security scan, and image scan also passed.
+
+Evidence links:
+
+- GitHub workflow: <https://github.com/zvadym/company-lens/actions/runs/29408339807>
+- core Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkj2qu802hnad0cak5vuplt/runs/1ef93ebc-6093-443e-bf43-6339f8fb70c2>
+- follow-up Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkjjeby02zcad0cu4a6axxc/runs/a0bd0cdf-c8dd-4867-a872-715b68c70694>
