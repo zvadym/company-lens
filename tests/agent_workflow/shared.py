@@ -54,6 +54,7 @@ from company_lens.agent.workflow import (
     _build_research_frame,
     _entity_company_id,
     _fallback_multi_company_growth_chart_plan,
+    _fallback_multi_company_growth_plan,
     _generate_chart_spec,
     _merge_follow_up_if_needed,
     _merge_follow_up_resolution,

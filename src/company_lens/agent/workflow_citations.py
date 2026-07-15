@@ -151,15 +151,17 @@ def _citation_repair_exhausted_update(
     started: float,
 ) -> dict[str, object]:
     attempts_used = state.get("repair_attempts", 0)
-    if attempts_used == 0:
-        fallback_update = _citation_fallback_update(state, started)
-        if fallback_update is not None:
-            return {
-                **fallback_update,
-                # Count fallback as the one repair path so an invalid fallback cannot loop
-                # back into itself or be finalized as if it were citation-safe.
-                "repair_attempts": 1,
-            }
+    fallback_update = _citation_fallback_update(
+        state,
+        started,
+        structured_only=attempts_used > 0,
+    )
+    if fallback_update is not None:
+        return {
+            **fallback_update,
+            # Keep the repair budget exhausted so an invalid fallback cannot loop.
+            "repair_attempts": max(1, attempts_used),
+        }
     exhausted_error = _agent_error(
         "repair_or_abstain",
         "citation_repair_exhausted",
@@ -195,8 +197,22 @@ def _citation_repair_failure_answer(state: AgentState) -> str:
 def _citation_fallback_update(
     state: AgentState,
     started: float,
+    *,
+    structured_only: bool = False,
 ) -> dict[str, object] | None:
-    fallback = _deterministic_fallback_answer(state.get("evidence", ()))
+    evidence = state.get("evidence", ())
+    if structured_only:
+        evidence = tuple(
+            item
+            for item in evidence
+            if item.kind
+            in {
+                EvidenceKind.CALCULATION,
+                EvidenceKind.FINANCIAL_FACT,
+                EvidenceKind.MACRO_OBSERVATION,
+            }
+        )
+    fallback = _deterministic_fallback_answer(evidence)
     if fallback is None or fallback == state.get("draft_answer"):
         return None
     return {

@@ -39,6 +39,37 @@ def test_invalid_citation_is_repaired_once() -> None:
     assert "financial_fact:22222222-2222-2222-2222-222222222222" in repair_context
 
 
+def test_invalid_repair_falls_back_to_deterministic_cited_summary() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="What was revenue?",
+        route=ResearchRoute.STRUCTURED_ONLY,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS,),
+    )
+    plan = ExecutionPlan(
+        route=ResearchRoute.STRUCTURED_ONLY,
+        branches=(_financial_branch(),),
+    )
+    invalid_answer = f"Cloudflare revenue was 124.6 USD [financial_fact:{FACT_ID}]."
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=plan,
+        texts=(invalid_answer, invalid_answer),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, FakeResearchTools())).run(
+        "What was Cloudflare revenue?",
+        session_id="session-invalid-repair-fallback",
+        policy=ExecutionPolicy(max_repair_attempts=1),
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["repair_attempts"] == 1
+    assert result["answer_validation"].valid is True
+    assert "125 USD" in result["final_answer"]
+    assert "124.6" not in result["final_answer"]
+    assert model.purposes.count(ModelPurpose.REPAIR) == 1
+
+
 def test_repair_timeout_is_not_retried_by_general_node_policy() -> None:
     analysis = QuestionAnalysis(
         normalized_question="What was revenue?",

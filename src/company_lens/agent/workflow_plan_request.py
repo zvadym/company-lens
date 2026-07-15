@@ -171,14 +171,15 @@ def _plan_request(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> 
     assert output is not None
     try:
         domain_plan = _canonicalize_plan_route(_domain_execution_plan(output))
-        fallback_plan = _fallback_multi_company_growth_chart_plan(
+        fallback_plan = _fallback_multi_company_growth_plan(
             analysis,
             resolved,
             memory,
         )
-        if fallback_plan is not None and _needs_multi_company_growth_chart_fallback(
+        if fallback_plan is not None and _needs_multi_company_growth_fallback(
             domain_plan,
             resolved,
+            chart_required=analysis.chart_requested,
         ):
             domain_plan = fallback_plan
         reconciled_analysis = _reconcile_analysis_with_plan(analysis, domain_plan)
@@ -244,7 +245,7 @@ def _planning_failure_fallback_plan(
         question,
         analysis,
         resolved,
-    ) or _fallback_multi_company_growth_chart_plan(
+    ) or _fallback_multi_company_growth_plan(
         analysis,
         resolved,
         memory,

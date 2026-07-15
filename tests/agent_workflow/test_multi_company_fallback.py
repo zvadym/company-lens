@@ -183,3 +183,91 @@ def test_multi_company_chart_fallback_replaces_under_scoped_model_plan() -> None
     assert reconciled.route is ResearchRoute.CALCULATION
     assert AgentCapability.MACRO_SERIES not in reconciled.required_capabilities
     assert AgentCapability.CALCULATIONS in reconciled.required_capabilities
+
+
+def test_multi_company_growth_fallback_splits_non_chart_company_series() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question=("compare Cloudflare and Netflix quarter-over-quarter revenue growth"),
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+        reason_codes=("multi_company_comparison", "quarter_over_quarter_growth"),
+    )
+    under_scoped_plan = ExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=(
+            FinancialFactsBranch(
+                branch_id="company_revenue_quarters",
+                request=FinancialFactQuery(
+                    company_ids=(COMPANY_ID, NETFLIX_ID),
+                    metrics=("revenue",),
+                    period_types=("quarter",),
+                ),
+            ),
+            CalculationBranch(
+                branch_id="company_revenue_growth",
+                operation="quarter_over_quarter_growth",
+                input_refs=("company_revenue_quarters",),
+                depends_on=("company_revenue_quarters",),
+            ),
+        ),
+    )
+    model = FakeModelProvider(analysis=analysis, plan=under_scoped_plan)
+    state = create_initial_agent_state(
+        "Compare Cloudflare and Netflix quarter-over-quarter revenue growth.",
+        session_id="session-under-scoped-growth-fallback",
+    )
+    state["analysis"] = analysis
+    state["resolved_query"] = ResolvedQuery(
+        query="Compare Cloudflare and Netflix quarter-over-quarter revenue growth.",
+        company_ids=(COMPANY_ID, NETFLIX_ID),
+        metrics=("revenue",),
+    )
+
+    update = _plan_request(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, PeerAnnualFinancialTools())),
+    )
+
+    plan = update["execution_plan"]
+    assert isinstance(plan, ExecutionPlan)
+    assert "deterministic_multi_company_growth_plan" in plan.reason_codes
+    assert [branch.kind for branch in plan.branches] == [
+        "query_financial_facts",
+        "calculate_metrics",
+        "query_financial_facts",
+        "calculate_metrics",
+    ]
+    financial_branches = tuple(
+        branch for branch in plan.branches if isinstance(branch, FinancialFactsBranch)
+    )
+    assert [branch.request.company_ids for branch in financial_branches] == [
+        (COMPANY_ID,),
+        (NETFLIX_ID,),
+    ]
+    assert all(
+        branch.operation == "quarter_over_quarter_growth"
+        for branch in plan.branches
+        if isinstance(branch, CalculationBranch)
+    )
+
+
+def test_multi_company_growth_fallback_does_not_replace_other_calculations() -> None:
+    analysis = QuestionAnalysis(
+        normalized_question="compare Cloudflare and Netflix operating margins",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+        reason_codes=("multi_company_comparison", "margin_calculation"),
+    )
+    resolved = ResolvedQuery(
+        query="Compare Cloudflare and Netflix operating margins.",
+        company_ids=(COMPANY_ID, NETFLIX_ID),
+        metrics=("operating_income", "revenue"),
+    )
+
+    assert _fallback_multi_company_growth_plan(analysis, resolved, None) is None
