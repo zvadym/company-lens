@@ -13,7 +13,9 @@ def _should_extract_company_mentions(
     if analysis.route is ResearchRoute.UNSUPPORTED:
         # An unknown explicit company often makes the route unsupported; extracting it is
         # still required to prevent a follow-up from silently reusing the previous company.
-        return "company_not_identified" in analysis.reason_codes
+        return analysis.is_follow_up or any(
+            reason.startswith("company_not_ident") for reason in analysis.reason_codes
+        )
     capabilities = set(analysis.required_capabilities)
     return (
         analysis.chart_requested

@@ -19,6 +19,13 @@ def _constrain_plan_sources(
 ) -> ExecutionPlan:
     """Remove model-added source kinds that the classified request did not authorize."""
 
+    if _must_remain_unsupported(analysis):
+        return ExecutionPlan(
+            route=ResearchRoute.UNSUPPORTED,
+            reason_codes=tuple(
+                dict.fromkeys((*plan.reason_codes, "unsupported_analysis_enforced"))
+            ),
+        )
     if not DETERMINISTIC_PLAN_REASON_CODES.isdisjoint(plan.reason_codes):
         return plan
     represented = {
@@ -60,6 +67,22 @@ def _constrain_plan_sources(
                 dict.fromkeys((*plan.reason_codes, "unrequested_source_branches_removed"))
             ),
         }
+    )
+
+
+def _must_remain_unsupported(analysis: QuestionAnalysis) -> bool:
+    if analysis.route is not ResearchRoute.UNSUPPORTED:
+        return False
+    normalized = analysis.normalized_question.casefold()
+    return any(reason.startswith("future_") for reason in analysis.reason_codes) or any(
+        marker in normalized
+        for marker in (
+            "what will ",
+            "forecast",
+            "predict",
+            "projection",
+            "projected",
+        )
     )
 
 

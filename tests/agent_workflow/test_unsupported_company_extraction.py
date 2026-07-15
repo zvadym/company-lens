@@ -17,8 +17,8 @@ def test_unsupported_unknown_company_is_extracted_before_follow_up_merge() -> No
         route=ResearchRoute.UNSUPPORTED,
         is_follow_up=True,
         reason_codes=(
-            "company_not_identified",
-            "no_usable_source",
+            "company_not_identifiable",
+            "no_available_company_data",
             "unsupported_analysis_normalized",
         ),
     )
