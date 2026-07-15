@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from company_lens.agent.schemas import NodeAttempt
+
 # ruff: noqa: F403, F405, I001
 from .context import *
 
@@ -51,3 +53,55 @@ def test_unsupported_unknown_company_is_extracted_before_follow_up_merge() -> No
     assert public_company.status == "unresolved"
     assert tools.calls["resolve_public_company_mentions"] == 1
     assert ModelPurpose.ENTITY_EXTRACTION in model.purposes
+
+
+def test_exhausted_company_extraction_failure_is_preserved_in_agent_state() -> None:
+    class FailingExtractionModel(FakeModelProvider):
+        def generate_structured[OutputT: BaseModel](
+            self,
+            messages: Sequence[ModelMessage],
+            output_type: type[OutputT],
+            *,
+            purpose: ModelPurpose,
+        ) -> StructuredModelResult[OutputT]:
+            if purpose is ModelPurpose.ENTITY_EXTRACTION:
+                raise ModelProviderError(
+                    AgentError(
+                        category=AgentErrorCategory.PROVIDER_SERVICE,
+                        severity=AgentErrorSeverity.RECOVERABLE,
+                        code="openai_service",
+                        message="OpenAI service returned a transient error.",
+                    )
+                )
+            return super().generate_structured(messages, output_type, purpose=purpose)
+
+    analysis = QuestionAnalysis(
+        normalized_question="Compare Cloudflare and Datadog revenue growth.",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+        ),
+    )
+    model = FailingExtractionModel(
+        analysis=analysis,
+        plan=ExecutionPlan(route=ResearchRoute.CALCULATION),
+    )
+    state = create_initial_agent_state(
+        "Compare Cloudflare and Datadog revenue growth.",
+        session_id="session-extraction-provider-failure",
+        policy=ExecutionPolicy(max_retries_per_node=2),
+    )
+    state["analysis"] = analysis
+
+    update = _resolve_entities(
+        state,
+        Runtime(context=ResearchAgentRuntime(model, FakeResearchTools())),
+    )
+
+    errors = cast(tuple[AgentError, ...], update["errors"])
+    attempts = cast(tuple[NodeAttempt, ...], update["node_attempts"])
+    assert [(error.category, error.code) for error in errors] == [
+        (AgentErrorCategory.PROVIDER_SERVICE, "openai_service")
+    ]
+    assert attempts[0].attempts == 3

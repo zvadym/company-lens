@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from company_lens.agent.events import AgentExecutionEvent
-from company_lens.agent.schemas import AgentState, ExecutionPolicy
+from company_lens.agent.schemas import AgentErrorCategory, AgentState, ExecutionPolicy
 from company_lens.evals.golden import GoldenDataset, GoldenDatasetCase
 from company_lens.evals.models import (
     CaseObservation,
@@ -129,6 +129,7 @@ def _run_case(
             first_event_ms = _elapsed_ms(started)
 
     try:
+        provider_failure = False
         with collect_model_usage() as model_usage:
             for turn in user_turns:
                 state = agent.run(
@@ -137,6 +138,9 @@ def _run_case(
                     policy=policy,
                     observer=observe,
                 )
+                if _has_provider_execution_failure(state):
+                    provider_failure = True
+                    break
     except Exception:
         return infrastructure_case_observation(
             case,
@@ -144,16 +148,43 @@ def _run_case(
         )
     if state is None:
         return infrastructure_case_observation(case, failure_code="agent_state_unavailable")
+    operational = _operational_metrics(
+        state,
+        policy=policy,
+        total_latency_ms=_elapsed_ms(started),
+        time_to_first_event_ms=first_event_ms,
+        model_usage=tuple(model_usage),
+    )
+    if provider_failure:
+        return infrastructure_case_observation(
+            case,
+            failure_code="provider_execution_failed",
+            operational=operational,
+        )
     return case_observation_from_state(
         case,
         state,
-        operational=_operational_metrics(
-            state,
-            policy=policy,
-            total_latency_ms=_elapsed_ms(started),
-            time_to_first_event_ms=first_event_ms,
-            model_usage=tuple(model_usage),
-        ),
+        operational=operational,
+    )
+
+
+_PROVIDER_INFRASTRUCTURE_CATEGORIES = frozenset(
+    {
+        AgentErrorCategory.PROVIDER_TIMEOUT,
+        AgentErrorCategory.PROVIDER_RATE_LIMIT,
+        AgentErrorCategory.PROVIDER_CONNECTION,
+        AgentErrorCategory.PROVIDER_AUTH,
+        AgentErrorCategory.PROVIDER_SERVICE,
+        AgentErrorCategory.PROVIDER_RESPONSE,
+    }
+)
+
+
+def _has_provider_execution_failure(state: AgentState) -> bool:
+    return any(
+        error.category in _PROVIDER_INFRASTRUCTURE_CATEGORIES
+        or (error.category is AgentErrorCategory.INTERNAL and error.code.startswith("openai_"))
+        for error in state.get("errors", ())
     )
 
 
