@@ -8,6 +8,11 @@ from company_lens.evals.checks import evaluate_dataset
 from company_lens.evals.gates import EvaluationGate
 from company_lens.evals.golden import GoldenDataset, GoldenDatasetCase
 from company_lens.evals.langfuse_mapping import item_uuid, score_uuid
+from company_lens.evals.langfuse_run_items import (
+    DatasetRunItemReconciliationError,
+    reconcile_dataset_run_items,
+    resolve_dataset_run_url,
+)
 from company_lens.evals.langfuse_scores import ReconciledScoreConfigs
 from company_lens.evals.manifest import DatasetSnapshot
 from company_lens.evals.models import (
@@ -80,6 +85,25 @@ def run_dataset_experiment(
         raise LangfuseExperimentError("dataset_run_link_missing")
 
     item_results = list(_value(result, "item_results") or ())
+    client.flush()
+    try:
+        reconcile_dataset_run_items(
+            client,
+            item_results,
+            run_name=run_name,
+            run_id=run_id,
+            snapshot=snapshot,
+            execution_id=execution_id,
+            manifest_fingerprint=manifest_fingerprint,
+        )
+    except DatasetRunItemReconciliationError as exc:
+        raise LangfuseExperimentError(str(exc)) from exc
+    run_url = resolve_dataset_run_url(
+        client,
+        _value(result, "dataset_run_url"),
+        snapshot=snapshot,
+        run_id=run_id,
+    )
     by_item_id = {_result_item_id(item): item for item in item_results}
     records: list[CaseEvaluationRecord] = []
     observations: list[CaseObservation] = []
@@ -139,7 +163,7 @@ def run_dataset_experiment(
             selected_case_ids=tuple(case.id for case in cases),
             case_results=tuple(records),
             langfuse_dataset_run_id=run_id,
-            langfuse_run_url=_optional_str(_value(result, "dataset_run_url")),
+            langfuse_run_url=run_url,
         )
 
     observed = ObservedGoldenResults(
@@ -182,7 +206,7 @@ def run_dataset_experiment(
             name: float(value) for name, value in aggregate_scores.items() if name != "gate_status"
         },
         langfuse_dataset_run_id=run_id,
-        langfuse_run_url=_optional_str(_value(result, "dataset_run_url")),
+        langfuse_run_url=run_url,
     )
 
 
@@ -324,10 +348,6 @@ def _result_item_id(result: Any) -> str:
 
 def _items(dataset_client: Any) -> list[Any]:
     return list(_value(dataset_client, "items") or ())
-
-
-def _optional_str(value: Any) -> str | None:
-    return str(value) if value else None
 
 
 def _ratio(numerator: int, denominator: int) -> float:

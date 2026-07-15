@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from company_lens.evals.golden import GoldenDatasetCase, load_golden_dataset
-from company_lens.evals.langfuse_experiment import run_dataset_experiment
+from company_lens.evals.langfuse_experiment import (
+    LangfuseExperimentError,
+    run_dataset_experiment,
+)
+from company_lens.evals.langfuse_run_items import resolve_dataset_run_url
 from company_lens.evals.langfuse_sync import sync_dataset
 from company_lens.evals.models import CaseObservation, CitationObservation
 from company_lens.evals.score_contract import load_score_contract
@@ -46,7 +52,63 @@ def test_experiment_publishes_deterministic_item_and_trusted_run_scores() -> Non
     assert run.case_results[0].scores["case_pass"] is True
     assert run.case_results[0].scores["citation_valid"] is True
     assert all(score["config_id"] for score in client.scores.values())
-    assert client.counters.flushes == 1
+    assert client.counters.run_item_writes == 1
+    assert len(client.dataset_run_items) == 1
+    assert client.counters.flushes == 2
+
+
+def test_experiment_fails_when_dataset_run_item_cannot_be_reconciled() -> None:
+    client = FakeLangfuse()
+    dataset = load_golden_dataset(CORE)
+    contract = load_score_contract(SCORES)
+    synced = sync_dataset(
+        client,
+        dataset,
+        contract,
+        expected_project_id="project-testing",
+    )
+    client.failures["create_dataset_run_item"] = RuntimeError("link failed")
+
+    with pytest.raises(
+        LangfuseExperimentError,
+        match="dataset_run_item_reconciliation_failed",
+    ):
+        run_dataset_experiment(
+            client,
+            client.get_dataset(dataset.name, version=synced.snapshot.version_timestamp),
+            dataset,
+            dataset.cases[:1],
+            snapshot=synced.snapshot,
+            execution_id="33333333-3333-3333-3333-333333333333",
+            commit_sha="abcdef1",
+            manifest_fingerprint="c" * 64,
+            score_contract=contract,
+            score_bindings=synced.score_configs,
+            execute_case=_passing_observation,
+        )
+
+
+def test_dataset_run_url_falls_back_to_the_verified_snapshot_identity() -> None:
+    client = FakeLangfuse()
+    client._base_url = "https://langfuse.test/"
+    dataset = load_golden_dataset(CORE)
+    contract = load_score_contract(SCORES)
+    synced = sync_dataset(
+        client,
+        dataset,
+        contract,
+        expected_project_id="project-testing",
+    )
+
+    assert resolve_dataset_run_url(
+        client,
+        None,
+        snapshot=synced.snapshot,
+        run_id="run-1",
+    ) == (
+        "https://langfuse.test/project/project-testing"
+        f"/datasets/{synced.snapshot.langfuse_dataset_id}/runs/run-1"
+    )
 
 
 def test_infrastructure_observation_suppresses_aggregates_and_marks_run_not_evaluated() -> None:

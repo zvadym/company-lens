@@ -14,6 +14,7 @@ class MutationCounters:
     score_config_writes: int = 0
     score_writes: int = 0
     experiment_runs: int = 0
+    run_item_writes: int = 0
     flushes: int = 0
 
 
@@ -62,6 +63,13 @@ class FakeExperimentResult:
     dataset_run_url: str | None = None
 
 
+@dataclass
+class FakeDatasetRunItem:
+    dataset_run_id: str
+    dataset_item_id: str
+    trace_id: str
+
+
 class FakeProjectsApi:
     def __init__(self, owner: FakeLangfuse) -> None:
         self._owner = owner
@@ -72,9 +80,35 @@ class FakeProjectsApi:
         return {"id": self._owner.project_id, "name": self._owner.project_name}
 
 
+class FakeDatasetRunItemsApi:
+    def __init__(self, owner: FakeLangfuse) -> None:
+        self._owner = owner
+
+    def create(
+        self,
+        *,
+        run_name: str,
+        dataset_item_id: str,
+        trace_id: str,
+        **_: Any,
+    ) -> FakeDatasetRunItem:
+        self._owner.maybe_fail("create_dataset_run_item")
+        self._owner.counters.run_item_writes += 1
+        run = next(
+            (item for item in self._owner.dataset_runs.values() if item.run_name == run_name),
+            None,
+        )
+        if run is None:
+            raise ValueError("dataset run is missing")
+        linked = FakeDatasetRunItem(run.dataset_run_id, dataset_item_id, trace_id)
+        self._owner.dataset_run_items[(run_name, dataset_item_id)] = linked
+        return linked
+
+
 class FakeApi:
     def __init__(self, owner: FakeLangfuse) -> None:
         self.projects = FakeProjectsApi(owner)
+        self.dataset_run_items = FakeDatasetRunItemsApi(owner)
 
 
 class FakeDatasetClient:
@@ -132,6 +166,7 @@ class FakeLangfuse:
         self.datasets: dict[str, FakeDataset] = {}
         self.score_configs: dict[str, FakeScoreConfig] = {}
         self.dataset_runs: dict[str, FakeExperimentResult] = {}
+        self.dataset_run_items: dict[tuple[str, str], FakeDatasetRunItem] = {}
         self.scores: dict[str, dict[str, Any]] = {}
         self.failures: dict[str, Exception] = {}
         self._clock = datetime(2026, 1, 1, tzinfo=UTC)
