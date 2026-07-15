@@ -197,3 +197,56 @@ def test_repair_exhaustion_uses_validated_extractive_document_fallback() -> None
     assert "Cloudflare identified competition" in result["final_answer"]
     assert "[document:cloudflare-risk]" in result["final_answer"]
     assert result["errors"] == ()
+
+
+def test_document_fallback_cites_each_extractive_claim() -> None:
+    class MultiSentenceDocumentTools(FakeResearchTools):
+        def retrieve_documents(
+            self,
+            request: AdaptiveRetrievalRequest,
+        ) -> AdaptiveRetrievalResponse:
+            response = super().retrieve_documents(request)
+            context = response.context[0].model_copy(
+                update={
+                    "content": (
+                        "Cloudflare identified competition as a material business risk. "
+                        "Cloudflare also identified rapid technological change as a risk."
+                    ),
+                    "token_count": 18,
+                }
+            )
+            return response.model_copy(update={"context": (context,)})
+
+    analysis = QuestionAnalysis(
+        normalized_question="What risks did Cloudflare report?",
+        route=ResearchRoute.RAG_ONLY,
+        required_capabilities=(AgentCapability.DOCUMENTS,),
+    )
+    model = FakeModelProvider(
+        analysis=analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.RAG_ONLY,
+            branches=(
+                DocumentRetrievalBranch(
+                    branch_id="documents",
+                    request=AdaptiveRetrievalRequest(query="Cloudflare risks"),
+                ),
+            ),
+        ),
+        texts=(
+            "Cloudflare revenue was 999 USD [document:cloudflare-risk].",
+            "Cloudflare revenue was 999 USD [document:cloudflare-risk].",
+        ),
+    )
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, MultiSentenceDocumentTools())).run(
+        "What risks did Cloudflare report?",
+        session_id="session-multi-sentence-document-fallback",
+        policy=ExecutionPolicy(max_repair_attempts=1),
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["answer_validation"].valid is True
+    material_claims = tuple(claim for claim in result["claims"] if claim.material)
+    assert len(material_claims) == 2
+    assert all(claim.evidence_ids == ("document:cloudflare-risk",) for claim in material_claims)
