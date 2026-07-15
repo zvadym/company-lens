@@ -98,6 +98,41 @@ class FrozenModel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
+class ModelQuestionAnalysis(FrozenModel):
+    """Permissive model boundary before domain invariant normalization."""
+
+    normalized_question: str = Field(min_length=1)
+    route: ResearchRoute
+    required_capabilities: tuple[AgentCapability, ...] = ()
+    chart_requested: bool = False
+    is_follow_up: bool = False
+    reason_codes: tuple[str, ...] = ()
+
+    @field_validator("normalized_question")
+    @classmethod
+    def normalize_question(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("normalized_question cannot be blank.")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_analysis(self) -> ModelQuestionAnalysis:
+        if len(self.required_capabilities) != len(set(self.required_capabilities)):
+            raise ValueError("required_capabilities must be unique.")
+        if len(self.reason_codes) != len(set(self.reason_codes)):
+            raise ValueError("reason_codes must be unique.")
+        if any(not _is_reason_code(value) for value in self.reason_codes):
+            raise ValueError("reason_codes must use lowercase snake_case identifiers.")
+        if (
+            self.route is not ResearchRoute.UNSUPPORTED
+            and self.chart_requested
+            and AgentCapability.CHART not in self.required_capabilities
+        ):
+            raise ValueError("chart_requested requires the chart capability.")
+        return self
+
+
 class QuestionAnalysis(FrozenModel):
     normalized_question: str = Field(min_length=1)
     route: ResearchRoute

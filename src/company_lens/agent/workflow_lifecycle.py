@@ -59,7 +59,7 @@ def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -
     output, attempts, error = _generate_structured_with_retries(
         runtime.context.model_provider,
         messages,
-        QuestionAnalysis,
+        ModelQuestionAnalysis,
         purpose=ModelPurpose.PARSE,
         max_retries=state["policy"].max_retries_per_node,
         node="parse_question",
@@ -88,8 +88,27 @@ def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -
         if update["status"] is AgentRunStatus.ABSTAINED:
             update["draft_answer"] = _parse_failure_answer(state, error)
     elif output is not None:
-        update["analysis"] = output
+        update["analysis"] = _domain_question_analysis(output)
     return update
 
 
-__all__ = ("_start_turn", "_parse_question")
+def _domain_question_analysis(output: ModelQuestionAnalysis) -> QuestionAnalysis:
+    capabilities = output.required_capabilities
+    chart_requested = output.chart_requested
+    reason_codes = output.reason_codes
+    if output.route is ResearchRoute.UNSUPPORTED:
+        if capabilities or chart_requested:
+            reason_codes = tuple(dict.fromkeys((*reason_codes, "unsupported_analysis_normalized")))
+        capabilities = ()
+        chart_requested = False
+    return QuestionAnalysis(
+        normalized_question=output.normalized_question,
+        route=output.route,
+        required_capabilities=capabilities,
+        chart_requested=chart_requested,
+        is_follow_up=output.is_follow_up,
+        reason_codes=reason_codes,
+    )
+
+
+__all__ = ("_start_turn", "_parse_question", "_domain_question_analysis")

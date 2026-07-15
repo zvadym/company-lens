@@ -24,7 +24,7 @@ from company_lens.agent.persistence import (
 from company_lens.agent.schemas import (
     AgentRunStatus,
     ModelExecutionPlan,
-    QuestionAnalysis,
+    ModelQuestionAnalysis,
     ResearchRoute,
 )
 from company_lens.agent.workflow import ResearchAgentRuntime
@@ -55,12 +55,12 @@ class UnsupportedModel:
         purpose: ModelPurpose,
     ) -> StructuredModelResult[OutputT]:
         output: BaseModel = (
-            QuestionAnalysis(
+            ModelQuestionAnalysis(
                 normalized_question="Unsupported request",
                 route=ResearchRoute.UNSUPPORTED,
                 reason_codes=("outside_research_scope",),
             )
-            if output_type is QuestionAnalysis
+            if output_type is ModelQuestionAnalysis
             else ModelExecutionPlan(route=ResearchRoute.UNSUPPORTED)
         )
         return StructuredModelResult[OutputT](

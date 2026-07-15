@@ -226,7 +226,7 @@ after this focused gate passes.
 - [X] T071 [US4] Add privacy-safe preparation-requirement details to workflow trajectory and telemetry, with regression coverage in the affected workflow tests
 - [X] T072 [US4] Run the focused remediation tests and the full local quality gate from `specs/003-langfuse-evaluation-foundation/quickstart.md`
 - [X] T073 [US4] Run `graphify update .` and inspect the generated impact for the modified ingestion and workflow modules
-- [ ] T074 [US4] Run the four-case follow-up live workflow, inspect Langfuse traces and the canonical PR comment, and require every deterministic metric and operational budget to pass
+- [X] T074 [US4] Run the four-case follow-up live workflow, inspect Langfuse traces and the canonical PR comment, and require every deterministic metric and operational budget to pass
 - [ ] T075 [US4] Run the full 18-case live workflow only after T074 passes and record final evidence in `specs/003-langfuse-evaluation-foundation/quickstart.md`
 
 ---

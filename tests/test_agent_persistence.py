@@ -36,6 +36,7 @@ from company_lens.agent.schemas import (
     CompanyMentionExtraction,
     ModelExecutionBranch,
     ModelExecutionPlan,
+    ModelQuestionAnalysis,
     QuestionAnalysis,
     ResearchRoute,
     SessionMemory,
@@ -90,8 +91,8 @@ class QueueModelProvider:
         purpose: ModelPurpose,
     ) -> StructuredModelResult[OutputT]:
         output: BaseModel
-        if output_type is QuestionAnalysis:
-            output = self.analyses.pop(0)
+        if output_type is ModelQuestionAnalysis:
+            output = ModelQuestionAnalysis.model_validate(self.analyses.pop(0).model_dump())
         elif output_type is CompanyMentionExtraction:
             output = CompanyMentionExtraction()
         elif output_type is ModelExecutionPlan:

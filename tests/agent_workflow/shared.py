@@ -46,6 +46,7 @@ from company_lens.agent.schemas import (
     DocumentRetrievalBranch,
     ModelExecutionBranch,
     ModelExecutionPlan,
+    ModelQuestionAnalysis,
     ResearchFrame,
     SessionArtifactContext,
     SessionMemory,

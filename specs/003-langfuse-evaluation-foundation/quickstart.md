@@ -249,3 +249,18 @@ Then run the manual workflow with `dataset_scope=follow_up`, `max_cases=100`, an
 Inspect the linked Langfuse run and require all four cases to pass company, metric, operation,
 follow-up safety, citation, and operational-budget checks without changing gate thresholds. Run
 `dataset_scope=all` only after this targeted run passes.
+
+Targeted follow-up validation completed on 2026-07-15 using commit
+`4ee1211f32009da50f02d86013e7b138bf968d0a`, PR `#68`, and `dataset_scope=follow_up`:
+
+- GitHub workflow run `29397528843` completed successfully with execution
+  `f1753314-3e06-46f1-8959-ff16c009006c` and `gate_status=passed`;
+- the Langfuse dataset run `3caefcfe-174f-4c2e-a080-d0c3e1f57d59` recorded all four selected
+  follow-up cases and their item-level traces and scores;
+- all aggregate deterministic metrics were `1.0`, including case, company, metric, operation,
+  route, required/prohibited tool, follow-up safety, citation validity, and operational budget;
+- the add-company trace resolved `MDB` from the current question and retained `NET` and `DDOG`
+  from follow-up context while preserving `revenue` and `quarter_over_quarter_growth`;
+- facts-only preparation spans recorded `requires_financial_facts=true` and
+  `requires_documents=false`, with no embedding observations;
+- the canonical PR comment and immutable artifact bundle were published successfully.

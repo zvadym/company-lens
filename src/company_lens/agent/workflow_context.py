@@ -58,6 +58,7 @@ from company_lens.agent.schemas import (
     FinancialFactsBranch,
     MacroBranchResult,
     MacroSeriesBranch,
+    ModelQuestionAnalysis,
     ModelExecutionBranch,
     ModelExecutionPlan,
     NodeAttempt,

@@ -32,8 +32,8 @@ class FakeModelProvider:
     ) -> StructuredModelResult[OutputT]:
         self.purposes.append(purpose)
         self.model_calls.append((purpose, tuple(messages)))
-        if output_type is QuestionAnalysis:
-            output: BaseModel = self.analysis
+        if output_type is ModelQuestionAnalysis:
+            output: BaseModel = ModelQuestionAnalysis.model_validate(self.analysis.model_dump())
         elif output_type is CompanyMentionExtraction:
             output = self.company_extraction
         elif output_type is ModelExecutionPlan:
