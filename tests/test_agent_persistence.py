@@ -36,6 +36,7 @@ from company_lens.agent.schemas import (
     CompanyMentionExtraction,
     ModelExecutionBranch,
     ModelExecutionPlan,
+    ModelQuestionAnalysis,
     QuestionAnalysis,
     ResearchRoute,
     SessionMemory,
@@ -58,6 +59,7 @@ from company_lens.financials.schemas import (
     FinancialFactQueryResult,
 )
 from company_lens.ingestion.on_demand import CompanyDataPreparationResult
+from company_lens.ingestion.preparation_requirements import CompanyDataPreparationRequirements
 from company_lens.macro.schemas import FredSeriesQuery, FredSeriesResult
 from company_lens.retrieval.adaptive_schemas import (
     AdaptiveRetrievalRequest,
@@ -89,8 +91,8 @@ class QueueModelProvider:
         purpose: ModelPurpose,
     ) -> StructuredModelResult[OutputT]:
         output: BaseModel
-        if output_type is QuestionAnalysis:
-            output = self.analyses.pop(0)
+        if output_type is ModelQuestionAnalysis:
+            output = ModelQuestionAnalysis.model_validate(self.analyses.pop(0).model_dump())
         elif output_type is CompanyMentionExtraction:
             output = CompanyMentionExtraction()
         elif output_type is ModelExecutionPlan:
@@ -141,6 +143,7 @@ class CountingTools:
         company_ids: tuple[str, ...],
         index_name: str,
         index_version: str,
+        requirements: CompanyDataPreparationRequirements,
     ) -> CompanyDataPreparationResult:
         self.calls["prepare"] += 1
         return CompanyDataPreparationResult(

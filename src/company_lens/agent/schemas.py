@@ -8,6 +8,13 @@ from typing import Annotated, Literal, NotRequired, Required, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from company_lens.agent.calculation_intents import (
+    CalculationIntent,
+    ModelCalculationIntent,
+)
+from company_lens.agent.calculation_intents import (
+    CalculationOperation as CalculationOperation,
+)
 from company_lens.analytics.schemas import CalculationResult, ChartSpecification
 from company_lens.evidence.schemas import (
     AnswerValidation as AnswerValidation,
@@ -98,12 +105,51 @@ class FrozenModel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
+class ModelQuestionAnalysis(FrozenModel):
+    """Permissive model boundary before domain invariant normalization."""
+
+    normalized_question: str = Field(min_length=1)
+    route: ResearchRoute
+    required_capabilities: tuple[AgentCapability, ...] = ()
+    chart_requested: bool = False
+    is_follow_up: bool = False
+    calculation_intents: tuple[ModelCalculationIntent, ...] = ()
+    inherit_previous_calculation_intents: bool = False
+    reason_codes: tuple[str, ...] = ()
+
+    @field_validator("normalized_question")
+    @classmethod
+    def normalize_question(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("normalized_question cannot be blank.")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_analysis(self) -> ModelQuestionAnalysis:
+        if len(self.required_capabilities) != len(set(self.required_capabilities)):
+            raise ValueError("required_capabilities must be unique.")
+        if len(self.reason_codes) != len(set(self.reason_codes)):
+            raise ValueError("reason_codes must be unique.")
+        if any(not _is_reason_code(value) for value in self.reason_codes):
+            raise ValueError("reason_codes must use lowercase snake_case identifiers.")
+        if (
+            self.route is not ResearchRoute.UNSUPPORTED
+            and self.chart_requested
+            and AgentCapability.CHART not in self.required_capabilities
+        ):
+            raise ValueError("chart_requested requires the chart capability.")
+        return self
+
+
 class QuestionAnalysis(FrozenModel):
     normalized_question: str = Field(min_length=1)
     route: ResearchRoute
     required_capabilities: tuple[AgentCapability, ...] = ()
     chart_requested: bool = False
     is_follow_up: bool = False
+    calculation_intents: tuple[CalculationIntent, ...] = ()
+    inherit_previous_calculation_intents: bool = False
     reason_codes: tuple[str, ...] = ()
 
     @field_validator("normalized_question")
@@ -228,19 +274,6 @@ class FinancialFactsBranch(BranchBase):
 class MacroSeriesBranch(BranchBase):
     kind: Literal["query_macro_series"] = "query_macro_series"
     request: FredSeriesQuery
-
-
-CalculationOperation = Literal[
-    "quarter_over_quarter_growth",
-    "year_over_year_growth",
-    "cagr",
-    "margin",
-    "absolute_change",
-    "percentage_change",
-    "rolling_average",
-    "normalised_index",
-    "correlation",
-]
 
 
 class CalculationBranch(BranchBase):
@@ -566,6 +599,7 @@ class AgentState(TypedDict, total=False):
     messages: Annotated[tuple[SessionMessage, ...], append_tuple]
     session_memory: NotRequired[SessionMemory]
     analysis: NotRequired[QuestionAnalysis | None]
+    current_resolved_query: NotRequired[ResolvedQuery | None]
     resolved_query: NotRequired[ResolvedQuery | None]
     research_frame: NotRequired[ResearchFrame | None]
     execution_plan: NotRequired[ExecutionPlan | None]

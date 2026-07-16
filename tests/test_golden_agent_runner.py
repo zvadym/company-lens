@@ -34,6 +34,7 @@ from company_lens.config import Settings
 from company_lens.evals.agent_runner import (
     observed_result_from_state,
     run_golden_agent_dataset,
+    run_golden_agent_observations,
 )
 from company_lens.evals.golden import load_golden_dataset
 from company_lens.financials.schemas import FinancialFactQuery
@@ -126,6 +127,27 @@ def test_golden_agent_runner_executes_follow_up_turns_in_one_session() -> None:
         "query_financial_facts",
         "calculate_metrics",
     ]
+
+
+def test_golden_agent_runner_captures_sanitized_infrastructure_outcome() -> None:
+    dataset = load_golden_dataset(GOLDEN_FOLLOW_UP_DATASET)
+
+    class FailingAgent(FakeGoldenAgent):
+        def run(self, *args: Any, **kwargs: Any) -> AgentState:
+            raise RuntimeError("secret provider payload")
+
+    observations = run_golden_agent_observations(
+        dataset,
+        FailingAgent(),
+        policy=ExecutionPolicy(),
+        case_ids=("followup_replace_company_preserve_task_001",),
+        run_token="fixed",
+    )
+
+    assert len(observations) == 1
+    assert observations[0].outcome == "infrastructure_error"
+    assert observations[0].failure_code == "agent_execution_failed"
+    assert "secret provider payload" not in observations[0].model_dump_json()
 
 
 def test_run_golden_agent_cli_writes_observed_results(

@@ -86,6 +86,53 @@ company-lens-sync-prompts --dry-run
 company-lens-sync-prompts --label production
 ```
 
+### Evaluation operations
+
+Evaluation writes require `COMPANY_LENS_LANGFUSE_PROJECT_ID` in addition to project-scoped Langfuse
+credentials. The public project lookup must return that exact ID before dataset writes or agent
+calls. Preview repository mapping without remote access:
+
+```bash
+company-lens sync-evaluation-datasets --dry-run --pretty
+```
+
+Run the reviewed foundation and preserve its recovery journal:
+
+```bash
+company-lens run-evaluation \
+  --output-dir artifacts/evaluations/manual \
+  --max-concurrency 1 \
+  --pretty
+```
+
+Exit `0` is a trusted pass, `1` is a trusted quality failure, and `2` means infrastructure prevented
+a trustworthy verdict. Inspect one Langfuse dataset run per selected dataset, its item traces,
+applicable deterministic/citation scores, aggregate scores, and the shared execution ID/manifest
+fingerprint. Partial runs publish only `gate_status=not_evaluated`, never trusted aggregates.
+
+Replay an immutable manifest without dataset/item/archive/score-config mutation:
+
+```bash
+company-lens run-evaluation \
+  --manifest artifacts/evaluations/manual/evaluation-execution.json \
+  --output-dir artifacts/evaluations/manual-replay
+```
+
+After interruption, reconstruct artifacts without provider or Langfuse calls:
+
+```bash
+company-lens recover-evaluation \
+  --journal artifacts/evaluations/manual/evaluation-journal.json \
+  --output-dir artifacts/evaluations/manual
+```
+
+The Actions `Full LLM Evaluation` workflow exposes the manual **Run workflow** button. Its optional
+PR number creates or updates one canonical bot comment after exact head-SHA validation. Evaluation
+JSON is immutable during reporting; GitHub failures update only reporting state in the journal.
+Artifacts and comments contain bounded IDs, status, score, and URL fields only. Do not add raw
+questions, prompts, answers, invalid drafts, evidence passages, provider payloads, exception text,
+credentials, database details, or stack traces.
+
 ## Reliability policy
 
 External clients use explicit request timeouts, bounded retries, exponential backoff with jitter,

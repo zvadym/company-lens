@@ -9,9 +9,11 @@ cases:
   # The current turn changes output form only, so the previous task context is safe to reuse.
   - id: followup_safe_inheritance_chart_001
     category: follow_up
+    citation_mode: required
+    citation_scenario: valid
     conversation:
       - role: user
-        content: Show Cloudflare revenue growth over the last four quarters.
+        content: Show Cloudflare quarter-over-quarter revenue growth over the last four quarters.
       - role: user
         content: Make it a chart.
     expected:
@@ -22,10 +24,12 @@ cases:
           source: follow_up_context
       metrics:
         - revenue
+      operation: quarter_over_quarter_growth
       follow_up:
         inherit:
           - companies
           - metrics
+          - operation
         add:
           - chart
         must_not_resolve_terms_as_company:
@@ -40,9 +44,11 @@ cases:
   # The current turn supplies a new company target while keeping the prior task shape.
   - id: followup_replace_company_preserve_task_001
     category: follow_up
+    citation_mode: required
+    citation_scenario: semantic_mismatch_attempt
     conversation:
       - role: user
-        content: Show Cloudflare revenue growth over the last four quarters.
+        content: Show Cloudflare quarter-over-quarter revenue growth over the last four quarters.
       - role: user
         content: Do the same for Datadog.
     expected:
@@ -53,9 +59,11 @@ cases:
           source: current_question
       metrics:
         - revenue
+      operation: quarter_over_quarter_growth
       follow_up:
         inherit:
           - metrics
+          - operation
         replace_companies:
           from:
             - Cloudflare
@@ -73,9 +81,11 @@ cases:
   # "Add" should extend the previous comparison instead of replacing it with one company.
   - id: followup_add_company_to_comparison_001
     category: follow_up
+    citation_mode: required
+    citation_scenario: valid
     conversation:
       - role: user
-        content: Compare Cloudflare and Datadog revenue growth over the last eight quarters.
+        content: Compare Cloudflare and Datadog quarter-over-quarter revenue growth over the last eight quarters.
       - role: user
         content: Add MongoDB too.
     expected:
@@ -94,10 +104,12 @@ cases:
           source: current_question
       metrics:
         - revenue
+      operation: quarter_over_quarter_growth
       follow_up:
         inherit:
           - companies
           - metrics
+          - operation
         add_companies:
           - MongoDB
       route:
@@ -109,9 +121,10 @@ cases:
   # A new unresolved company mention must block prior-company reuse.
   - id: followup_unresolved_company_no_previous_reuse_001
     category: follow_up
+    citation_mode: not_applicable
     conversation:
       - role: user
-        content: Show Netflix revenue growth.
+        content: Show Netflix year-over-year revenue growth.
       - role: user
         content: Do the same for Globex.
     expected:
@@ -121,9 +134,11 @@ cases:
           source: current_question
       metrics:
         - revenue
+      operation: year_over_year_growth
       follow_up:
         inherit:
           - metrics
+          - operation
         prohibited_companies:
           - Netflix
         must_not_reuse_previous_company: true

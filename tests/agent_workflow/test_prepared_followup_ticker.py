@@ -54,10 +54,12 @@ def test_prepared_follow_up_company_resolves_company_id_from_extracted_ticker() 
             company_ids: tuple[str, ...],
             index_name: str,
             index_version: str,
+            requirements: CompanyDataPreparationRequirements,
         ) -> CompanyDataPreparationResult:
             self.calls["prepare"] += 1
             assert tickers == ("ZM",)
             assert company_ids == ()
+            assert requirements == CompanyDataPreparationRequirements(financial_facts=True)
             return CompanyDataPreparationResult(
                 status="success",
                 requested_tickers=tickers,
@@ -159,3 +161,9 @@ def test_prepared_follow_up_company_resolves_company_id_from_extracted_ticker() 
     assert result["resolved_query"].company_ids == (ZOOM_ID,)
     assert tools.calls["prepare"] == 1
     assert tools.calls["financial"] == 2
+    assert model.purposes.count(ModelPurpose.ENTITY_EXTRACTION) == 1
+    preparation_event = next(
+        event for event in result["trajectory"] if event.node == "prepare_company_data"
+    )
+    assert preparation_event.details["requires_financial_facts"] is True
+    assert preparation_event.details["requires_documents"] is False

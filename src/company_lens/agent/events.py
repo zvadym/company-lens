@@ -493,6 +493,7 @@ def _started_summary(node: str) -> str:
         "resolve_entities": "Resolving companies, metrics, and reporting periods.",
         "prepare_company_data": "Downloading report...",
         "plan_request": "Building a bounded execution plan.",
+        "reconcile_operations": "Validating calculation operations against typed intent.",
         "hydrate_cached_results": "Checking reusable session results.",
         "retrieve_documents": "Retrieving documentary evidence.",
         "query_financial_facts": "Querying structured financial facts.",

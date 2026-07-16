@@ -20,11 +20,14 @@ from opentelemetry.trace import Status, StatusCode
 
 from company_lens.config import Settings
 from company_lens.observability.context import ObservabilityContext, current_context
+from company_lens.observability.langfuse_client import (
+    configure_langfuse_client,
+    shutdown_langfuse_client,
+)
 
 logger = logging.getLogger(__name__)
 
 _configured = False
-_langfuse: Any | None = None
 _operation_count: Counter | None = None
 _operation_duration: Histogram | None = None
 _token_count: Counter | None = None
@@ -80,7 +83,7 @@ _MODEL_USAGE_RECORDS: ContextVar[list[ModelUsageRecord] | None] = ContextVar(
 
 
 def configure_telemetry(settings: Settings) -> None:
-    global _configured, _langfuse
+    global _configured
     if _configured or not settings.telemetry_enabled:
         return
     resource = Resource.create(
@@ -102,20 +105,13 @@ def configure_telemetry(settings: Settings) -> None:
     metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=readers))
     _initialize_instruments()
 
-    langfuse_secret_key = (
-        settings.langfuse_secret_key.get_secret_value() if settings.langfuse_secret_key else None
-    )
-    if settings.langfuse_public_key and langfuse_secret_key:
-        from langfuse import Langfuse
-
-        _langfuse = Langfuse(
-            public_key=settings.langfuse_public_key,
-            secret_key=langfuse_secret_key,
-            base_url=settings.langfuse_base_url,
-            environment=settings.environment,
-            release=settings.service_version,
+    if (
+        configure_langfuse_client(
+            settings,
             should_export_span=_should_export_langfuse_span,
         )
+        is not None
+    ):
         logger.info("Langfuse trace exporter configured", extra={"event": "telemetry.configured"})
     _configured = True
 
@@ -137,8 +133,7 @@ def instrument_sqlalchemy(engine: Any) -> None:
 
 
 def shutdown_telemetry() -> None:
-    if _langfuse is not None:
-        _langfuse.flush()
+    shutdown_langfuse_client()
 
 
 @contextmanager
@@ -425,6 +420,16 @@ def record_cache_access(*, cache: str, hits: int, misses: int) -> None:
     span = trace.get_current_span()
     span.set_attribute("company_lens.cache.hits", hits)
     span.set_attribute("company_lens.cache.misses", misses)
+
+
+def record_company_preparation_requirements(
+    *,
+    financial_facts: bool,
+    documents: bool,
+) -> None:
+    span = trace.get_current_span()
+    span.set_attribute("company_lens.preparation.requires_financial_facts", financial_facts)
+    span.set_attribute("company_lens.preparation.requires_documents", documents)
 
 
 def record_retrieval(*, strategy: str, result_count: int, context_count: int) -> None:

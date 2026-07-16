@@ -35,9 +35,12 @@ def _deterministic_fallback_answer(
             continue
         if item.evidence_id in used_ids:
             continue
-        sentence = _fallback_sentence(item)
-        if sentence is not None:
+        sentences = _fallback_sentences(item)
+        for sentence in sentences:
             lines.append(f"- {sentence} [{item.evidence_id}]")
+            if len(lines) >= 10:
+                break
+        if sentences:
             used_ids.add(item.evidence_id)
         if len(lines) >= 10:
             break

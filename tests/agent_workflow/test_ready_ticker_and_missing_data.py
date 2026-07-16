@@ -54,6 +54,7 @@ def test_ready_follow_up_ticker_resolves_company_id_from_skipped_prepare() -> No
             company_ids: tuple[str, ...],
             index_name: str,
             index_version: str,
+            requirements: CompanyDataPreparationRequirements,
         ) -> CompanyDataPreparationResult:
             self.calls["prepare"] += 1
             assert tickers == ("ZM",)
@@ -117,7 +118,7 @@ def test_ready_follow_up_ticker_resolves_company_id_from_skipped_prepare() -> No
     assert frame.company_targets[0].source == "current_question"
     assert not frame.inherited_from_previous
     assert tools.calls["prepare"] == 1
-    assert tools.calls["resolve_public_company_mentions"] == 1
+    assert tools.calls["resolve_public_company_mentions"] == 0
 
 
 def test_plan_request_abstains_before_planning_when_follow_up_financial_data_missing() -> None:

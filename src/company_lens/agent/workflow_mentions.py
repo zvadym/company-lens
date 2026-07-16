@@ -32,9 +32,9 @@ def _resolve_extracted_company_mentions(
     runtime: Runtime[ResearchAgentRuntime],
     resolved: ResolvedQuery,
     analysis: QuestionAnalysis | None,
-) -> ResolvedQuery:
+) -> tuple[ResolvedQuery, int, AgentError | None]:
     if not _should_extract_company_mentions(analysis):
-        return resolved
+        return resolved, 0, None
     base_resolved = _resolved_query_without_company_entities(resolved)
     messages = (
         _system_prompt_message(runtime, "agent/extract-company-mentions"),
@@ -48,7 +48,7 @@ def _resolve_extracted_company_mentions(
             ),
         ),
     )
-    extraction, _attempts, error = _generate_structured_with_retries(
+    extraction, attempts, error = _generate_structured_with_retries(
         runtime.context.model_provider,
         messages,
         CompanyMentionExtraction,
@@ -57,18 +57,26 @@ def _resolve_extracted_company_mentions(
         node="resolve_entities",
     )
     if error is not None or extraction is None:
-        return base_resolved
+        return base_resolved, attempts, error
     companies = _explicit_company_mentions_from_extraction(state["question"], extraction.companies)
     if not companies:
-        return base_resolved
+        return base_resolved, attempts, None
     resolved_entities = runtime.context.tools.resolve_public_company_mentions(companies)
     if resolved_entities:
-        return _resolved_query_with_extra_entities(base_resolved, resolved_entities)
+        return (
+            _resolved_query_with_extra_entities(base_resolved, resolved_entities),
+            attempts,
+            None,
+        )
     unresolved_mentions = tuple(
         EntityResolution(kind="public_company", mention=company.mention, status="unresolved")
         for company in companies
     )
-    return _resolved_query_with_extra_entities(base_resolved, unresolved_mentions)
+    return (
+        _resolved_query_with_extra_entities(base_resolved, unresolved_mentions),
+        attempts,
+        None,
+    )
 
 
 def _explicit_company_mentions_from_extraction(

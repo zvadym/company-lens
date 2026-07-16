@@ -4,6 +4,37 @@ from __future__ import annotations
 from .context import *
 
 
+def _resolved_company(
+    query: str,
+    *,
+    company_id: uuid.UUID,
+    mention: str,
+    display_value: str,
+    metrics: tuple[str, ...] = ("revenue",),
+) -> ResolvedQuery:
+    return ResolvedQuery(
+        query=query,
+        entities=(
+            EntityResolution(
+                kind="company",
+                mention=mention,
+                status="resolved",
+                canonical_value=str(company_id),
+                candidates=(
+                    EntityCandidate(
+                        id=company_id,
+                        canonical_value=str(company_id),
+                        display_value=display_value,
+                        match_kind="display_name",
+                    ),
+                ),
+            ),
+        ),
+        company_ids=(company_id,),
+        metrics=metrics,
+    )
+
+
 def test_workflow_prepares_unavailable_public_company_before_planning() -> None:
     class OnDemandTools(FakeResearchTools):
         def resolve_entities(self, query: str) -> ResolvedQuery:
@@ -50,10 +81,12 @@ def test_workflow_prepares_unavailable_public_company_before_planning() -> None:
             company_ids: tuple[str, ...],
             index_name: str,
             index_version: str,
+            requirements: CompanyDataPreparationRequirements,
         ) -> CompanyDataPreparationResult:
             self.calls["prepare"] += 1
             assert tickers == ("NFLX",)
             assert company_ids == ()
+            assert requirements == CompanyDataPreparationRequirements(documents=True)
             return CompanyDataPreparationResult(
                 status="success",
                 requested_tickers=tickers,
@@ -161,3 +194,79 @@ def test_follow_up_with_new_public_company_does_not_inherit_previous_company() -
     ]
     assert merged.entities[0].candidates[0].canonical_value == "GOOG"
     assert merged.metrics == ("revenue",)
+
+
+def test_research_frame_records_mixed_current_and_follow_up_company_sources() -> None:
+    previous = _resolved_company(
+        query="Compare Cloudflare revenue growth",
+        company_id=COMPANY_ID,
+        mention="Cloudflare",
+        display_value="Cloudflare",
+    )
+    current = _resolved_company(
+        query="Add MongoDB too",
+        company_id=APPLE_ID,
+        mention="MongoDB",
+        display_value="MongoDB, Inc.",
+        metrics=(),
+    )
+    analysis = QuestionAnalysis(
+        normalized_question="Compare Cloudflare and MongoDB revenue growth",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS, AgentCapability.CALCULATIONS),
+        is_follow_up=True,
+        reason_codes=("follow_up",),
+    )
+    memory = SessionMemory(last_resolved_query=previous)
+    merged = _merge_follow_up_if_needed(current, analysis, memory)
+
+    frame = _build_research_frame(
+        question=current.query,
+        analysis=analysis,
+        resolved=merged,
+        current_resolved=current,
+        memory=memory,
+    )
+
+    assert frame is not None
+    assert [(target.company_id, target.source) for target in frame.company_targets] == [
+        (APPLE_ID, "current_question"),
+        (COMPANY_ID, "follow_up_context"),
+    ]
+
+
+def test_prepared_ticker_enrichment_retains_other_current_company_entities() -> None:
+    cloudflare = _resolved_company(
+        query="Cloudflare",
+        company_id=COMPANY_ID,
+        mention="Cloudflare",
+        display_value="Cloudflare",
+    )
+    current = cloudflare.model_copy(
+        update={
+            "query": "Compare Cloudflare and MongoDB",
+            "entities": (
+                *cloudflare.entities,
+                public_company_resolution(
+                    mention="MongoDB",
+                    ticker="MDB",
+                    display_name="MongoDB, Inc.",
+                    match_kind="sec_company_extracted",
+                ),
+            ),
+        }
+    )
+    prepared = _resolved_company(
+        query="MDB",
+        company_id=APPLE_ID,
+        mention="mdb",
+        display_value="MongoDB, Inc.",
+    )
+
+    enriched = _merge_prepared_ticker_resolutions(current, (prepared,))
+
+    assert enriched.company_ids == (COMPANY_ID, APPLE_ID)
+    assert [_entity_company_id(entity) for entity in enriched.entities] == [
+        COMPANY_ID,
+        APPLE_ID,
+    ]

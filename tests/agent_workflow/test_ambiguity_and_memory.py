@@ -153,9 +153,11 @@ def test_chart_type_follow_up_does_not_treat_bar_as_company() -> None:
         )
     )
 
-    update = _resolve_entities(state, Runtime(context=ResearchAgentRuntime(model, tools)))
+    runtime = Runtime(context=ResearchAgentRuntime(model, tools))
+    state.update(_resolve_entities(state, runtime))
+    state.update(_prepare_company_data(state, runtime))
 
-    resolved = cast(ResolvedQuery, update["resolved_query"])
+    resolved = cast(ResolvedQuery, state["resolved_query"])
     assert resolved.company_ids == (COMPANY_ID,)
     assert all(entity.mention != "bar" for entity in resolved.entities)
     assert all(

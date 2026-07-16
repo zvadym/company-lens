@@ -10,13 +10,34 @@ def _prepare_company_data(
 ) -> dict[str, object]:
     if state["status"] is not AgentRunStatus.RUNNING:
         return _skipped("prepare_company_data")
-    resolved = state.get("resolved_query")
-    if resolved is None:
+    current = state.get("current_resolved_query") or state.get("resolved_query")
+    if current is None:
         return _skipped("prepare_company_data")
-    tickers = _on_demand_tickers(resolved)
-    company_ids = tuple(str(company_id) for company_id in resolved.company_ids)
-    if not tickers and not company_ids:
-        return _skipped("prepare_company_data")
+    requirements = _company_data_preparation_requirements(state.get("analysis"))
+    record_company_preparation_requirements(
+        financial_facts=requirements.financial_facts,
+        documents=requirements.documents,
+    )
+    tickers = _on_demand_tickers(current)
+    company_ids = tuple(str(company_id) for company_id in current.company_ids)
+    details = {
+        "requires_financial_facts": requirements.financial_facts,
+        "requires_documents": requirements.documents,
+    }
+    if not requirements.any or (not tickers and not company_ids):
+        finalized = _finalize_prepared_company_context(state, runtime, current)
+        return {
+            **finalized,
+            "trajectory": (
+                _event(
+                    "prepare_company_data",
+                    TrajectoryStatus.SKIPPED,
+                    "No external company data preparation was required.",
+                    time.monotonic(),
+                    details=details,
+                ),
+            ),
+        }
 
     started = time.monotonic()
     try:
@@ -25,10 +46,13 @@ def _prepare_company_data(
             company_ids=company_ids,
             index_name=runtime.context.retrieval_index_name,
             index_version=runtime.context.retrieval_index_version,
+            requirements=requirements,
         )
     except ResearchToolError as exc:
         error = exc.error.model_copy(update={"node": "prepare_company_data"})
+        finalized = _finalize_prepared_company_context(state, runtime, current)
         return {
+            **finalized,
             "errors": (error,),
             "node_attempts": (NodeAttempt(node="prepare_company_data", attempts=1),),
             "trajectory": (
@@ -37,50 +61,27 @@ def _prepare_company_data(
                     TrajectoryStatus.COMPLETED,
                     "Company report download was unavailable; continuing with existing data.",
                     started,
+                    details=details,
                 ),
             ),
         }
     resolved_tickers = tuple(dict.fromkeys((*result.prepared_tickers, *result.skipped_tickers)))
-    if resolved_tickers:
-        with suppress(Exception):
-            resolved = _resolve_question_entities(
-                state["question"],
-                state.get("analysis"),
-                runtime.context.tools,
-            )
-            resolved = _resolve_extracted_company_mentions(
-                state,
-                runtime,
-                resolved,
-                state.get("analysis"),
-            )
-            if not resolved.company_ids:
-                resolved = _merge_prepared_ticker_resolutions(
-                    resolved,
-                    _resolve_prepared_tickers(runtime.context.tools, resolved_tickers),
-                )
-            resolved = _merge_follow_up_if_needed(
-                resolved,
-                state.get("analysis"),
-                state.get("session_memory"),
-            )
-    frame = _build_research_frame(
-        question=state["question"],
-        analysis=state.get("analysis"),
-        resolved=resolved,
-        memory=state.get("session_memory"),
+    finalized = _finalize_prepared_company_context(
+        state,
+        runtime,
+        current,
+        resolved_tickers=resolved_tickers,
     )
 
     summary = (
         "Company report data is already available."
         if result.status == "skipped"
-        else "Company report data was downloaded and indexed."
+        else "Required company data was prepared."
         if result.status == "success"
         else "Company report data was partially prepared."
     )
     return {
-        "resolved_query": resolved,
-        "research_frame": frame,
+        **finalized,
         "node_attempts": (NodeAttempt(node="prepare_company_data", attempts=1),),
         "trajectory": (
             _event(
@@ -89,6 +90,7 @@ def _prepare_company_data(
                 summary,
                 started,
                 details={
+                    **details,
                     "requested_tickers": ",".join(result.requested_tickers),
                     "prepared_tickers": ",".join(result.prepared_tickers),
                     "skipped_tickers": ",".join(result.skipped_tickers),
@@ -101,6 +103,49 @@ def _prepare_company_data(
                 },
             ),
         ),
+    }
+
+
+def _company_data_preparation_requirements(
+    analysis: QuestionAnalysis | None,
+) -> CompanyDataPreparationRequirements:
+    capabilities = set(analysis.required_capabilities) if analysis is not None else set()
+    return CompanyDataPreparationRequirements(
+        financial_facts=AgentCapability.FINANCIAL_FACTS in capabilities,
+        documents=AgentCapability.DOCUMENTS in capabilities,
+    )
+
+
+def _finalize_prepared_company_context(
+    state: AgentState,
+    runtime: Runtime[ResearchAgentRuntime],
+    current: ResolvedQuery,
+    *,
+    resolved_tickers: tuple[str, ...] = (),
+) -> dict[str, object]:
+    enriched_current = current
+    if resolved_tickers:
+        with suppress(Exception):
+            enriched_current = _merge_prepared_ticker_resolutions(
+                current,
+                _resolve_prepared_tickers(runtime.context.tools, resolved_tickers),
+            )
+    merged = _merge_follow_up_if_needed(
+        enriched_current,
+        state.get("analysis"),
+        state.get("session_memory"),
+    )
+    frame = _build_research_frame(
+        question=state["question"],
+        analysis=state.get("analysis"),
+        resolved=merged,
+        current_resolved=enriched_current,
+        memory=state.get("session_memory"),
+    )
+    return {
+        "current_resolved_query": enriched_current,
+        "resolved_query": merged,
+        "research_frame": frame,
     }
 
 
@@ -117,6 +162,7 @@ def _merge_prepared_ticker_resolutions(
 ) -> ResolvedQuery:
     company_ids: list[uuid.UUID] = list(resolved.company_ids)
     company_entities: list[EntityResolution] = []
+    locally_resolved_tickers: set[str] = set()
     seen_company_ids = set(company_ids)
     seen_entities = {
         (entity.kind, entity.canonical_value or entity.mention.casefold())
@@ -128,6 +174,8 @@ def _merge_prepared_ticker_resolutions(
             entity.kind == "company" and _entity_company_id(entity) is not None
             for entity in ticker_resolution.entities
         )
+        if ticker_has_resolved_company:
+            locally_resolved_tickers.add(ticker_resolution.query.strip().upper())
         for company_id in ticker_resolution.company_ids:
             if company_id not in seen_company_ids:
                 seen_company_ids.add(company_id)
@@ -153,7 +201,15 @@ def _merge_prepared_ticker_resolutions(
     non_company_entities = tuple(
         entity for entity in resolved.entities if entity.kind not in {"company", "public_company"}
     )
-    merged_company_entities = tuple(company_entities) or original_company_entities
+    retained_original_entities = tuple(
+        entity
+        for entity in original_company_entities
+        if not (
+            entity.kind == "public_company"
+            and _entity_public_ticker(entity) in locally_resolved_tickers
+        )
+    )
+    merged_company_entities = (*retained_original_entities, *company_entities)
     return resolved.model_copy(
         update={
             "entities": (*merged_company_entities, *non_company_entities),
@@ -164,6 +220,8 @@ def _merge_prepared_ticker_resolutions(
 
 __all__ = (
     "_prepare_company_data",
+    "_company_data_preparation_requirements",
+    "_finalize_prepared_company_context",
     "_resolve_prepared_tickers",
     "_merge_prepared_ticker_resolutions",
 )  # noqa: E501

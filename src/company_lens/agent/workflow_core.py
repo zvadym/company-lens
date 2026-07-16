@@ -122,6 +122,10 @@ def build_research_graph(
     )
     builder.add_node("plan_request", _observed_node("plan_request", _plan_request))
     builder.add_node(
+        "reconcile_operations",
+        _observed_node("reconcile_operations", _reconcile_operations),
+    )
+    builder.add_node(
         "hydrate_cached_results",
         _observed_node("hydrate_cached_results", _hydrate_cached_results),
     )
@@ -158,7 +162,8 @@ def build_research_graph(
     )
     builder.add_edge("resolve_entities", "prepare_company_data")
     builder.add_edge("prepare_company_data", "plan_request")
-    builder.add_edge("plan_request", "hydrate_cached_results")
+    builder.add_edge("plan_request", "reconcile_operations")
+    builder.add_edge("reconcile_operations", "hydrate_cached_results")
     builder.add_conditional_edges(
         "hydrate_cached_results",
         _dispatch_source_branches,

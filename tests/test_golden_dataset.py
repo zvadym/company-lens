@@ -26,12 +26,9 @@ def test_follow_up_golden_dataset_loads() -> None:
     assert dataset.name == "company-lens-follow-up-golden"
     assert dataset.version == 1
     assert len(dataset.cases) == 4
-    assert golden_dataset_summary(dataset) == {
-        "name": "company-lens-follow-up-golden",
-        "version": 1,
-        "cases": 4,
-        "categories": {"follow_up": 4},
-    }
+    summary = golden_dataset_summary(dataset)
+    assert summary["categories"] == {"follow_up": 4}
+    assert summary["citation_modes"] == {"required": 3, "not_applicable": 1}
     assert all(case.category == "follow_up" for case in dataset.cases)
     assert all(
         len([turn for turn in case.conversation if turn.role == "user"]) >= 2
@@ -39,26 +36,28 @@ def test_follow_up_golden_dataset_loads() -> None:
     )
 
 
-def test_core_golden_dataset_covers_initial_single_turn_categories() -> None:
-    # Category coverage is metadata for review; semantic scoring belongs in a future evaluator.
+def test_foundation_golden_datasets_have_balanced_category_and_citation_coverage() -> None:
     dataset = load_golden_dataset(GOLDEN_CORE_DATASET)
+    follow_up = load_golden_dataset(GOLDEN_FOLLOW_UP_DATASET)
 
     assert dataset.name == "company-lens-core-golden"
-    assert len(dataset.cases) == 7
-    assert golden_dataset_summary(dataset) == {
-        "name": "company-lens-core-golden",
-        "version": 1,
-        "cases": 7,
-        "categories": {
-            "structured_financial": 1,
-            "document_retrieval": 1,
-            "hybrid": 1,
-            "ambiguous_entity": 1,
-            "missing_data_or_abstention": 1,
-            "adversarial_or_prompt_injection": 1,
-            "cross_document_comparison": 1,
-        },
+    assert len(dataset.cases) == 14
+    all_cases = (*dataset.cases, *follow_up.cases)
+    assert 18 <= len(all_cases) <= 25
+    category_counts = {
+        category: sum(case.category == category for case in all_cases)
+        for category in {case.category for case in all_cases}
     }
+    assert min(category_counts.values()) >= 2
+    assert {case.citation_scenario for case in all_cases if case.citation_scenario} == {
+        "valid",
+        "missing_attempt",
+        "unknown_evidence_attempt",
+        "semantic_mismatch_attempt",
+    }
+    assert all(
+        case.citation_mode == "required" for case in all_cases if case.citation_scenario is not None
+    )
 
 
 def test_unresolved_companies_cannot_define_tickers() -> None:
@@ -148,4 +147,32 @@ def test_cli_validates_golden_dataset(capsys: pytest.CaptureFixture[str]) -> Non
 
     output = capsys.readouterr().out
     assert '"name": "company-lens-core-golden"' in output
-    assert '"cases": 7' in output
+    assert '"cases": 14' in output
+
+
+def test_golden_loader_defaults_citation_mode_and_records_source_hash() -> None:
+    dataset = load_golden_dataset(GOLDEN_CORE_DATASET)
+
+    assert dataset.source_path == GOLDEN_CORE_DATASET
+    assert dataset.content_hash is not None
+    assert len(dataset.content_hash) == 64
+    assert {case.citation_mode for case in dataset.cases} == {"required", "not_applicable"}
+
+
+def test_golden_yaml_remains_framework_neutral() -> None:
+    authored = "\n".join(path.read_text(encoding="utf-8").lower() for path in GOLDEN_DATASETS)
+
+    assert "langfuse" not in authored
+    assert "score_config" not in authored
+    assert "dataset_run" not in authored
+
+
+def test_golden_case_rejects_unknown_citation_scenario() -> None:
+    payload = load_golden_dataset(GOLDEN_CORE_DATASET).model_dump(
+        mode="json",
+        exclude={"source_path", "content_hash"},
+    )
+    payload["cases"][0]["citation_scenario"] = "provider_specific_failure"
+
+    with pytest.raises(ValidationError, match="citation_scenario"):
+        GoldenDataset.model_validate(payload)

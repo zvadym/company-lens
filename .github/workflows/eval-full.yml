@@ -3,31 +3,41 @@ name: Full LLM Evaluation
 on:
   workflow_dispatch:
     inputs:
-      dataset:
-        description: Golden dataset path.
+      dataset_scope:
+        description: Repository golden datasets to evaluate.
+        type: choice
         required: true
-        default: evals/datasets/golden/core.v1.yaml
+        default: all
+        options: [all, core, follow_up]
       max_cases:
-        description: Maximum number of selected cases to run.
+        description: Maximum cases per selected dataset.
         required: true
         default: "100"
       model:
-        description: OpenAI model used for planning, repair, and answer generation.
+        description: OpenAI model for planning, answer, and repair.
         required: true
-        default: gpt-4.1-mini
+        default: gpt-5.4-mini
       max_tool_calls:
         description: Per-case agent tool-call budget.
         required: true
         default: "10"
+      pr_number:
+        description: Optional PR number for the canonical summary comment.
+        required: false
+        default: ""
       sec_user_agent:
-        description: SEC user-agent string for on-demand data preparation.
+        description: SEC user-agent string for evaluation data preparation.
         required: true
         default: CompanyLens eval contact@example.com
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
 
 jobs:
   eval-full:
     runs-on: ubuntu-latest
-    # GitHub exposes environment secrets only to jobs that target that environment.
     environment: Testing
     services:
       postgres:
@@ -36,8 +46,7 @@ jobs:
           POSTGRES_DB: company_lens
           POSTGRES_USER: company_lens
           POSTGRES_PASSWORD: company_lens
-        ports:
-          - 5432:5432
+        ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U company_lens -d company_lens"
           --health-interval 5s
@@ -50,18 +59,20 @@ jobs:
       COMPANY_LENS_OPENAI_PLANNING_MODEL: ${{ inputs.model }}
       COMPANY_LENS_OPENAI_ANSWER_MODEL: ${{ inputs.model }}
       COMPANY_LENS_OPENAI_REPAIR_MODEL: ${{ inputs.model }}
-      COMPANY_LENS_OPENAI_PLANNING_REASONING_EFFORT: "none"
-      COMPANY_LENS_OPENAI_ANSWER_REASONING_EFFORT: "none"
-      COMPANY_LENS_OPENAI_REPAIR_REASONING_EFFORT: "none"
+      COMPANY_LENS_OPENAI_PLANNING_REASONING_EFFORT: "low"
+      COMPANY_LENS_OPENAI_ANSWER_REASONING_EFFORT: "medium"
+      COMPANY_LENS_OPENAI_REPAIR_REASONING_EFFORT: "low"
       COMPANY_LENS_SEC_USER_AGENT: ${{ inputs.sec_user_agent }}
       COMPANY_LENS_ENVIRONMENT: github-actions
       COMPANY_LENS_SERVICE_VERSION: ${{ github.sha }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-      # Optional: when configured, the same model calls are traced in Langfuse.
+      COMPANY_LENS_LANGFUSE_PROJECT_ID: ${{ vars.LANGFUSE_PROJECT_ID }}
       COMPANY_LENS_LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
       COMPANY_LENS_LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
       COMPANY_LENS_LANGFUSE_BASE_URL: ${{ vars.LANGFUSE_BASE_URL || 'https://cloud.langfuse.com' }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      GITHUB_TOKEN: ${{ github.token }}
+      EVALUATION_DIR: artifacts/evaluations/${{ github.run_id }}
 
     steps:
       - uses: actions/checkout@v4
@@ -74,53 +85,28 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -e ".[dev]"
 
-      - name: Normalize API secrets
+      - name: Normalize and validate credentials
+        shell: bash
         run: |
           python - <<'PY'
           import os
           from pathlib import Path
 
-          required = {"OPENAI_API_KEY"}
-          secret_names = (
+          names = (
               "OPENAI_API_KEY",
               "FRED_API_KEY",
               "COMPANY_LENS_LANGFUSE_PUBLIC_KEY",
               "COMPANY_LENS_LANGFUSE_SECRET_KEY",
+              "COMPANY_LENS_LANGFUSE_PROJECT_ID",
           )
-          env_file = Path(os.environ["GITHUB_ENV"])
-          with env_file.open("a", encoding="utf-8") as handle:
-              for name in secret_names:
-                  # UI-entered environment secrets can include trailing newlines,
-                  # which are illegal inside HTTP authorization headers.
-                  normalized = (
-                      os.environ.get(name, "")
-                      .replace("\r", "")
-                      .replace("\n", "")
-                      .strip()
-                  )
-                  if name in required and not normalized:
-                      raise SystemExit(f"{name} is required for full LLM evaluation.")
-                  if normalized:
-                      handle.write(f"{name}={normalized}\n")
-          PY
-
-      - name: Check OpenAI model access
-        run: |
-          python - <<'PY'
-          import os
-          from openai import OpenAI
-
-          model = os.environ["COMPANY_LENS_OPENAI_PLANNING_MODEL"]
-          # This preflight is an infrastructure smoke check, so retry transient
-          # provider-side 5xx/connection failures before failing the workflow.
-          client = OpenAI(api_key=os.environ["OPENAI_API_KEY"].strip(), max_retries=2)
-          response = client.responses.create(
-              model=model,
-              input="Reply with the exact word: ok",
-              max_output_tokens=16,
-              store=False,
-          )
-          print({"model": getattr(response, "model", model), "response_id": response.id})
+          required = set(names) - {"FRED_API_KEY"}
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              for name in names:
+                  value = os.environ.get(name, "").replace("\r", "").replace("\n", "").strip()
+                  if name in required and not value:
+                      raise SystemExit(f"{name} is required for evaluation.")
+                  if value:
+                      handle.write(f"{name}={value}\n")
           PY
 
       - name: Run database migrations
@@ -129,37 +115,86 @@ jobs:
       - name: Initialize research persistence
         run: company-lens research setup --pretty
 
-      - name: Prepare core evaluation data
+      - name: Prepare evaluation data
         run: |
-          company-lens ingest-company-facts --ticker NET
-          company-lens ingest-sec --ticker NET --form 10-K
-          company-lens process-documents --kind sec_filing --limit 4
+          company-lens ingest-company-facts --ticker NET --ticker DDOG --ticker MDB --ticker NFLX
+          company-lens ingest-sec --ticker NET --ticker DDOG --form 10-K
+          company-lens process-documents --kind sec_filing --limit 8
           company-lens index-embeddings --embedding-provider openai --batch-size 100
 
-      - name: Run live agent on golden cases
+      - name: Resolve fixed dataset allowlist
+        id: datasets
+        shell: bash
         run: |
-          company-lens run-golden-agent \
-            --dataset "${{ inputs.dataset }}" \
-            --output observed-results.json \
-            --max-cases "${{ inputs.max_cases }}" \
-            --max-tool-calls "${{ inputs.max_tool_calls }}" \
-            --session-prefix "github-eval-${{ github.run_id }}" \
-            --pretty
+          case "${{ inputs.dataset_scope }}" in
+            all) value="--dataset evals/datasets/golden/core.v1.yaml --dataset evals/datasets/golden/follow_up.v1.yaml" ;;
+            core) value="--dataset evals/datasets/golden/core.v1.yaml" ;;
+            follow_up) value="--dataset evals/datasets/golden/follow_up.v1.yaml" ;;
+            *) exit 2 ;;
+          esac
+          echo "args=$value" >> "$GITHUB_OUTPUT"
 
-      - name: Evaluate observed results
+      - name: Run evaluation and preserve exit status
+        id: evaluation
+        shell: bash
         run: |
-          company-lens evaluate-golden-results \
-            --dataset "${{ inputs.dataset }}" \
-            --results observed-results.json \
-            --gate evals/gates/eval-full.v1.yaml \
-            --markdown-output evaluation-report.md \
+          mkdir -p "$EVALUATION_DIR"
+          args=(
+            ${{ steps.datasets.outputs.args }}
+            --output-dir "$EVALUATION_DIR"
+            --max-cases "${{ inputs.max_cases }}"
+            --max-concurrency 1
+            --max-tool-calls "${{ inputs.max_tool_calls }}"
+            --commit-sha "${{ github.sha }}"
+            --source-ref "${{ github.ref }}"
+            --workflow-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             --pretty
+          )
+          if [[ -n "${{ inputs.pr_number }}" ]]; then
+            args+=(--repository "${{ github.repository }}" --pr-number "${{ inputs.pr_number }}")
+          fi
+          set +e
+          company-lens run-evaluation "${args[@]}"
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Recover interrupted artifacts
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f "$EVALUATION_DIR/evaluation-journal.json" ]] && \
+             { [[ ! -f "$EVALUATION_DIR/evaluation-execution.json" ]] || [[ ! -f "$EVALUATION_DIR/evaluation-summary.md" ]]; }; then
+            company-lens recover-evaluation \
+              --journal "$EVALUATION_DIR/evaluation-journal.json" \
+              --output-dir "$EVALUATION_DIR" || echo "reporting_exit=2" >> "$GITHUB_ENV"
+          fi
+
+      - name: Report evaluation to PR
+        if: always() && inputs.pr_number != ''
+        shell: bash
+        run: |
+          company-lens report-evaluation-pr \
+            --execution "$EVALUATION_DIR/evaluation-execution.json" \
+            --journal "$EVALUATION_DIR/evaluation-journal.json" \
+            --repository "${{ github.repository }}" \
+            --pr-number "${{ inputs.pr_number }}" \
+            --expected-head-sha "${{ github.sha }}" \
+            --artifact-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            || echo "reporting_exit=2" >> "$GITHUB_ENV"
 
       - name: Upload evaluation artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: full-llm-evaluation-${{ github.run_id }}
-          path: |
-            observed-results.json
-            evaluation-report.md
+          path: ${{ env.EVALUATION_DIR }}
+
+      - name: Propagate evaluation status
+        if: always()
+        shell: bash
+        run: |
+          if [[ "${reporting_exit:-0}" == "2" ]]; then
+            exit 2
+          fi
+          exit "${{ steps.evaluation.outputs.exit_code || 2 }}"

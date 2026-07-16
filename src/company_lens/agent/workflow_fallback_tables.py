@@ -83,6 +83,15 @@ def _fallback_sentence(item: EvidenceEnvelope) -> str | None:
     return None
 
 
+def _fallback_sentences(item: EvidenceEnvelope) -> tuple[str, ...]:
+    if item.kind is EvidenceKind.DOCUMENT:
+        claims = tuple(claim.text for claim in extract_claims(item.summary) if claim.material)
+        if claims:
+            return claims[:3]
+    sentence = _fallback_sentence(item)
+    return (sentence,) if sentence is not None else ()
+
+
 def _fallback_calculation_sentence(item: EvidenceEnvelope) -> str | None:
     operation = _fallback_operation_label(item.metadata.operation)
     company = _fallback_company_name(item.metadata.company_name)
@@ -138,6 +147,7 @@ __all__ = (
     "_fallback_multi_company_financial_fact_table",
     "_fallback_financial_fact_cell",
     "_fallback_sentence",
+    "_fallback_sentences",
     "_fallback_calculation_sentence",
     "_fallback_calculation_points",
 )  # noqa: E501

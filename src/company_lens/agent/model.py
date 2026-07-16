@@ -19,6 +19,7 @@ class ModelPurpose(enum.StrEnum):
     ANSWER = "answer"
     VALIDATE = "validate"
     REPAIR = "repair"
+    OPERATION_RECONCILIATION = "operation_reconciliation"
 
 
 class ModelMessage(BaseModel):

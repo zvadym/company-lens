@@ -21,6 +21,13 @@ from langgraph.runtime import Runtime
 from langgraph.types import Overwrite, Send
 from pydantic import BaseModel
 
+from company_lens.agent.calculation_intents import (
+    BranchOperationDecision,
+    CalculationIntent,
+    ModelCalculationIntent,
+    OperationReconciliation,
+    domain_calculation_intent,
+)
 from company_lens.agent.model import (
     ModelMessage,
     ModelProviderError,
@@ -58,6 +65,7 @@ from company_lens.agent.schemas import (
     FinancialFactsBranch,
     MacroBranchResult,
     MacroSeriesBranch,
+    ModelQuestionAnalysis,
     ModelExecutionBranch,
     ModelExecutionPlan,
     NodeAttempt,
@@ -106,11 +114,13 @@ from company_lens.financials.schemas import (
     FinancialFactQuery,
     FinancialFactQueryResult,
 )
+from company_lens.ingestion.preparation_requirements import CompanyDataPreparationRequirements
 from company_lens.macro.schemas import FredSeriesResult
 from company_lens.observability.context import bind_context
 from company_lens.observability.telemetry import (
     observe_operation,
     record_cache_access,
+    record_company_preparation_requirements,
     record_retrieval,
     record_validation,
 )

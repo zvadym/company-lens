@@ -26,6 +26,13 @@ def test_repo_prompt_provider_loads_checked_in_prompt() -> None:
     assert prompt.metadata.content_hash == prompt_content_hash(prompt.content)
 
 
+def test_parse_prompt_keeps_company_qualifiers_out_of_calculation_metrics() -> None:
+    prompt = RepoPromptProvider().get_text("agent/parse-question")
+
+    assert "never company, ticker, or entity qualifiers" in prompt.content
+    assert "emit one shared intent" in prompt.content
+
+
 def test_repo_prompt_provider_rejects_unknown_prompt(tmp_path: Path) -> None:
     manifest = tmp_path / "manifest.yaml"
     manifest.write_text("prompts: []\n", encoding="utf-8")

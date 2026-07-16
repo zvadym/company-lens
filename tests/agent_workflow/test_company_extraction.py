@@ -70,15 +70,11 @@ def test_resolve_entities_extracts_follow_up_public_company_target() -> None:
     update = _resolve_entities(state, Runtime(context=ResearchAgentRuntime(model, tools)))
 
     resolved = cast(ResolvedQuery, update["resolved_query"])
-    frame = cast(ResearchFrame, update["research_frame"])
     public_company = next(entity for entity in resolved.entities if entity.kind == "public_company")
     assert resolved.company_ids == ()
     assert public_company.mention == "Zoom"
     assert public_company.candidates[0].canonical_value == "ZM"
-    assert frame.company_targets[0].mention == "Zoom"
-    assert frame.company_targets[0].ticker == "ZM"
-    assert frame.follow_up_operation == "quarter_over_quarter_growth"
-    assert frame.follow_up_window == 8
+    assert "research_frame" not in update
     assert tools.calls["resolve_public_company_mentions"] == 1
     assert ModelPurpose.ENTITY_EXTRACTION in model.purposes
 

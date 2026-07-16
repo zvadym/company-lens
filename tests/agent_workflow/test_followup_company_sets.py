@@ -336,3 +336,40 @@ def test_add_series_follow_up_merges_new_company_with_previous_chart_companies()
         "tesla",
     ]
     assert merged.metrics == ("revenue",)
+
+
+def test_add_series_uses_current_question_when_normalized_question_loses_add_marker() -> None:
+    previous = _company_query(
+        query="Compare Cloudflare and Datadog revenue growth",
+        company_id=COMPANY_ID,
+        mention="cloudflare",
+        display_value="Cloudflare",
+    ).model_copy(update={"company_ids": (COMPANY_ID, NETFLIX_ID)})
+    current = _company_query(
+        query="Add MongoDB too",
+        company_id=APPLE_ID,
+        mention="MongoDB",
+        display_value="MongoDB, Inc.",
+        metrics=(),
+    )
+    analysis = QuestionAnalysis(
+        normalized_question="Compare revenue growth for Cloudflare, Datadog, and MongoDB",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        chart_requested=True,
+        is_follow_up=True,
+        reason_codes=("follow_up",),
+    )
+
+    merged = _merge_follow_up_if_needed(
+        current,
+        analysis,
+        SessionMemory(last_resolved_query=previous),
+    )
+
+    assert merged.company_ids == (COMPANY_ID, NETFLIX_ID, APPLE_ID)
+    assert merged.metrics == ("revenue",)

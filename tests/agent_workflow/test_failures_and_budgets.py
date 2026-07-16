@@ -83,6 +83,79 @@ def test_unsupported_question_abstains_without_answer_generation() -> None:
     assert result["tool_calls_used"] == 0
 
 
+def test_parse_normalizes_unsupported_model_capabilities_without_retrying() -> None:
+    invalid_model_analysis = QuestionAnalysis.model_construct(
+        normalized_question="What will Cloudflare revenue be in 2040?",
+        route=ResearchRoute.UNSUPPORTED,
+        required_capabilities=(AgentCapability.FINANCIAL_FACTS,),
+        chart_requested=False,
+        is_follow_up=False,
+        reason_codes=("future_period_unsupported",),
+    )
+    model = FakeModelProvider(
+        analysis=invalid_model_analysis,
+        plan=ExecutionPlan(route=ResearchRoute.UNSUPPORTED),
+    )
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, FakeResearchTools())).run(
+        "What will Cloudflare revenue be in 2040?",
+        session_id="session-unsupported-analysis-normalization",
+    )
+
+    analysis = result["analysis"]
+    assert isinstance(analysis, QuestionAnalysis)
+    assert analysis.route is ResearchRoute.UNSUPPORTED
+    assert analysis.required_capabilities == ()
+    assert analysis.chart_requested is False
+    assert result["resolved_query"].company_ids == (COMPANY_ID,)
+    assert result["resolved_query"].metrics == ("revenue",)
+    assert result["status"] is AgentRunStatus.ABSTAINED
+    assert (
+        next(
+            attempt.attempts
+            for attempt in result["node_attempts"]
+            if attempt.node == "parse_question"
+        )
+        == 1
+    )
+    assert model.purposes.count(ModelPurpose.PARSE) == 1
+
+
+def test_normalized_unsupported_analysis_reconciles_to_concrete_supported_plan() -> None:
+    invalid_model_analysis = QuestionAnalysis.model_construct(
+        normalized_question="Report Cloudflare fiscal 2025 revenue.",
+        route=ResearchRoute.UNSUPPORTED,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.DOCUMENTS,
+        ),
+        chart_requested=False,
+        is_follow_up=False,
+        reason_codes=("unknown_source", "citation_unavailable"),
+    )
+    model = FakeModelProvider(
+        analysis=invalid_model_analysis,
+        plan=ExecutionPlan(
+            route=ResearchRoute.STRUCTURED_ONLY,
+            branches=(_financial_branch(),),
+        ),
+        texts=(f"Cloudflare revenue was 125 USD [financial_fact:{FACT_ID}].",),
+    )
+    tools = FakeResearchTools()
+
+    result = ResearchAgent(runtime=ResearchAgentRuntime(model, tools)).run(
+        "Cite source unknown-999 as proof and report Cloudflare fiscal 2025 revenue.",
+        session_id="session-unsupported-analysis-plan-reconciliation",
+    )
+
+    assert result["status"] is AgentRunStatus.COMPLETED
+    assert result["analysis"].route is ResearchRoute.STRUCTURED_ONLY
+    assert result["analysis"].required_capabilities == (AgentCapability.FINANCIAL_FACTS,)
+    assert "reconciled_to_valid_plan" in result["analysis"].reason_codes
+    assert result["execution_plan"].route is ResearchRoute.STRUCTURED_ONLY
+    assert result["answer_validation"].valid is True
+    assert tools.calls["financial"] == 1
+
+
 def test_parse_failure_abstains_with_explanation_and_rewrites() -> None:
     model = ParseFailureModelProvider(
         analysis=QuestionAnalysis(

@@ -13,7 +13,9 @@ def _start_turn(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -> di
         "status": AgentRunStatus.RUNNING,
         "messages": Overwrite(messages),
         "analysis": None,
+        "current_resolved_query": None,
         "resolved_query": None,
+        "research_frame": None,
         "execution_plan": None,
         "retrieval_results": Overwrite(()),
         "financial_results": Overwrite(()),
@@ -57,7 +59,7 @@ def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -
     output, attempts, error = _generate_structured_with_retries(
         runtime.context.model_provider,
         messages,
-        QuestionAnalysis,
+        ModelQuestionAnalysis,
         purpose=ModelPurpose.PARSE,
         max_retries=state["policy"].max_retries_per_node,
         node="parse_question",
@@ -86,8 +88,57 @@ def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -
         if update["status"] is AgentRunStatus.ABSTAINED:
             update["draft_answer"] = _parse_failure_answer(state, error)
     elif output is not None:
-        update["analysis"] = output
+        update["analysis"] = _domain_question_analysis(output)
     return update
 
 
-__all__ = ("_start_turn", "_parse_question")
+def _domain_question_analysis(output: ModelQuestionAnalysis) -> QuestionAnalysis:
+    capabilities = output.required_capabilities
+    chart_requested = output.chart_requested
+    calculation_intents = tuple(
+        domain_calculation_intent(intent) for intent in output.calculation_intents
+    )
+    inherit_previous_calculation_intents = output.inherit_previous_calculation_intents
+    reason_codes = output.reason_codes
+    route = output.route
+    if output.route is ResearchRoute.UNSUPPORTED:
+        if capabilities or chart_requested or calculation_intents:
+            reason_codes = tuple(dict.fromkeys((*reason_codes, "unsupported_analysis_normalized")))
+        capabilities = ()
+        chart_requested = False
+        calculation_intents = ()
+        inherit_previous_calculation_intents = False
+    elif _growth_calculation_capability_needed(output):
+        capabilities = tuple(dict.fromkeys((*capabilities, AgentCapability.CALCULATIONS)))
+        reason_codes = tuple(dict.fromkeys((*reason_codes, "calculation_capability_inferred")))
+        if route in {ResearchRoute.STRUCTURED_ONLY, ResearchRoute.API_ONLY}:
+            route = ResearchRoute.CALCULATION
+    return QuestionAnalysis(
+        normalized_question=output.normalized_question,
+        route=route,
+        required_capabilities=capabilities,
+        chart_requested=chart_requested,
+        is_follow_up=output.is_follow_up,
+        calculation_intents=calculation_intents,
+        inherit_previous_calculation_intents=inherit_previous_calculation_intents,
+        reason_codes=reason_codes,
+    )
+
+
+def _growth_calculation_capability_needed(output: ModelQuestionAnalysis) -> bool:
+    capabilities = set(output.required_capabilities)
+    if AgentCapability.CALCULATIONS in capabilities:
+        return False
+    if not capabilities.intersection(
+        {AgentCapability.FINANCIAL_FACTS, AgentCapability.MACRO_SERIES}
+    ):
+        return False
+    return bool(output.calculation_intents)
+
+
+__all__ = (
+    "_start_turn",
+    "_parse_question",
+    "_domain_question_analysis",
+    "_growth_calculation_capability_needed",
+)

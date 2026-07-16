@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any, Literal
@@ -38,6 +40,13 @@ ExpectedTool = Literal[
     "calculate_metrics",
     "generate_chart_spec",
     "validate_citations",
+]
+CitationMode = Literal["required", "not_applicable"]
+CitationScenario = Literal[
+    "valid",
+    "missing_attempt",
+    "unknown_evidence_attempt",
+    "semantic_mismatch_attempt",
 ]
 
 
@@ -193,12 +202,24 @@ class ExpectedBehavior(GoldenModel):
             raise ValueError("operation must use lowercase snake_case")
         return cleaned
 
+    @model_validator(mode="after")
+    def validate_follow_up_inheritance(self) -> ExpectedBehavior:
+        if (
+            self.follow_up is not None
+            and "operation" in self.follow_up.inherit
+            and self.operation is None
+        ):
+            raise ValueError("inheriting an operation requires an expected operation")
+        return self
+
 
 class GoldenDatasetCase(GoldenModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*_[0-9]{3}$")
     category: CaseCategory
     conversation: tuple[ConversationTurn, ...] = Field(min_length=1)
     expected: ExpectedBehavior
+    citation_mode: CitationMode = "required"
+    citation_scenario: CitationScenario | None = None
     notes: str | None = None
 
     @field_validator("notes")
@@ -217,6 +238,8 @@ class GoldenDatasetCase(GoldenModel):
                 raise ValueError("follow_up cases require at least two user turns")
             if self.expected.follow_up is None:
                 raise ValueError("follow_up cases require follow_up expectations")
+        if self.citation_mode == "not_applicable" and self.citation_scenario is not None:
+            raise ValueError("not-applicable citation cases cannot define a citation scenario")
         return self
 
 
@@ -225,6 +248,8 @@ class GoldenDataset(GoldenModel):
     version: int = Field(ge=1)
     description: str | None = None
     cases: tuple[GoldenDatasetCase, ...] = Field(min_length=1)
+    source_path: Path | None = Field(default=None, exclude=True)
+    content_hash: str | None = Field(default=None, exclude=True)
 
     @field_validator("description")
     @classmethod
@@ -248,7 +273,9 @@ def load_golden_dataset(path: Path) -> GoldenDataset:
     payload = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("Golden dataset must be a YAML mapping.")
-    return GoldenDataset.model_validate(payload)
+    dataset = GoldenDataset.model_validate(payload)
+    content_hash = _canonical_hash(dataset.model_dump(mode="json"))
+    return dataset.model_copy(update={"source_path": path, "content_hash": content_hash})
 
 
 def validate_golden_dataset(path: Path) -> GoldenDataset:
@@ -279,14 +306,35 @@ def _unique_identifier_values(values: tuple[str, ...]) -> tuple[str, ...]:
     return cleaned
 
 
+def _canonical_hash(payload: Any) -> str:
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
 def golden_dataset_summary(dataset: GoldenDataset) -> dict[str, Any]:
     # CLI output is intentionally compact so it can be read in CI logs.
     categories: dict[str, int] = {}
     for case in dataset.cases:
         categories[case.category] = categories.get(case.category, 0) + 1
+    citation_modes: dict[str, int] = {}
+    citation_scenarios: dict[str, int] = {}
+    for case in dataset.cases:
+        citation_modes[case.citation_mode] = citation_modes.get(case.citation_mode, 0) + 1
+        if case.citation_scenario is not None:
+            citation_scenarios[case.citation_scenario] = (
+                citation_scenarios.get(case.citation_scenario, 0) + 1
+            )
     return {
         "name": dataset.name,
         "version": dataset.version,
         "cases": len(dataset.cases),
         "categories": categories,
+        "citation_modes": citation_modes,
+        "citation_scenarios": citation_scenarios,
+        "content_hash": dataset.content_hash,
     }

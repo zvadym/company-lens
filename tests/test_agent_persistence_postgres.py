@@ -24,7 +24,7 @@ from company_lens.agent.persistence import (
 from company_lens.agent.schemas import (
     AgentRunStatus,
     ModelExecutionPlan,
-    QuestionAnalysis,
+    ModelQuestionAnalysis,
     ResearchRoute,
 )
 from company_lens.agent.workflow import ResearchAgentRuntime
@@ -32,6 +32,7 @@ from company_lens.db.models import ResearchSession
 from company_lens.db.session import build_session_factory
 from company_lens.financials.schemas import FinancialFactQuery, FinancialFactQueryResult
 from company_lens.ingestion.on_demand import CompanyDataPreparationResult
+from company_lens.ingestion.preparation_requirements import CompanyDataPreparationRequirements
 from company_lens.macro.schemas import FredSeriesQuery, FredSeriesResult
 from company_lens.retrieval.adaptive_schemas import (
     AdaptiveRetrievalRequest,
@@ -54,12 +55,12 @@ class UnsupportedModel:
         purpose: ModelPurpose,
     ) -> StructuredModelResult[OutputT]:
         output: BaseModel = (
-            QuestionAnalysis(
+            ModelQuestionAnalysis(
                 normalized_question="Unsupported request",
                 route=ResearchRoute.UNSUPPORTED,
                 reason_codes=("outside_research_scope",),
             )
-            if output_type is QuestionAnalysis
+            if output_type is ModelQuestionAnalysis
             else ModelExecutionPlan(route=ResearchRoute.UNSUPPORTED)
         )
         return StructuredModelResult[OutputT](
@@ -91,6 +92,7 @@ class NoDataTools:
         company_ids: tuple[str, ...],
         index_name: str,
         index_version: str,
+        requirements: CompanyDataPreparationRequirements,
     ) -> CompanyDataPreparationResult:
         return CompanyDataPreparationResult(
             status="skipped",

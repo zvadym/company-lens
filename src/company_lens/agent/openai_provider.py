@@ -15,7 +15,7 @@ from openai import (
 )
 from openai.types.responses import EasyInputMessageParam, ResponseInputParam
 from openai.types.shared_params import Reasoning
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from company_lens.agent.model import (
     ModelMessage,
@@ -113,6 +113,11 @@ class OpenAIResearchModelProvider:
     ) -> StructuredModelResult[StructuredOutputT]:
         model, reasoning_effort, max_output_tokens = self._configuration(purpose)
         input_items = _message_input(messages)
+        request_timeout = (
+            self._repair_timeout_seconds
+            if purpose is ModelPurpose.OPERATION_RECONCILIATION
+            else None
+        )
         try:
             with observe_operation(
                 "model.generate_structured",
@@ -133,6 +138,7 @@ class OpenAIResearchModelProvider:
                                 output_type=output_type,
                                 reasoning_effort=reasoning_effort,
                                 max_output_tokens=max_output_tokens,
+                                request_timeout=request_timeout,
                             ),
                         )
                     ),
@@ -285,7 +291,7 @@ class OpenAIResearchModelProvider:
                 self._validation_reasoning_effort,
                 self._validation_max_output_tokens,
             )
-        if purpose is ModelPurpose.REPAIR:
+        if purpose in {ModelPurpose.REPAIR, ModelPurpose.OPERATION_RECONCILIATION}:
             return (
                 self._repair_model,
                 self._repair_reasoning_effort,
@@ -347,6 +353,7 @@ def _structured_response_kwargs(
     output_type: type[StructuredOutputT],
     reasoning_effort: ReasoningEffort,
     max_output_tokens: int,
+    request_timeout: float | None,
 ) -> dict[str, object]:
     kwargs: dict[str, object] = {
         "model": model,
@@ -357,6 +364,8 @@ def _structured_response_kwargs(
     }
     if reasoning_effort != "none":
         kwargs["reasoning"] = Reasoning(effort=reasoning_effort)
+    if request_timeout is not None:
+        kwargs["timeout"] = request_timeout
     return kwargs
 
 
@@ -487,6 +496,13 @@ def _map_provider_error(exc: Exception) -> ModelProviderError:
             AgentErrorSeverity.TERMINAL,
             "openai_auth",
             "OpenAI authentication or permission check failed.",
+        )
+    if isinstance(exc, ValidationError):
+        return _error(
+            AgentErrorCategory.PROVIDER_RESPONSE,
+            AgentErrorSeverity.RECOVERABLE,
+            "openai_invalid_structured_output",
+            "OpenAI returned structured output that did not match the response schema.",
         )
     if isinstance(exc, BadRequestError):
         return _error(

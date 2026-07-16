@@ -64,10 +64,11 @@ def test_add_company_bar_chart_follow_up_prepares_ticker_without_unresolved_dupl
             company_ids: tuple[str, ...],
             index_name: str,
             index_version: str,
+            requirements: CompanyDataPreparationRequirements,
         ) -> CompanyDataPreparationResult:
             self.calls["prepare"] += 1
             assert tickers == ("AMZN",)
-            assert company_ids == (str(MICROSOFT_ID),)
+            assert company_ids == ()
             return CompanyDataPreparationResult(
                 status="success",
                 requested_tickers=tickers,
@@ -240,4 +241,4 @@ def test_add_company_bar_chart_follow_up_prepares_ticker_without_unresolved_dupl
     execution_plan = cast(ExecutionPlan, plan_update["execution_plan"])
     assert execution_plan.branches[-1].kind == "generate_chart_spec"
     assert tools.calls["prepare"] == 1
-    assert tools.calls["resolve_public_company_mentions"] == 2
+    assert tools.calls["resolve_public_company_mentions"] == 1

@@ -25,14 +25,12 @@ def _resolve_entities(
             analysis,
             runtime.context.tools,
         )
-        memory = state.get("session_memory")
-        resolved = _resolve_extracted_company_mentions(
+        resolved, extraction_attempts, extraction_error = _resolve_extracted_company_mentions(
             state,
             runtime,
             resolved,
             analysis,
         )
-        resolved = _merge_follow_up_if_needed(resolved, analysis, memory)
     except ResearchToolError as exc:
         error = exc.error.model_copy(update={"node": "resolve_entities"})
         return {
@@ -54,26 +52,32 @@ def _resolve_entities(
             "node_attempts": (NodeAttempt(node="resolve_entities", attempts=1),),
             "trajectory": (_failed_event("resolve_entities", started),),
         }
-    frame = _build_research_frame(
-        question=state["question"],
-        analysis=state.get("analysis"),
-        resolved=resolved,
-        memory=state.get("session_memory"),
-    )
-    return {
+    update: dict[str, object] = {
+        "current_resolved_query": resolved,
         "resolved_query": resolved,
-        "research_frame": frame,
-        "node_attempts": (NodeAttempt(node="resolve_entities", attempts=1),),
+        "node_attempts": (
+            NodeAttempt(node="resolve_entities", attempts=max(1, extraction_attempts)),
+        ),
         "trajectory": (
             _event(
                 "resolve_entities",
                 TrajectoryStatus.COMPLETED,
-                "Entity resolution completed.",
+                (
+                    "Entity resolution completed with a provider fallback."
+                    if extraction_error is not None
+                    else "Entity resolution completed."
+                ),
                 started,
-                details={"entities": len(resolved.entities)},
+                details={
+                    "entities": len(resolved.entities),
+                    "company_extraction_attempts": extraction_attempts,
+                },
             ),
         ),
     }
+    if extraction_error is not None:
+        update["errors"] = (extraction_error,)
+    return update
 
 
 __all__ = ("_normalized_analysis_question", "_resolve_entities")

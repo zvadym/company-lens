@@ -21,6 +21,7 @@ from company_lens.ingestion.on_demand import (
     CompanyDataPreparationResult,
     OnDemandCompanyDataPreparer,
 )
+from company_lens.ingestion.preparation_requirements import CompanyDataPreparationRequirements
 from company_lens.ingestion.sec_client import SecCompany
 from company_lens.ingestion.sec_service import build_sec_client_from_settings
 from company_lens.macro.client import FredClient
@@ -58,6 +59,7 @@ class ResearchTools(Protocol):
         company_ids: tuple[str, ...],
         index_name: str,
         index_version: str,
+        requirements: CompanyDataPreparationRequirements,
     ) -> CompanyDataPreparationResult: ...
 
     def retrieve_documents(
@@ -128,6 +130,7 @@ class SqlResearchTools:
         company_ids: tuple[str, ...],
         index_name: str,
         index_version: str,
+        requirements: CompanyDataPreparationRequirements,
     ) -> CompanyDataPreparationResult:
         if self._settings is None:
             return CompanyDataPreparationResult(
@@ -144,7 +147,11 @@ class SqlResearchTools:
                 embedder=self._embedder,
                 index_name=index_name,
                 index_version=index_version,
-            ).prepare(tickers=tickers, company_ids=parsed_company_ids)
+            ).prepare(
+                tickers=tickers,
+                company_ids=parsed_company_ids,
+                requirements=requirements,
+            )
         except ResearchToolError:
             raise
         except Exception:
