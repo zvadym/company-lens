@@ -231,6 +231,47 @@ after this focused gate passes.
 
 ---
 
+## Phase 10: User Story 1 - LLM Calculation Operation Reconciliation (Priority: P1)
+
+**Goal**: Preserve the parser LLM's typed calculation semantics when the planner disagrees, without
+phrase dictionaries, unnecessary model calls, topology rewrites, weakened gates, or hidden
+reconciliation behavior.
+
+**Independent Test**: A consistent typed parser/planner plan makes zero reconciliation model calls.
+The exact QoQ parser intent versus planner `percentage_change` conflict makes one bounded structured
+call, produces `quarter_over_quarter_growth`, validates the unchanged plan topology before tools,
+and persists that final operation for an add-company follow-up. Exhausted provider failures remain
+infrastructure/not-evaluated, while schema-valid semantic failures remain observed quality failures;
+both execute zero tools and expose only privacy-safe Langfuse metadata.
+
+### Tests for User Story 1 Reconciliation
+
+- [ ] T076 [P] [US1] Add failing tests for every `CalculationOperation`, single- and multi-metric typed intents, scalar validation/conversion, reconciliation response defaults, parser normalization, and backward-compatible empty/inheritance defaults in `tests/agent_workflow/test_operation_intents.py` and `tests/agent_workflow/test_analysis_normalization.py`
+- [ ] T077 [P] [US1] Add failing pure detector tests for explicit-current precedence, inheritance from the previous final plan, one intent covering multiple company branches, mixed operations, metric/parameter mismatches, missing or ambiguous associations, consistent no-call decisions, and independence from user text in `tests/agent_workflow/test_operation_conflicts.py`
+- [ ] T078 [P] [US1] Add failing reconciliation-application tests for exact branch coverage, duplicate/unknown IDs, operation arity, scalar clear/preserve rules, topology and source immutability, remaining-conflict detection, and full plan revalidation in `tests/agent_workflow/test_operation_reconciliation.py`
+- [ ] T079 [P] [US1] Add failing timeout/connection/429/500/refusal/schema-exhaustion versus semantic-invalid failure-taxonomy tests, including bounded attempts, `operation_reconciliation_failed`, evaluation exit/gate classification, and zero tool execution in `tests/agent_workflow/test_operation_reconciliation_failures.py` and `tests/evals/test_agent_runner_infrastructure.py`
+- [ ] T080 [P] [US1] Add failing prompt-registration, privacy-safe reconciliation-context, dedicated model-purpose, repair-model routing, token-limit, timeout, and prompt-metadata tests in `tests/agent_workflow/test_prompt_and_repair_context.py` and `tests/test_agent_openai_provider.py`
+- [ ] T081 [P] [US1] Add failing graph-order, consistent zero-call, exact QoQ conflict, two-turn add-company inheritance, sanitized trajectory, model-usage, and forbidden-public-content tests with purpose-aware fakes in `tests/agent_workflow/test_operation_reconciliation_flow.py`, `tests/agent_workflow/fakes_model.py`, and `tests/test_observability_security.py`
+
+### Implementation for User Story 1 Reconciliation
+
+- [ ] T082 [US1] Extract `CalculationOperation`, `CalculationIntent`, `BranchOperationDecision`, and `OperationReconciliation` into `src/company_lens/agent/calculation_intents.py`; re-export the existing operation type from `src/company_lens/agent/schemas.py`; and carry typed intents plus inheritance through `ModelQuestionAnalysis`, `QuestionAnalysis`, `_domain_question_analysis`, and deterministic follow-up fallback in `src/company_lens/agent/workflow_lifecycle.py` and `src/company_lens/agent/workflow_session.py` without operation phrase matching
+- [ ] T083 [P] [US1] Require typed calculation intents in `prompts/agent/parse-question.txt`, pass them to planning in `prompts/agent/plan-request.txt`, create the privacy-bounded `prompts/agent/reconcile-operations.txt`, and register its versioned metadata in `prompts/manifest.yaml`
+- [ ] T084 [US1] Implement workflow-local `EffectiveCalculationIntent` and `OperationConflict` models, effective explicit/inherited intent resolution, and deterministic operation, metric, scalar, missing, and ambiguous conflict detection without free-form text access in `src/company_lens/agent/workflow_operation_conflicts.py`
+- [ ] T085 [P] [US1] Add `ModelPurpose.OPERATION_RECONCILIATION` in `src/company_lens/agent/model.py` and route it to the existing repair model, reasoning effort, output-token limit, and timeout in `src/company_lens/agent/openai_provider.py` without new settings or environment variables
+- [ ] T086 [US1] Implement `reconcile_operations` with canonical privacy-safe context, one bounded structured call sequence, exact decision coverage, topology-preserving copy updates, scalar semantics, post-application conflict detection, full plan validation, failure taxonomy, and sanitized trajectory details in `src/company_lens/agent/workflow_operation_reconciliation.py`
+- [ ] T087 [US1] Export and wire `reconcile_operations` strictly between `plan_request` and `hydrate_cached_results`, including terminal short-circuit behavior and observable node summaries, in `src/company_lens/agent/workflow.py`, `src/company_lens/agent/workflow_core.py`, and `src/company_lens/agent/events.py`
+- [ ] T088 [US1] Run the focused reconciliation, provider, evaluation-infrastructure, and observability suites from `specs/003-langfuse-evaluation-foundation/quickstart.md` and record the final focused test count there
+- [ ] T089 [US1] Run `graphify update .`, inspect impact in `graphify-out/graph.json`, run `make check`, and resolve every failure in files changed by the reconciliation remediation before any live workflow
+- [ ] T090 [US1] Run the four-case `follow_up` manual workflow, require every deterministic/citation/operational score and `operation_accuracy=1.0`, inspect conflict and no-call traces in Langfuse, and append workflow/execution/run IDs plus trace cardinality to `specs/003-langfuse-evaluation-foundation/quickstart.md`
+- [ ] T091 [US1] Run the full 18-case manual workflow only after T090 passes, require 14 core plus four follow-up traces, zero infrastructure/citation failures, unchanged thresholds, `operation_accuracy=1.0`, successful PR reporting, and append final artifact/Langfuse evidence to `specs/003-langfuse-evaluation-foundation/quickstart.md` before marking PR `#68` ready
+
+**Checkpoint**: Typed calculation semantics are reconciled fail-closed before tools, inherited from
+the final validated plan, and visible in Langfuse without a new score, gate, adapter, database
+migration, API, or frontend change.
+
+---
+
 ## Dependencies and Execution Order
 
 ### Phase Dependencies
@@ -247,6 +288,10 @@ after this focused gate passes.
 - **Live Remediation (Phase 8)**: Depends on the first full live workflow execution after Phase 7.
 - **Production Agent Remediation (Phase 9)**: Depends on the trustworthy evaluator/parser evidence
   from Phase 8 and the approved `follow-up-remediation-design.md`.
+- **Operation Reconciliation (Phase 10)**: Depends on the final-plan persistence and trustworthy
+  evaluation behavior proven through Phase 9 plus the approved
+  `operation-reconciliation-remediation-design.md`. T090 is blocked by T089; T091 is blocked by a
+  passing T090.
 
 ### Foundational Internal Order
 
@@ -257,6 +302,17 @@ after this focused gate passes.
 5. Complete client/mapping/scores/sync in T016-T019.
 6. Extract CLI handlers in T020 and pass T021.
 
+### Operation Reconciliation Internal Order
+
+1. Author the independent red test groups T076-T081 in parallel.
+2. Establish typed contracts and normalization in T082.
+3. Update prompts in T083 and implement pure conflict detection in T084; T083 may proceed in
+   parallel with T082, while T084 requires T082.
+4. Add provider routing in T085 in parallel with T082-T084, then implement the reconciliation node
+   in T086 after T082-T085 are stable.
+5. Wire the graph in T087, pass focused tests in T088, and pass graph plus repository gates in T089.
+6. Run targeted live evidence T090 before the full workflow T091.
+
 ### User Story Dependencies
 
 - **US1**: No dependency on another user story after Phase 2.
@@ -264,6 +320,8 @@ after this focused gate passes.
 - **US3**: Consumes US1 execution JSON/Markdown artifacts; it does not alter their gate result.
 - **US4**: No dependency on another story after the foundational golden schema, but final live
   validation uses its expanded cases.
+- **US1 reconciliation extension**: Depends on the existing US1 runner and Phase 9 final-plan
+  behavior but does not alter US2 synchronization, US3 reporting contracts, or US4 dataset truth.
 
 ### Requirement Coverage
 
@@ -280,9 +338,11 @@ after this focused gate passes.
 | FR-036-FR-037 | T057-T060 |
 | FR-038-FR-040 | T061-T075 |
 | FR-041 | T023, T028 |
+| FR-042-FR-045 | T076-T091 |
 | SC-001-SC-017 | T021, T034, T038, T044, T049, T051-T056, T060 |
 | SC-018-SC-019 | T061-T075 |
 | SC-020 | T023, T028 |
+| SC-021-SC-023 | T076-T091 |
 
 ---
 
@@ -299,6 +359,10 @@ after this focused gate passes.
 - US3 tests T039 and T040 can run in parallel.
 - Polish documentation/security/schema tasks T050-T052 can run in parallel.
 - Phase 9 red tests T061-T063 can be authored in parallel before the sequential production changes.
+- Phase 10 red tests T076-T081 touch independent contract, detector, application, failure, provider,
+  and flow boundaries and can be authored in parallel.
+- After T082 establishes the typed contract, prompt work T083 and provider routing T085 can proceed
+  in parallel while conflict detection T084 is implemented.
 
 ## Parallel Example: User Story 1
 
@@ -319,6 +383,22 @@ Task T030: Implement execution artifact reporting in src/company_lens/evals/repo
 ```text
 Task T035-T038: Implement and validate the explicit sync command (US2)
 Task T045-T049: Expand and validate repository golden coverage (US4)
+```
+
+## Parallel Example: User Story 1 Reconciliation
+
+```text
+Task T076: Write typed calculation-intent contract tests
+Task T077: Write pure structured-conflict tests
+Task T078: Write reconciliation application tests
+Task T079: Write failure-taxonomy and zero-tool tests
+Task T080: Write prompt and provider-routing tests
+Task T081: Write graph, two-turn, and observability tests
+
+After T082 establishes the typed contract:
+Task T083: Update and register parser/planner/reconciliation prompts
+Task T084: Implement deterministic structured conflict detection
+Task T085: Route the dedicated model purpose through the repair configuration
 ```
 
 ---
@@ -344,6 +424,8 @@ without it. It does not yet expose the standalone sync command, PR comment, or e
 5. **Polish**: Security, schemas, operations, full manual workflow validation.
 6. **Production remediation**: Capability-aware preparation, deterministic follow-up merging,
    targeted live evidence, then the full 18-case rerun.
+7. **Operation reconciliation**: Typed parser intent, conflict-only repair, fail-closed graph wiring,
+   targeted follow-up evidence, then the full 18-case rerun.
 
 ### Commit and Validation Discipline
 
