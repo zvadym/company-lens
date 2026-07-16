@@ -4,8 +4,8 @@
 
 This directory contains framework-neutral CompanyLens evaluation cases.
 
-The cases are the reviewed source of truth for deterministic evaluators and remote adapters.
-Adapter-specific records must be generated from these cases instead of duplicating expectations.
+These reviewed cases define the expected behavior used by deterministic evaluators and remote
+adapters. Adapter-specific records are generated from them instead of duplicating expectations.
 
 ## Dataset Slices
 
@@ -37,4 +37,4 @@ Repository paths, versions, case IDs, and canonical hashes produce deterministic
 An explicit `sync-evaluation-datasets` run upserts every active repository case, archives mapped
 remote items no longer present here, reconciles the versioned score contract, and verifies an exact
 timestamp-pinned snapshot. A dry run performs no project lookup or remote write. Langfuse remains a
-visible execution and comparison surface; edits made there never replace reviewed repository truth.
+visible execution and comparison surface; expected behavior is reviewed here and then synchronized.
