@@ -95,12 +95,13 @@ def _detect_operation_conflict(
             reasons.add("metrics" if intents else "missing")
             conflicting_ids.add(branch.branch_id)
             continue
-        if len(candidates) > 1:
+        represented.update(index for index, _intent in candidates)
+        candidate_semantics = {_intent_semantics(intent) for _index, intent in candidates}
+        if len(candidate_semantics) > 1:
             reasons.add("ambiguous")
             conflicting_ids.add(branch.branch_id)
             continue
-        index, intent = candidates[0]
-        represented.add(index)
+        _index, intent = candidates[0]
         if branch.operation != intent.operation:
             reasons.add("operation")
             conflicting_ids.add(branch.branch_id)
@@ -167,13 +168,31 @@ def _branch_metrics(plan: ExecutionPlan, branch: CalculationBranch) -> tuple[str
 def _metrics_compatible(intent: tuple[str, ...], branch: tuple[str, ...]) -> bool:
     if not intent:
         return True
-    return tuple(_normalized_metric(value) for value in intent) == tuple(
-        _normalized_metric(value) for value in branch
+    if len(intent) != len(branch):
+        return False
+    return all(
+        _metric_compatible(intent_metric, branch_metric)
+        for intent_metric, branch_metric in zip(intent, branch, strict=True)
     )
 
 
 def _normalized_metric(value: str) -> str:
-    return " ".join(value.split()).casefold()
+    return " ".join(_metric_tokens(value))
+
+
+def _metric_tokens(value: str) -> tuple[str, ...]:
+    return tuple(value.replace("_", " ").replace("-", " ").casefold().split())
+
+
+def _metric_compatible(intent_metric: str, branch_metric: str) -> bool:
+    intent_tokens = _metric_tokens(intent_metric)
+    branch_tokens = _metric_tokens(branch_metric)
+    return bool(branch_tokens) and intent_tokens[-len(branch_tokens) :] == branch_tokens
+
+
+def _intent_semantics(intent: EffectiveCalculationIntent) -> tuple[object, ...]:
+    # Company-qualified duplicates are equivalent when the operation contract is identical.
+    return (intent.operation, intent.window, intent.years, intent.base)
 
 
 def _scalar_parameters_compatible(

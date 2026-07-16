@@ -73,6 +73,43 @@ def test_one_intent_can_cover_multiple_company_branches() -> None:
     assert conflict.required is False
 
 
+def test_equivalent_company_qualified_intents_cover_matching_company_branches() -> None:
+    first = _source("net_revenue", uuid.UUID(int=1))
+    second = _source("ddog_revenue", uuid.UUID(int=2))
+    plan = ExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=(
+            first,
+            second,
+            _calculation("net_growth", first.branch_id, "quarter_over_quarter_growth"),
+            _calculation("ddog_growth", second.branch_id, "quarter_over_quarter_growth"),
+        ),
+    )
+    analysis = _analysis(
+        _intent("quarter_over_quarter_growth", metrics=("cloudflare revenue",)),
+        _intent("quarter_over_quarter_growth", metrics=("datadog revenue",)),
+    )
+
+    conflict = _detect_operation_conflict(analysis, plan, SessionMemory())
+
+    assert conflict.required is False
+
+
+def test_company_qualified_intents_still_surface_operation_disagreement() -> None:
+    analysis = _analysis(
+        _intent("quarter_over_quarter_growth", metrics=("cloudflare revenue",)),
+        _intent("percentage_change", metrics=("datadog revenue",)),
+    )
+
+    conflict = _detect_operation_conflict(
+        analysis,
+        _plan("quarter_over_quarter_growth"),
+        SessionMemory(),
+    )
+
+    assert conflict.reason_codes == ("ambiguous",)
+
+
 def test_explicit_current_intent_wins_over_requested_inheritance() -> None:
     previous = _plan("year_over_year_growth")
     analysis = _analysis(

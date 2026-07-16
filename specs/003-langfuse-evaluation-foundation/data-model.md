@@ -364,7 +364,7 @@ LLM-owned semantic intent emitted by parsing.
 | Field | Type | Rules |
 |---|---|---|
 | `operation` | CalculationOperation | One of the existing supported calculation operations |
-| `metrics` | string[] | Canonical typed metric constraints; empty when unspecified; supports two-input operations |
+| `metrics` | string[] | Canonical typed metric names without company, ticker, or entity qualifiers; empty when unspecified; supports two-input operations |
 | `window` | integer/null | Positive and required only for `rolling_average`; null for every other operation |
 | `years` | decimal/null | Positive and required only for `cagr`; null for every other operation |
 | `base` | decimal/null | Optional explicit base only for `normalised_index`; null for every other operation |
@@ -377,6 +377,10 @@ validated.
 
 Source-selection periods such as "last eight quarters" remain in typed source requests and are not
 encoded as calculation `window`. That field always means the rolling-average calculation window.
+Equivalent multi-company requests use one shared intent for the same operation, metrics, and scalar
+parameters. The detector also treats schema-valid duplicate intents as equivalent when their typed
+operation contract agrees and each metric ends with the complete canonical source-metric token
+sequence; it does not use company dictionaries or inspect user text.
 
 ### EffectiveCalculationIntent
 
@@ -390,7 +394,8 @@ Workflow-local projection used for comparison; it is not added to `AgentState` o
 | `source` | `current` or `inherited` | Privacy-safe provenance for conflict metadata |
 
 One effective intent may cover multiple company-specific calculation branches with the same source
-metrics. Every effective intent must be represented by at least one compatible branch.
+metrics. Equivalent duplicate intents may cover those branches without creating false ambiguity.
+Every effective intent must be represented by at least one compatible branch.
 
 ### OperationConflict
 

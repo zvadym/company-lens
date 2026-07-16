@@ -15,7 +15,11 @@ Exactly one bounded reconciliation call sequence is permitted when the structure
 an operation, metric, explicit-parameter, inheritance, missing-intent, or ambiguous-association
 conflict.
 
-The detector MUST NOT inspect free-form user text or use phrase dictionaries.
+The detector MUST NOT inspect free-form user text or use phrase dictionaries. Parser metric values
+contain canonical metric names only, without company, ticker, or entity qualifiers, and equivalent
+multi-company operation contracts use one shared intent. Schema-valid duplicate intents remain
+non-ambiguous when their operation/scalar contract agrees and their typed metric suffixes match the
+complete canonical source metrics; differing operation/scalar contracts remain ambiguous.
 
 ## Input
 

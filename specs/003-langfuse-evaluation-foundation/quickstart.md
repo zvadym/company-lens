@@ -352,9 +352,13 @@ pytest -q \
   tests/evals/test_agent_runner_infrastructure.py \
   tests/evals/test_operation_reconciliation_outcomes.py \
   tests/test_agent_openai_provider.py \
-  tests/test_observability_security.py
+  tests/test_observability_security.py \
+  tests/test_prompt_provider.py
 make check
 ```
+
+Focused reconciliation evidence on 2026-07-16 after the company-qualified metric regression fix:
+`92 passed`.
 
 Expected:
 
