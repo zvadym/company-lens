@@ -226,7 +226,9 @@ change is required.
 - If provider infrastructure still fails after per-node retries and the execution policy permits
   retries, replay the complete case once in a fresh isolated session under the same dataset item
   trace. Never replay observed behavior failures; a second provider failure remains infrastructure
-  with a not-evaluated gate, and the replay contributes to operational retry metrics.
+  with a not-evaluated gate. Expose the whole-case attempt count, include the replay in operational
+  retry metrics, and apply the API-call ceiling per attempt without scaling aggregate
+  latency/token/cost budgets.
 - Project `AgentState` to a privacy-safe observed result containing routing/tool/operation signals,
   operational metrics, answer presence, citation-validation status/counts/reason codes, and no raw
   final answer or evidence passage.

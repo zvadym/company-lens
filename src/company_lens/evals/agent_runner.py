@@ -233,6 +233,7 @@ def _operational_metrics(
         ),
         tool_calls_used=tool_calls_used,
         repair_attempts=state.get("repair_attempts", 0),
+        case_attempts=case_attempts,
         api_calls=len(model_usage) if model_usage else tool_calls_used,
         retry_count=(
             sum(max(0, item.attempts - 1) for item in node_attempts) + max(0, case_attempts - 1)

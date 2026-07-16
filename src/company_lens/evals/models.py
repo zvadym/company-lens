@@ -97,6 +97,7 @@ class ObservedOperationalMetrics(EvaluationModel):
     node_latencies: tuple[ObservedNodeLatency, ...] = ()
     tool_calls_used: int | None = Field(default=None, ge=0)
     repair_attempts: int | None = Field(default=None, ge=0)
+    case_attempts: int = Field(default=1, ge=1)
     api_calls: int | None = Field(default=None, ge=0)
     retry_count: int | None = Field(default=None, ge=0)
     node_attempts: tuple[ObservedNodeAttempt, ...] = ()

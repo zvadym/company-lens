@@ -59,7 +59,13 @@ def check_operational_budgets(
         "",
         failures,
     )
-    passed &= _check_maximum("API calls", operational.api_calls, budget.max_api_calls, "", failures)
+    # Model usage is aggregated across whole-case replays, so retain the per-attempt API ceiling.
+    max_api_calls = (
+        budget.max_api_calls * operational.case_attempts
+        if budget.max_api_calls is not None
+        else None
+    )
+    passed &= _check_maximum("API calls", operational.api_calls, max_api_calls, "", failures)
     passed &= _check_maximum(
         "retry count", operational.retry_count, budget.max_retry_count, "", failures
     )

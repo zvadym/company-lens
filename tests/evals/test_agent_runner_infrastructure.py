@@ -68,6 +68,7 @@ def test_persistent_provider_failure_is_infrastructure_error_after_one_case_retr
     assert observations[0].failure_code == "provider_execution_failed"
     assert observations[0].operational is not None
     assert observations[0].operational.retry_count == 1
+    assert observations[0].operational.case_attempts == 2
 
 
 def test_transient_provider_failure_replays_the_whole_conversation_in_a_new_session() -> None:
@@ -127,3 +128,4 @@ def test_transient_provider_failure_replays_the_whole_conversation_in_a_new_sess
     assert observations[0].outcome == "observed"
     assert observations[0].operational is not None
     assert observations[0].operational.retry_count == 1
+    assert observations[0].operational.case_attempts == 2
