@@ -15,6 +15,9 @@ research sessions, and versioned YAML gates. It adds a typed orchestration layer
 score contract, citation applicability, exact snapshot manifest, and explicit separation between
 quality failures and evaluation-infrastructure failures. It also adds fail-closed Langfuse project
 identity, manifest-driven replay, and an atomic recovery journal for interruption-safe artifacts.
+The final remediation adds LLM-owned typed calculation intents and a conflict-triggered repair-model
+reconciliation node so explicit and inherited calculation operations remain semantically consistent
+without phrase dictionaries or unrestricted plan rewriting.
 
 ## Technical Context
 
@@ -39,13 +42,14 @@ PostgreSQL dev stack
 support 18-25 selected cases; default to one case at a time; preserve existing per-case latency,
 tool, retry, token, and cost budgets from `eval-full.v1.yaml`; financial-only follow-ups perform no
 SEC document processing or embedding calls and do not repeat model-based company extraction after
-preparation
+preparation; consistent calculation plans add zero reconciliation model calls
 
 **Constraints**: Repository data is authoritative; no LLM-as-judge; no automatic required PR gate;
 no raw provider prompts/payloads, retrieved passages, hidden reasoning, invalid drafts, credentials,
 or exception internals in reports/comments; incomplete infrastructure runs cannot emit a quality
 pass/fail verdict; every Langfuse dataset/score operation and provider call requires verified
-expected project identity; replay never mutates synchronized datasets
+expected project identity; replay never mutates synchronized datasets; application code does not
+infer calculation operations from phrase dictionaries; reconciliation cannot change plan topology
 
 **Scale/Scope**: Two initial repository datasets, eight categories, 18-25 total cases, one Langfuse
 dataset run per selected dataset, and one umbrella evaluation execution per manual invocation
@@ -77,6 +81,8 @@ dataset run per selected dataset, and one umbrella evaluation execution per manu
 ```text
 specs/003-langfuse-evaluation-foundation/
 ├── follow-up-remediation-design.md
+├── operation-reconciliation-remediation-design.md
+├── plan-reference-remediation-design.md
 ├── plan.md
 ├── research.md
 ├── data-model.md
@@ -87,6 +93,7 @@ specs/003-langfuse-evaluation-foundation/
 │   ├── manual-workflow.md
 │   ├── evaluation-execution.schema.json
 │   ├── evaluation-journal.schema.json
+│   ├── operation-reconciliation.md
 │   └── score-contract.schema.json
 └── tasks.md
 ```
@@ -127,6 +134,11 @@ src/company_lens/evals/
 src/company_lens/observability/
 ├── langfuse_client.py         # typed client ownership and project identity
 └── telemetry.py               # instrumentation using shared client lifecycle
+
+src/company_lens/agent/
+├── calculation_intents.py             # operation intent/reconciliation value models
+├── workflow_operation_conflicts.py    # typed intent/plan compatibility detection
+└── workflow_operation_reconciliation.py # bounded LLM reconciliation node
 
 src/company_lens/
 ├── config.py                  # expected Langfuse project setting
@@ -306,6 +318,63 @@ change is required.
 - Preserve current metrics when explicit and otherwise inherit prior metrics; preserve the current
   plan operation with the existing frame fallback for inherited calculations.
 
+### 8. LLM Calculation Operation Reconciliation
+
+- Extract `CalculationOperation` plus the new `CalculationIntent`, `BranchOperationDecision`, and
+  `OperationReconciliation` models into `src/company_lens/agent/calculation_intents.py`. Re-export
+  the existing operation type through `schemas.py` so callers retain their current import surface
+  while the already oversized schema module does not grow further. Provider-facing DTO scalar
+  values use JSON-schema-compatible numeric fields and convert to Decimal-backed domain values.
+- Extend `ModelQuestionAnalysis` and `QuestionAnalysis` with `calculation_intents` and
+  `inherit_previous_calculation_intents`, using empty/false defaults for repository fixtures.
+  Update `_domain_question_analysis` and deterministic follow-up parse fallback so typed intent and
+  inheritance state survive normalization without deriving operations from text.
+- Update `prompts/agent/parse-question.txt` to require typed intents for calculation requests and an
+  inheritance flag for vague compatible follow-ups. Update `prompts/agent/plan-request.txt` so the
+  planner receives and should honor those typed intents. Register a new versioned
+  `agent/reconcile-operations` prompt in `prompts/manifest.yaml`.
+- Implement effective-intent resolution and conflict detection in
+  `workflow_operation_conflicts.py`. Explicit current intents win; requested inheritance derives
+  only from `SessionMemory.last_execution_plan`, which already stores the final validated plan.
+  Compare typed operations, source metrics, and explicit `window|years|base` values. One intent may
+  cover multiple company branches. Do not inspect free-form text in this module.
+- Implement `workflow_operation_reconciliation.py` as a dedicated node between `plan_request` and
+  `hydrate_cached_results`. Skip without a provider call when structures agree. On conflict, send
+  the current question, typed intents, inherited final-plan summaries, and privacy-safe branch
+  summaries through `_generate_structured_with_retries` using the repair model and a dedicated
+  `ModelPurpose.OPERATION_RECONCILIATION`.
+- Require the reconciliation response to cover every calculation branch exactly once. Apply only
+  operation and scalar parameter values, preserve all branch topology/source fields, and rerun
+  `_normalize_and_validate_plan` before any cache or tool node. A still-conflicting or structurally
+  incompatible response returns terminal validation code `operation_reconciliation_failed`.
+- Route the new model purpose to the existing repair-model configuration in
+  `openai_provider.py`; add no setting or environment variable. This is a localized routing-table
+  change in an oversized provider module; extracting provider configuration for one enum entry
+  would increase coupling and is intentionally deferred.
+- Expose skipped/required/conflict/outcome categories in trajectory details and rely on the existing
+  generation instrumentation for model, prompt, token, latency, and retry visibility. Do not add a
+  new evaluation score or gate threshold: the existing operation, case, operational, and
+  infrastructure checks remain authoritative.
+- Preserve failure taxonomy. Exhausted provider/schema response failures retain provider categories
+  and become infrastructure/not-evaluated. A schema-valid but incomplete, duplicate, unknown,
+  incompatible, or still-conflicting mapping becomes observed quality failure
+  `operation_reconciliation_failed`. Both paths execute zero tools for the affected plan.
+
+Implementation order is test-first and dependency-bound:
+
+1. Add failing typed-intent/response schema tests, then extract the calculation contract models and
+   extend parser DTO/domain normalization with backward-compatible defaults.
+2. Add failing structured conflict tests, then implement effective inheritance and pure conflict
+   detection without model calls or text access.
+3. Add failing reconciliation application/failure tests, then implement complete response coverage,
+   topology-preserving copy updates, re-detection, and full plan validation.
+4. Add failing graph/prompt/provider routing tests, then register the prompt/model purpose, wire the
+   node between planning and hydration, and expose sanitized trajectory metadata.
+5. Add the exact two-turn end-to-end regression plus evaluation infrastructure classification and
+   observability-security coverage; update test fakes only as each contract requires.
+6. Run focused suites, `graphify update .`, `make check`, targeted follow-up live validation, then
+   the full 18-case workflow. Record evidence before marking the PR ready.
+
 ## Testing Strategy
 
 - Dataset tests: citation defaults/enums, category minimums, citation-scenario matrix, deterministic
@@ -328,6 +397,13 @@ change is required.
   paths and assert that unrequested SEC/processing/embedding services are never invoked.
 - Follow-up workflow tests cover inherit, replace, and extend, mixed company provenance, metric and
   operation inheritance, and the absence of post-preparation LLM extraction.
+- Operation-intent tests cover single/multiple intents, multi-input metrics, inheritance, scalar
+  parameters, and fixture defaults. Conflict tests cover no-call consistency, the exact QoQ versus
+  `percentage_change` trace, multi-company branch reuse, mixed operations, and ambiguous mappings.
+- Reconciliation tests prove topology immutability, complete branch coverage, parameter/arity
+  validation, bounded retries, provider-versus-quality taxonomy, zero-tool failure paths, prompt
+  metadata, and operational usage. An end-to-end two-turn regression persists the reconciled QoQ
+  plan and inherits it when MongoDB is added.
 - Live acceptance runs the four follow-up cases first and requires all deterministic, citation, and
   operational checks to pass without threshold changes before the full 18-case workflow runs.
 
@@ -337,11 +413,14 @@ change is required.
 typed validation summaries, uses PostgreSQL-backed live sessions, avoids public sensitive content,
 and adds focused contract/unit/integration coverage. Capability-aware preparation strengthens the
 constitution's deterministic-data-path requirement by preventing narrative ingestion for
-structured-only questions. No constitution exception is required.
+structured-only questions. LLM operation reconciliation preserves model-owned interpretation while
+keeping numeric execution typed, topology-preserving, fail-closed, and observable. No constitution
+exception is required.
 
 ## Complexity Tracking
 
 No constitution violations require justification. The added modules split existing oversized
 evaluation/CLI responsibilities and extract preparation requirements/readiness from the 280-line
 on-demand ingestion module along stable contracts rather than introducing a new service or storage
-system.
+system. Calculation intent models are extracted instead of extending the 654-line `schemas.py`;
+conflict detection and reconciliation remain separate focused workflow modules.

@@ -26,6 +26,10 @@
 - Q: Do missing, unknown-evidence, and semantic-mismatch citation scenarios expect invalid final answers? → A: No. They are challenge-attempt metadata describing the failure mode the case is designed to resist; every citation-required golden case still expects a citation-valid final answer.
 - Q: How is optional PR reporting represented without changing the evaluation verdict? → A: The recovery journal has a separate `not_requested|pending|succeeded|failed` reporting status. The reporting command may advance only that status and reporting failure codes; evaluation status, gate status, manifest, runs, scores, and final execution JSON remain unchanged.
 
+### Session 2026-07-16
+
+- Q: How should the agent handle a typed calculation operation selected by the parser that conflicts with the planner's calculation branches? → A: The parser remains LLM-owned and emits typed calculation intents without phrase dictionaries; a structured conflict invokes one bounded repair-model reconciliation call that may change only calculation operations and scalar parameters, while provider failures remain infrastructure and schema-valid semantic incompatibility remains a quality failure.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Run Manual Evaluation Visible In Langfuse (Priority: P1)
@@ -50,6 +54,7 @@ A maintainer can manually run a live evaluation for selected golden datasets and
 10. **Given** configured credentials are valid but belong to a different Langfuse project than the expected project ID, **When** evaluation preflight runs, **Then** no remote dataset write or provider-backed case call occurs and the execution is errored with a not-evaluated gate.
 11. **Given** the evaluation process is interrupted after work begins, **When** artifacts are collected or execution is recovered, **Then** the latest atomic journal contains every terminal transition completed before interruption and can produce a privacy-safe partial execution artifact.
 12. **Given** a provider-infrastructure failure remains after the configured per-node retries, **When** the execution policy permits retries, **Then** the runner replays the complete case at most once in a fresh isolated session under the same Langfuse dataset item trace; a successful replay is evaluated normally, while a repeated failure remains an infrastructure error with a not-evaluated gate.
+13. **Given** parser calculation intents conflict with planner calculation branches, **When** the agent prepares the plan for execution, **Then** one bounded LLM reconciliation call resolves operation and scalar parameters without changing branch topology, the complete plan is revalidated before tools run, and the reconciliation decision and usage are visible in Langfuse.
 
 ---
 
@@ -164,6 +169,10 @@ An agent developer can add reviewed critical cases to the repository dataset so 
 - **FR-039**: Follow-up resolution MUST deterministically inherit, replace, or extend company sets from the current resolved companies and explicit add/include intent, preserve compatible metrics and operations, and record provenance separately for each final company target.
 - **FR-040**: Completing or skipping on-demand preparation MUST enrich prepared tickers through deterministic local resolution and MUST NOT repeat model-based company extraction solely because preparation ran.
 - **FR-041**: When per-node retries are enabled, the evaluation runner MUST replay a complete case at most once after an exhausted provider-infrastructure failure, use a fresh isolated session for the replay, keep both attempts under the same Langfuse dataset item trace, include the replay in operational retry metrics, and classify a repeated failure as infrastructure with a not-evaluated gate; observed behavior failures MUST NOT trigger this replay.
+- **FR-042**: The parse model MUST express zero or more typed calculation intents containing operation, associated metrics, and explicit scalar parameters, plus whether a compatible follow-up inherits previous final calculation intents; application code MUST NOT derive these intents from phrase dictionaries or free-form text matching.
+- **FR-043**: After planning and before any tool execution, the system MUST compare effective typed calculation intents with planner calculation branches and invoke exactly one bounded operation-reconciliation model call only when the structured operations, metrics, explicit parameters, or inheritance state conflict or cannot be associated unambiguously.
+- **FR-044**: Operation reconciliation MUST return exactly one decision for every existing calculation branch, MAY change only operation and scalar operation parameters, MUST preserve branch IDs, order, topology, dependencies, inputs, source requests, companies, and metrics, and MUST pass complete domain plan validation before tools execute.
+- **FR-045**: Exhausted reconciliation provider or response failures MUST remain infrastructure with a not-evaluated gate, while a schema-valid but missing, duplicate, unknown, incompatible, or still-conflicting reconciliation MUST produce an observed `operation_reconciliation_failed` quality failure; both paths MUST execute zero tools for the affected plan and remain privacy-safely visible in Langfuse.
 
 ### Key Entities
 
@@ -176,6 +185,8 @@ An agent developer can add reviewed critical cases to the repository dataset so 
 - **Evaluation Recovery Journal**: An atomically replaced, privacy-safe checkpoint of execution state and terminal transitions used to recover or materialize partial artifacts after interruption; it is not a substitute for the immutable run manifest.
 - **Evaluation Score**: A deterministic or citation-validation outcome attached to a case or run and governed by the repository-authored versioned score contract.
 - **Evaluation Gate**: A repository-authored set of thresholds for evaluation metrics and operational budgets with a terminal status of passed, failed, or not evaluated.
+- **Calculation Intent**: An LLM-produced typed operation, metric set, and explicit scalar parameters, or a compatible follow-up instruction to inherit intents from the previous final validated plan.
+- **Operation Reconciliation**: A conflict-triggered LLM decision covering every calculation branch while permitting changes only to operation and scalar operation parameters.
 - **PR Evaluation Summary**: A pull-request comment summarizing the manual evaluation status, selected datasets, scores, failed cases, artifact links, and Langfuse links.
 
 ## Success Criteria *(mandatory)*
@@ -202,6 +213,9 @@ An agent developer can add reviewed critical cases to the repository dataset so 
 - **SC-018**: The targeted four-case follow-up evaluation reaches `1.0` for company accuracy, metric accuracy, operation accuracy, follow-up safety accuracy, and citation validity pass rate without increasing evaluation-gate thresholds.
 - **SC-019**: Financial-only follow-up traces contain zero SEC document-processing and embedding operations, perform no duplicate post-preparation model company extraction, and pass the existing operational budgets.
 - **SC-020**: Automated runner tests prove that one transient provider failure replays the full conversation exactly once in a fresh session and can produce a normal observed result, while two consecutive provider failures produce one sanitized infrastructure outcome with one case-level retry recorded.
+- **SC-021**: An automated end-to-end regression in which the parser requests QoQ, the planner emits `percentage_change`, and the reconciler selects `quarter_over_quarter_growth` completes the initial turn and an add-company follow-up with the final reconciled operation persisted and inherited.
+- **SC-022**: Consistent calculation plans make zero reconciliation model calls, while every injected provider failure or schema-valid semantic reconciliation failure executes zero tools and produces the required infrastructure-versus-quality classification.
+- **SC-023**: Targeted and full live validation reach `operation_accuracy=1.0` without threshold changes, and every actual conflict exposes typed intent, sanitized conflict category, reconciliation generation, final operation, model usage, and outcome in Langfuse.
 
 ## Assumptions
 

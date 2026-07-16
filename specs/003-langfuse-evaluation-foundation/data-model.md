@@ -351,6 +351,100 @@ Follow-up finalization consumes two `ResolvedQuery` values without persisting a 
 remain `current_question` (or the existing prepared-ticker source where applicable); companies found
 only in the merged query are `follow_up_context`.
 
+## Calculation Operation Reconciliation Models
+
+These are immutable in-memory agent contracts. They require no database migration. Final session
+memory continues to persist the validated `ExecutionPlan`; inherited intents are derived only from
+that final plan.
+
+### CalculationIntent
+
+LLM-owned semantic intent emitted by parsing.
+
+| Field | Type | Rules |
+|---|---|---|
+| `operation` | CalculationOperation | One of the existing supported calculation operations |
+| `metrics` | string[] | Canonical typed metric constraints; empty when unspecified; supports two-input operations |
+| `window` | integer/null | Positive when explicitly specified; required by a reconciled rolling average |
+| `years` | decimal/null | Positive when explicitly specified; required by a reconciled CAGR |
+| `base` | decimal/null | Explicit normalized-index base when specified |
+
+`QuestionAnalysis.calculation_intents` defaults to an empty tuple for repository fixtures.
+`QuestionAnalysis.inherit_previous_calculation_intents` defaults to false. Explicit current intents
+take precedence over inheritance. A vague compatible follow-up sets inheritance true and derives its
+effective intents from `SessionMemory.last_execution_plan` after that plan has been reconciled and
+validated.
+
+### EffectiveCalculationIntent
+
+Workflow-local projection used for comparison; it is not added to `AgentState` or persistence.
+
+| Field | Type | Rules |
+|---|---|---|
+| `operation` | CalculationOperation | Copied from explicit intent or final previous plan |
+| `metrics` | string[] | Matched against numeric source requests, never free-form text |
+| `window`, `years`, `base` | scalar/null | Non-null values are authoritative conflict constraints |
+| `source` | `current` or `inherited` | Privacy-safe provenance for conflict metadata |
+
+One effective intent may cover multiple company-specific calculation branches with the same source
+metrics. Every effective intent must be represented by at least one compatible branch.
+
+### OperationConflict
+
+Sanitized result of deterministic structured comparison.
+
+| Field | Type | Rules |
+|---|---|---|
+| `required` | boolean | False only when intents and every calculation branch are compatible |
+| `reason_codes` | string[] | Allowlisted categories such as operation, metrics, parameters, inheritance, missing, or ambiguous |
+| `branch_ids` | string[] | Existing conflicting calculation branch IDs only |
+
+The detector reads typed intent, branch, source-request, and previous-final-plan fields. It never
+reads user text. `required=false` causes zero reconciliation model calls.
+
+### BranchOperationDecision
+
+Structured repair-model decision.
+
+| Field | Type | Rules |
+|---|---|---|
+| `branch_id` | string | Must identify one existing calculation branch |
+| `operation` | CalculationOperation | Final operation for that branch |
+| `window` | integer/null | Positive; required for rolling average |
+| `years` | decimal/null | Positive; required for CAGR |
+| `base` | decimal/null | Valid normalized-index base when applicable |
+
+Decision `window` and `years` apply exactly, so null clears an irrelevant prior value. Decision
+`base=null` preserves the existing non-null branch base; a non-null decision replaces it.
+
+### OperationReconciliation
+
+| Field | Type | Rules |
+|---|---|---|
+| `branch_operations` | BranchOperationDecision[] | Exactly one decision for every calculation branch |
+
+Application invariants:
+
+- branch count, order, IDs, kinds, dependencies, input references, optional flags, and source/chart
+  fields remain byte-for-byte unchanged;
+- only `operation`, `window`, `years`, and `base` may change;
+- operation arity must remain compatible with unchanged inputs;
+- every effective intent must be represented after application;
+- complete domain plan validation runs before cache hydration or tools;
+- provider/response exhaustion preserves provider error categories;
+- schema-valid semantic incompatibility emits `operation_reconciliation_failed` as a validation
+  behavior failure;
+- both failure paths execute zero tools for the affected plan.
+
+State transitions:
+
+```text
+planned + consistent -> reconciliation skipped -> validated final plan
+planned + conflict -> reconciling -> reconciled -> validated final plan
+planned + conflict -> provider failure -> infrastructure/not evaluated
+planned + conflict -> semantic invalidity -> observed quality failure
+```
+
 ## Reporting Model
 
 ### PREvaluationSummary

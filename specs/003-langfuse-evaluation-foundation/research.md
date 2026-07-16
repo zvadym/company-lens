@@ -309,3 +309,40 @@ Local ticker resolution already provides the required local company row without 
   a sufficient deterministic lookup key.
 - Leave duplicate calls and raise the API-call limit: rejected because it preserves unnecessary
   latency and nondeterminism.
+
+## Decision 18: Reconcile typed calculation intent with one conflict-triggered repair call
+
+**Decision**: Extend parse output with typed calculation intents and an inheritance flag. Compare
+those typed values with the planner's calculation branches after planning. When and only when they
+conflict or cannot be associated unambiguously, invoke one bounded structured repair-model call that
+returns operation and scalar-parameter decisions for every calculation branch.
+
+**Rationale**: Live workflow `29476087090` proved that the planning model can label a request and
+branch titles as QoQ while selecting `percentage_change` as the structured operation. A prior run of
+the same code selected the correct operation, so prompt-only enforcement is insufficient. The
+parser remains the LLM-owned semantic interpretation boundary; Python compares typed state rather
+than matching phrases. A narrow reconciliation response can correct the semantic field without
+allowing an unrestricted second planner to rewrite sources or topology.
+
+The existing OpenTelemetry instrumentation already records each model call as a Langfuse generation
+with model, parameters, usage, prompt metadata, and propagated trace/session context. A dedicated
+model purpose and registered prompt therefore provide the required visibility without a new
+Langfuse adapter or score. Langfuse documents generations as specialized OTel spans and supports
+metadata on observations for filtering and correlation:
+
+- <https://langfuse.com/docs/observability/sdk/overview>
+- <https://langfuse.com/docs/observability/features/metadata>
+- <https://langfuse.com/docs/prompt-management/features/link-to-traces>
+
+**Alternatives considered**:
+
+- Deterministic phrase dictionaries: rejected by the product requirement that the LLM determine
+  operation semantics and because language/wording coverage would remain brittle.
+- Retry the entire planner: rejected because unrelated valid branches can change and the same
+  semantic mismatch can recur.
+- Reconcile every calculation plan: rejected because consistent plans should add zero latency,
+  tokens, or provider risk.
+- Allow reconciliation to rebuild topology: rejected because it becomes a second planner and
+  expands the failure surface beyond the observed operation/parameter mismatch.
+- Fall back to parser or planner after reconciliation failure: rejected because executing a known
+  conflict violates fail-closed numeric correctness.

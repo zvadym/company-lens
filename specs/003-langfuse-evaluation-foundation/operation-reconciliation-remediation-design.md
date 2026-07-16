@@ -2,7 +2,7 @@
 
 **Date**: 2026-07-16  
 **Feature**: `003-langfuse-evaluation-foundation`  
-**Status**: Approved design, implementation planning pending
+**Status**: Approved design, implementation plan complete
 
 ## Context
 
@@ -81,7 +81,7 @@ specific conflict boundary.
 ```text
 CalculationIntent
   operation: CalculationOperation
-  metric: string | null
+  metrics: string[]
   window: integer | null
   years: decimal | null
   base: decimal | null
@@ -94,7 +94,8 @@ QuestionAnalysis
 Rules:
 
 - `calculation_intents` may contain multiple operations for a mixed calculation request.
-- `metric` associates an intent with compatible planner inputs when the parser can identify it.
+- `metrics` associates an intent with compatible planner inputs, including two-input operations such
+  as margin or correlation; an empty tuple means the parser cannot identify a metric constraint.
 - Null parameters mean the user did not specify that parameter; they do not conflict with a
   compatible planner default.
 - Explicit non-null `window`, `years`, or `base` values are authoritative intent constraints.
@@ -121,8 +122,8 @@ Before conflict detection, the workflow builds effective intents:
 5. If a calculation plan exists but neither explicit nor inherited typed intent is available, mark
    the plan as requiring reconciliation rather than guessing from text.
 
-One effective intent may apply to multiple company-specific branches sharing the same metric and
-operation. Multiple effective intents may map to separate branch groups in one plan.
+One effective intent may apply to multiple company-specific branches sharing the same compatible
+metrics and operation. Multiple effective intents may map to separate branch groups in one plan.
 
 ## Structured Conflict Detection
 
@@ -212,6 +213,9 @@ Validation requires:
 - operation input arity remains compatible with the unchanged inputs;
 - required parameters are present for operations such as CAGR and rolling average;
 - parameter values satisfy existing domain bounds;
+- decision `window` and `years` are applied exactly, including null to clear an irrelevant value;
+  decision `base=null` preserves the branch's existing non-null base, while a non-null base replaces
+  it;
 - the reconciled plan represents every effective intent without new conflicts.
 
 The reconciler cannot repair an incompatible topology. It fails closed instead.
@@ -283,7 +287,7 @@ reason codes and aggregate operational metrics.
 - exact live failure: parser QoQ versus planner `percentage_change`;
 - one intent maps to multiple company branches;
 - multiple operations map to separate branch groups;
-- metric and scalar-parameter conflicts;
+- metrics and scalar-parameter conflicts;
 - compatible follow-up inherits final previous-plan operations;
 - missing or ambiguous effective intents require reconciliation.
 

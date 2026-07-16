@@ -333,3 +333,57 @@ Evidence links:
 - targeted follow-up Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkjjeby02zcad0cu4a6axxc/runs/56a0b560-437a-439a-9c77-22ae922a141b>
 - full core Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkj2qu802hnad0cak5vuplt/runs/3195c805-73bd-463a-b9a9-726eb181c7f1>
 - full follow-up Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkjjeby02zcad0cu4a6axxc/runs/2b4f82d6-485a-4a0c-972c-3c4a464f631d>
+
+## 14. Validate LLM Operation Reconciliation
+
+Run the focused contract and workflow suites before the full repository gate:
+
+```bash
+pytest -q \
+  tests/agent_workflow/test_operation_intents.py \
+  tests/agent_workflow/test_operation_conflicts.py \
+  tests/agent_workflow/test_operation_reconciliation.py \
+  tests/agent_workflow/test_operation_reconciliation_failures.py \
+  tests/agent_workflow/test_operation_reconciliation_flow.py \
+  tests/agent_workflow/test_prompt_and_repair_context.py \
+  tests/evals/test_agent_runner_infrastructure.py \
+  tests/test_observability_security.py
+make check
+```
+
+Expected:
+
+- a consistent parser/planner calculation contract makes zero
+  `operation_reconciliation` model calls;
+- the exact QoQ parser intent versus planner `percentage_change` regression invokes one bounded
+  reconciliation sequence and produces final `quarter_over_quarter_growth` branches;
+- the reconciler may update only operation, window, years, and base; topology and source requests
+  remain unchanged;
+- an add-company follow-up inherits the previous final reconciled operation;
+- provider/response exhaustion produces infrastructure plus `gate_status=not_evaluated` and zero
+  tools;
+- a schema-valid incompatible mapping produces observed `operation_reconciliation_failed`, a failed
+  quality gate, and zero tools;
+- prompt metadata, model purpose, retries, tokens, latency, and sanitized conflict/outcome metadata
+  are observable without forbidden public content.
+
+Then run the manual workflow with `dataset_scope=follow_up`, `max_cases=100`, and no PR number.
+Require all four cases and every deterministic/citation/operational score to pass. Inspect Langfuse:
+
+- consistent cases show `reconcile_operations=skipped` and no reconciliation generation;
+- any conflict shows one `operation_reconciliation` generation linked under the dataset item trace;
+- the final observed operation matches the reconciled plan;
+- the dataset run contains exactly four unique item-to-trace links.
+
+Only after the targeted run passes, run `dataset_scope=all`, `max_cases=100`, and PR `#68`. Require:
+
+- execution completed with `gate_status=passed`;
+- exactly 18 terminal cases and 18 Langfuse traces;
+- canonical dataset-run linkage of 14 core plus four follow-up items;
+- `operation_accuracy=1.0` and every other pass rate `1.0`;
+- `missing_result_rate=0.0`;
+- zero infrastructure outcomes and zero failed citation validations;
+- successful PR reporting and immutable artifact/run ID agreement.
+
+Append the targeted/full workflow IDs, execution IDs, Langfuse run IDs, cardinality, conflict/no-call
+trace evidence, and final local test count here before changing PR `#68` from Draft.
