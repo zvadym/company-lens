@@ -399,3 +399,33 @@ Only after the targeted run passes, run `dataset_scope=all`, `max_cases=100`, an
 
 Append the targeted/full workflow IDs, execution IDs, Langfuse run IDs, cardinality, conflict/no-call
 trace evidence, and final local test count here before changing PR `#68` from Draft.
+
+Targeted reconciliation validation completed on 2026-07-16 using commit
+`d2ae167a31cd2f0d9400999d4c93f9a00fb4776e`, workflow `29490054027`, execution
+`55c1bc76-df8b-498e-b2a3-0eccfbf1298c`, and follow-up Langfuse run
+`0708e8d1-767d-4c9a-9329-118750215024`:
+
+- the execution completed with `gate_status=passed`; all four cases passed and every quality,
+  citation, and operational pass rate was `1.0`, including `operation_accuracy=1.0`, while
+  `missing_result_rate=0.0`;
+- the canonical dataset run contained exactly four unique item-to-trace links;
+- all passing reconciliation spans reported `required=false`, `attempts=0`,
+  `decision_count=0`, and `outcome=not_required`, with zero `operation_reconciliation`
+  generations;
+- trace `75300eb1ff4de90216d788491b9192af` for the add-company case recorded two QoQ branches on the
+  initial turn and three QoQ branches after adding MongoDB, proving no-call operation inheritance;
+- discovery workflow `29489142585`, execution `e249d1d8-705f-4525-bb16-da8fac239267`, Langfuse
+  run `527314c6-bfd8-417d-879b-4389e996c3b6`, and trace
+  `1402fa5c5f840c5f26502307e8adc098` recorded one conflict generation with `required=true`,
+  `conflict_reasons=[metrics]`, two decisions, one attempt, and `outcome=semantic_failure`; this
+  evidence exposed company-qualified duplicate metrics and produced the typed suffix/equivalence
+  regression fix validated by the passing run;
+- local validation passed Ruff, formatting, strict mypy for 176 source files, and pytest with
+  `454 passed, 3 skipped`; branch CI check, web check, security scan, and image scan also passed.
+
+Evidence links:
+
+- targeted workflow: <https://github.com/zvadym/company-lens/actions/runs/29490054027>
+- passing follow-up Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkjjeby02zcad0cu4a6axxc/runs/0708e8d1-767d-4c9a-9329-118750215024>
+- passing add-company trace: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/traces/75300eb1ff4de90216d788491b9192af>
+- discovery conflict trace: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/traces/1402fa5c5f840c5f26502307e8adc098>
