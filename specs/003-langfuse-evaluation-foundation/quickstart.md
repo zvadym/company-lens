@@ -429,3 +429,47 @@ Evidence links:
 - passing follow-up Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkjjeby02zcad0cu4a6axxc/runs/0708e8d1-767d-4c9a-9329-118750215024>
 - passing add-company trace: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/traces/75300eb1ff4de90216d788491b9192af>
 - discovery conflict trace: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/traces/1402fa5c5f840c5f26502307e8adc098>
+
+Final replay-aware validation completed on 2026-07-16. Full workflow `29490509984` first
+established all 18 trace links and passed every semantic/citation check, but correctly failed the
+operational gate because a permitted whole-case replay aggregated 16 model API calls against a
+single-attempt ceiling of 10. Langfuse trace `9aecc506a095586c9c353b6b77fecd7f` proved the replay
+through its `-retry-1` session while the public operational result could expose only the combined
+`retry_count=1`. The remediation added positive privacy-safe `case_attempts`, retained the ceiling
+of 10 API calls per attempt, and left aggregate latency/token/cost limits unchanged.
+
+Targeted revalidation used commit `7b3ef90f8d88c623ee81e84f228efc17aa1e128a`, workflow
+`29491463620`, execution `c1652720-da8b-4abd-96d8-fe87a4adf08c`, and follow-up Langfuse run
+`432af60b-8d39-49da-ba29-6ed301495fae`. It completed 4/4 with every pass rate `1.0` and
+`missing_result_rate=0.0`.
+
+The final full validation used the same commit, workflow `29491983181`, execution
+`9da79a92-4b02-4cf4-a777-6cd53643e1e0`, core Langfuse run
+`619943e1-6354-4529-82ba-207ee6c8a1fb`, and follow-up Langfuse run
+`99b1ac74-4aae-40ad-8715-f579997723b8`:
+
+- the execution and both dataset runs completed with `gate_status=passed`;
+- the immutable artifact and Langfuse API agreed on exactly 14 unique core traces plus four unique
+  follow-up traces, with 18 unique terminal journal identities and zero failed cases;
+- `operation_accuracy=1.0`, every other quality/citation/operational pass rate was `1.0`, and
+  `missing_result_rate=0.0` for both datasets;
+- journal reporting was `succeeded` for `zvadym/company-lens#68`, with no evaluation or reporting
+  failure codes, and the canonical PR comment contained the same execution and dataset-run IDs;
+- follow-up trace `2f1065b00a78f7340ad5a586d43d6b7b` demonstrated the new contract under real provider
+  recovery: `case_attempts=2`, `api_calls=17`, and `retry_count=2` passed the unchanged 10-call
+  per-attempt ceiling while preserving valid citations and QoQ operation inheritance;
+- all passing follow-up reconciliation spans exposed sanitized `required`, intent/final operations,
+  branch/decision counts, attempts, and outcome metadata; consistent plans made zero
+  `operation_reconciliation` generations;
+- final local validation passed Ruff, formatting, strict mypy for 176 source files, and pytest with
+  `458 passed, 3 skipped`.
+
+Final evidence links:
+
+- targeted replay-aware workflow: <https://github.com/zvadym/company-lens/actions/runs/29491463620>
+- targeted follow-up Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkjjeby02zcad0cu4a6axxc/runs/432af60b-8d39-49da-ba29-6ed301495fae>
+- final full workflow: <https://github.com/zvadym/company-lens/actions/runs/29491983181>
+- final core Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkj2qu802hnad0cak5vuplt/runs/619943e1-6354-4529-82ba-207ee6c8a1fb>
+- final follow-up Langfuse run: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/datasets/cmrkjjeby02zcad0cu4a6axxc/runs/99b1ac74-4aae-40ad-8715-f579997723b8>
+- replay-aware passing trace: <https://cloud.langfuse.com/project/cmqqaz8v303w6ad0d817ljh2t/traces/2f1065b00a78f7340ad5a586d43d6b7b>
+- canonical PR comment: <https://github.com/zvadym/company-lens/pull/68#issuecomment-4968327026>

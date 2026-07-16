@@ -264,7 +264,7 @@ both execute zero tools and expose only privacy-safe Langfuse metadata.
 - [X] T088 [US1] Run the focused reconciliation, provider, evaluation-infrastructure, and observability suites from `specs/003-langfuse-evaluation-foundation/quickstart.md` and record the final focused test count there
 - [X] T089 [US1] Run `graphify update .`, inspect impact in `graphify-out/graph.json`, run `make check`, and resolve every failure in files changed by the reconciliation remediation before any live workflow
 - [X] T090 [US1] Run the four-case `follow_up` manual workflow, require every deterministic/citation/operational score and `operation_accuracy=1.0`, inspect conflict and no-call traces in Langfuse, and append workflow/execution/run IDs plus trace cardinality to `specs/003-langfuse-evaluation-foundation/quickstart.md`
-- [ ] T091 [US1] Run the full 18-case manual workflow only after T090 passes, require 14 core plus four follow-up traces, zero infrastructure/citation failures, unchanged thresholds, `operation_accuracy=1.0`, successful PR reporting, and append final artifact/Langfuse evidence to `specs/003-langfuse-evaluation-foundation/quickstart.md` before marking PR `#68` ready
+- [X] T091 [US1] Run the full 18-case manual workflow only after T090 passes, require 14 core plus four follow-up traces, zero infrastructure/citation failures, unchanged thresholds, `operation_accuracy=1.0`, successful PR reporting, and append final artifact/Langfuse evidence to `specs/003-langfuse-evaluation-foundation/quickstart.md` before marking PR `#68` ready
 
 **Checkpoint**: Typed calculation semantics are reconciled fail-closed before tools, inherited from
 the final validated plan, and visible in Langfuse without a new score, gate, adapter, database
