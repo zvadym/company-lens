@@ -6,17 +6,18 @@ reviewed cases repeatedly and records both behavior and operational results.
 
 ## Where The Expected Behavior Lives
 
-The repository is the source of truth. The golden datasets are plain YAML files split into two
-slices:
+CompanyLens keeps its reviewed evaluation cases as plain YAML files in the repository. They are
+split into two slices:
 
 - `core.v1.yaml` covers structured financial questions, document retrieval, hybrid analysis,
   ambiguous or missing companies, adversarial instructions, and cross-document comparisons.
 - `follow_up.v1.yaml` covers session memory, safe context reuse, replacing or adding companies, and
   abstaining when a follow-up target cannot be resolved.
 
-Langfuse is the execution and comparison surface. Synchronization gives each repository case a
-stable identity, archives stale remote items, and verifies an exact dataset snapshot before a live
-evaluation begins. Editing a case in Langfuse never replaces the reviewed repository definition.
+Langfuse is where those cases are run and compared. Synchronization gives each case a stable
+identity, archives stale remote items, and verifies an exact dataset snapshot before a live
+evaluation begins. Changes to expected behavior are reviewed in the repository and then
+synchronized to Langfuse.
 
 ## Evaluation Flow
 

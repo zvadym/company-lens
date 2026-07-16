@@ -4,6 +4,15 @@
 
 ### A learning project about building — and evaluating — an AI research agent
 
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-agent%20workflow-1C3C3C)
+![PostgreSQL + pgvector](https://img.shields.io/badge/PostgreSQL%20%2B%20pgvector-retrieval-4169E1?logo=postgresql&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-models-111111?logo=openai&logoColor=white)
+![React](https://img.shields.io/badge/React-research%20UI-61DAFB?logo=react&logoColor=111111)
+![Docker](https://img.shields.io/badge/Docker-dev%20stack-2496ED?logo=docker&logoColor=white)
+![Reranker](https://img.shields.io/badge/Reranker-optional%20ML%20service-7C3AED)
+
 </div>
 
 CompanyLens is a learning project I built to better understand what it really takes to create and
@@ -62,7 +71,7 @@ development stack. Re-ranking can run as a separate cross-encoder service.
 
 ## Technical Deep Dives
 
-The README stays intentionally simple. More detailed documentation lives here:
+For implementation details:
 
 | Topic | Document |
 |---|---|
@@ -91,9 +100,6 @@ Run the local quality gate with:
 ```bash
 make check
 ```
-
-Development data lives in the Docker PostgreSQL stack. Local database files such as
-`company_lens.db` are not the source of truth for development.
 
 ## License
 
