@@ -8,6 +8,7 @@ from contextlib import contextmanager
 import pytest
 from langfuse import LangfuseOtelSpanAttributes
 
+from company_lens.agent.workflow_operation_telemetry import record_operation_reconciliation
 from company_lens.observability import telemetry
 from company_lens.observability.context import bind_context
 from company_lens.observability.langfuse_client import (
@@ -72,6 +73,73 @@ def test_generation_trace_content_metadata_omits_raw_input_and_output(monkeypatc
     assert span.attributes[LangfuseOtelSpanAttributes.OBSERVATION_MODEL] == "gpt-test"
     assert LangfuseOtelSpanAttributes.OBSERVATION_INPUT not in span.attributes
     assert LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT not in span.attributes
+
+
+def test_operation_reconciliation_generation_keeps_typed_metadata_without_raw_content(
+    monkeypatch,
+) -> None:
+    span = _FakeSpan()
+    _disable_generation_metrics(monkeypatch)
+    monkeypatch.setattr(telemetry.trace, "get_current_span", lambda *_args, **_kwargs: span)
+
+    record_generation(
+        model="repair-model",
+        purpose="operation_reconciliation",
+        input_tokens=12,
+        output_tokens=4,
+        total_tokens=16,
+        trace_content="metadata",
+        input_payload={"question": "private question"},
+        output_payload={"operation": "quarter_over_quarter_growth"},
+        tags=("llm", "openai", "operation_reconciliation"),
+    )
+
+    assert span.attributes[LangfuseOtelSpanAttributes.OBSERVATION_TYPE] == "generation"
+    assert span.attributes[LangfuseOtelSpanAttributes.TRACE_TAGS] == [
+        "llm",
+        "openai",
+        "operation_reconciliation",
+    ]
+    assert LangfuseOtelSpanAttributes.OBSERVATION_INPUT not in span.attributes
+    assert LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT not in span.attributes
+
+
+def test_operation_reconciliation_records_sanitized_conflict_and_outcome_metadata(
+    monkeypatch,
+) -> None:
+    span = _FakeSpan()
+    monkeypatch.setattr(
+        "company_lens.agent.workflow_operation_telemetry.trace.get_current_span",
+        lambda: span,
+    )
+
+    record_operation_reconciliation(
+        required=True,
+        intent_operations=("quarter_over_quarter_growth",),
+        conflict_reasons=("operation",),
+        branch_count=2,
+        decision_count=2,
+        final_operations=(
+            "quarter_over_quarter_growth",
+            "quarter_over_quarter_growth",
+        ),
+        attempts=1,
+        outcome="completed",
+    )
+
+    assert span.attributes == {
+        "company_lens.operation_reconciliation.required": True,
+        "company_lens.operation_reconciliation.intent_operations": ["quarter_over_quarter_growth"],
+        "company_lens.operation_reconciliation.conflict_reasons": ["operation"],
+        "company_lens.operation_reconciliation.branch_count": 2,
+        "company_lens.operation_reconciliation.decision_count": 2,
+        "company_lens.operation_reconciliation.final_operations": [
+            "quarter_over_quarter_growth",
+            "quarter_over_quarter_growth",
+        ],
+        "company_lens.operation_reconciliation.attempts": 1,
+        "company_lens.operation_reconciliation.outcome": "completed",
+    }
 
 
 def test_generation_observation_records_trace_tags(monkeypatch) -> None:

@@ -11,6 +11,10 @@ prompts:
     version: research-v1
     type: text
     path: agent/plan-request.txt
+  - name: agent/reconcile-operations
+    version: operation-reconciliation.v1
+    type: text
+    path: agent/reconcile-operations.txt
   - name: agent/generate-answer
     version: research-v1
     type: text

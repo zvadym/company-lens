@@ -24,6 +24,8 @@ _WORKFLOW_MODULE_NAMES = (
     "workflow_frame",
     "workflow_readiness",
     "workflow_plan_request",
+    "workflow_operation_conflicts",
+    "workflow_operation_reconciliation",
     "workflow_plan_deterministic",
     "workflow_replay_financial",
     "workflow_followup_intent",

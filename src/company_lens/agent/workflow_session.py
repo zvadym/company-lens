@@ -53,6 +53,9 @@ def _fallback_follow_up_analysis(
         required_capabilities=ordered_capabilities,
         chart_requested=chart_requested,
         is_follow_up=True,
+        inherit_previous_calculation_intents=(
+            memory.last_execution_plan is not None and AgentCapability.CALCULATIONS in represented
+        ),
         reason_codes=tuple(dict.fromkeys(reason_codes)),
     )
 

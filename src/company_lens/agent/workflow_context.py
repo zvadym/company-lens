@@ -21,6 +21,13 @@ from langgraph.runtime import Runtime
 from langgraph.types import Overwrite, Send
 from pydantic import BaseModel
 
+from company_lens.agent.calculation_intents import (
+    BranchOperationDecision,
+    CalculationIntent,
+    ModelCalculationIntent,
+    OperationReconciliation,
+    domain_calculation_intent,
+)
 from company_lens.agent.model import (
     ModelMessage,
     ModelProviderError,

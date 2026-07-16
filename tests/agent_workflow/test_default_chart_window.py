@@ -62,6 +62,12 @@ def test_default_chart_window_plots_quarterly_yoy_growth_series_against_macro() 
             AgentCapability.CALCULATIONS,
             AgentCapability.CHART,
         ),
+        calculation_intents=(
+            CalculationIntent(
+                operation="year_over_year_growth",
+                metrics=("revenue",),
+            ),
+        ),
         chart_requested=True,
     )
     facts = FinancialFactsBranch(
@@ -164,6 +170,12 @@ def test_normalized_qoq_follow_up_keeps_explicit_growth_operation() -> None:
             AgentCapability.CALCULATIONS,
             AgentCapability.CHART,
         ),
+        calculation_intents=(
+            CalculationIntent(
+                operation="quarter_over_quarter_growth",
+                metrics=("revenue",),
+            ),
+        ),
         chart_requested=True,
         is_follow_up=True,
     )
@@ -178,3 +190,61 @@ def test_normalized_qoq_follow_up_keeps_explicit_growth_operation() -> None:
         branch for branch in normalized.branches if isinstance(branch, CalculationBranch)
     )
     assert normalized_growth.operation == "quarter_over_quarter_growth"
+
+
+def test_default_chart_window_preserves_structured_annual_source_period() -> None:
+    facts = FinancialFactsBranch(
+        branch_id="financial",
+        request=FinancialFactQuery(
+            company_ids=(COMPANY_ID,),
+            metrics=("revenue",),
+            period_types=("annual",),
+        ),
+    )
+    growth = CalculationBranch(
+        branch_id="growth",
+        operation="year_over_year_growth",
+        input_refs=(facts.branch_id,),
+        depends_on=(facts.branch_id,),
+    )
+    plan = ExecutionPlan(
+        route=ResearchRoute.CALCULATION,
+        branches=(
+            facts,
+            growth,
+            ChartBranch(
+                branch_id="chart",
+                chart_type="line",
+                dataset_ref=growth.branch_id,
+                depends_on=(growth.branch_id,),
+                title="Annual revenue growth",
+            ),
+        ),
+    )
+    analysis = QuestionAnalysis(
+        normalized_question="Chart annual revenue growth.",
+        route=ResearchRoute.CALCULATION,
+        required_capabilities=(
+            AgentCapability.FINANCIAL_FACTS,
+            AgentCapability.CALCULATIONS,
+            AgentCapability.CHART,
+        ),
+        calculation_intents=(
+            CalculationIntent(
+                operation="year_over_year_growth",
+                metrics=("revenue",),
+            ),
+        ),
+        chart_requested=True,
+    )
+
+    normalized = _normalize_default_chart_window(
+        plan,
+        analysis,
+        ResolvedQuery(query="Chart annual revenue growth.", metrics=("revenue",)),
+    )
+
+    normalized_facts = next(
+        branch for branch in normalized.branches if isinstance(branch, FinancialFactsBranch)
+    )
+    assert normalized_facts.request.period_types == ("annual",)

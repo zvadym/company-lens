@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # ruff: noqa: F403, F405, I001
 from .context import *
+from company_lens.agent.calculation_intents import ModelCalculationIntent
 from company_lens.agent.workflow import _domain_question_analysis
 
 
@@ -16,6 +17,12 @@ def test_hybrid_growth_analysis_infers_missing_calculation_capability() -> None:
                 AgentCapability.DOCUMENTS,
                 AgentCapability.FINANCIAL_FACTS,
             ),
+            calculation_intents=(
+                ModelCalculationIntent(
+                    operation="year_over_year_growth",
+                    metrics=("revenue",),
+                ),
+            ),
             reason_codes=("mentions_revenue_growth",),
         )
     )
@@ -27,6 +34,21 @@ def test_hybrid_growth_analysis_infers_missing_calculation_capability() -> None:
         AgentCapability.CALCULATIONS,
     )
     assert "calculation_capability_inferred" in analysis.reason_codes
+    assert analysis.calculation_intents[0].operation == "year_over_year_growth"
+
+
+def test_growth_words_without_typed_intent_do_not_infer_calculation_capability() -> None:
+    analysis = _domain_question_analysis(
+        ModelQuestionAnalysis(
+            normalized_question="Compare Datadog revenue growth.",
+            route=ResearchRoute.STRUCTURED_ONLY,
+            required_capabilities=(AgentCapability.FINANCIAL_FACTS,),
+            reason_codes=("mentions_revenue_growth",),
+        )
+    )
+
+    assert analysis.required_capabilities == (AgentCapability.FINANCIAL_FACTS,)
+    assert "calculation_capability_inferred" not in analysis.reason_codes
 
 
 def test_document_only_growth_language_does_not_infer_numeric_calculation() -> None:

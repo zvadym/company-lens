@@ -8,6 +8,13 @@ from typing import Annotated, Literal, NotRequired, Required, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from company_lens.agent.calculation_intents import (
+    CalculationIntent,
+    ModelCalculationIntent,
+)
+from company_lens.agent.calculation_intents import (
+    CalculationOperation as CalculationOperation,
+)
 from company_lens.analytics.schemas import CalculationResult, ChartSpecification
 from company_lens.evidence.schemas import (
     AnswerValidation as AnswerValidation,
@@ -106,6 +113,8 @@ class ModelQuestionAnalysis(FrozenModel):
     required_capabilities: tuple[AgentCapability, ...] = ()
     chart_requested: bool = False
     is_follow_up: bool = False
+    calculation_intents: tuple[ModelCalculationIntent, ...] = ()
+    inherit_previous_calculation_intents: bool = False
     reason_codes: tuple[str, ...] = ()
 
     @field_validator("normalized_question")
@@ -139,6 +148,8 @@ class QuestionAnalysis(FrozenModel):
     required_capabilities: tuple[AgentCapability, ...] = ()
     chart_requested: bool = False
     is_follow_up: bool = False
+    calculation_intents: tuple[CalculationIntent, ...] = ()
+    inherit_previous_calculation_intents: bool = False
     reason_codes: tuple[str, ...] = ()
 
     @field_validator("normalized_question")
@@ -263,19 +274,6 @@ class FinancialFactsBranch(BranchBase):
 class MacroSeriesBranch(BranchBase):
     kind: Literal["query_macro_series"] = "query_macro_series"
     request: FredSeriesQuery
-
-
-CalculationOperation = Literal[
-    "quarter_over_quarter_growth",
-    "year_over_year_growth",
-    "cagr",
-    "margin",
-    "absolute_change",
-    "percentage_change",
-    "rolling_average",
-    "normalised_index",
-    "correlation",
-]
 
 
 class CalculationBranch(BranchBase):

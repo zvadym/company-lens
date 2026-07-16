@@ -92,6 +92,22 @@ def test_semantic_validation_uses_dedicated_judge_configuration() -> None:
     assert responses.parse_calls[0]["max_output_tokens"] == 333
 
 
+def test_operation_reconciliation_uses_repair_structured_configuration() -> None:
+    responses = FakeResponses()
+    provider = _provider(responses)
+
+    provider.generate_structured(
+        _messages(),
+        ParsedIntent,
+        purpose=ModelPurpose.OPERATION_RECONCILIATION,
+    )
+
+    assert responses.parse_calls[0]["model"] == "repair-model"
+    assert responses.parse_calls[0]["reasoning"] == {"effort": "low"}
+    assert responses.parse_calls[0]["max_output_tokens"] == 444
+    assert responses.parse_calls[0]["timeout"] == 30.0
+
+
 def test_structured_generation_omits_reasoning_when_disabled() -> None:
     responses = FakeResponses()
     provider = _provider(responses, planning_reasoning_effort="none")

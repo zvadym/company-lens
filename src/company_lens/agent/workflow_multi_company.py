@@ -136,15 +136,22 @@ def _requested_growth_operation(
     resolved: ResolvedQuery,
     previous_operation: CalculationOperation | None,
 ) -> CalculationOperation:
-    question = f"{resolved.query} {analysis.normalized_question}".casefold()
-    if any(
-        marker in question for marker in ("quarter-over-quarter", "quarter over quarter", "qoq")
-    ):
-        return "quarter_over_quarter_growth"
-    if any(marker in question for marker in ("year-over-year", "year over year", "yoy")):
-        return "year_over_year_growth"
-    if "percentage change" in question:
-        return "percentage_change"
+    del resolved
+    requested = next(
+        (
+            intent.operation
+            for intent in analysis.calculation_intents
+            if intent.operation
+            in {
+                "quarter_over_quarter_growth",
+                "year_over_year_growth",
+                "percentage_change",
+            }
+        ),
+        None,
+    )
+    if requested is not None:
+        return requested
     return previous_operation or "year_over_year_growth"
 
 
@@ -152,22 +159,15 @@ def _explicit_growth_requested(
     analysis: QuestionAnalysis,
     resolved: ResolvedQuery,
 ) -> bool:
-    context = " ".join(
-        (resolved.query, analysis.normalized_question, *analysis.reason_codes)
-    ).casefold()
+    del resolved
     return any(
-        marker in context
-        for marker in (
-            "growth",
-            "quarter-over-quarter",
-            "quarter over quarter",
-            "qoq",
-            "year-over-year",
-            "year over year",
-            "yoy",
-            "percentage change",
+        intent.operation
+        in {
+            "quarter_over_quarter_growth",
+            "year_over_year_growth",
             "percentage_change",
-        )
+        }
+        for intent in analysis.calculation_intents
     )
 
 

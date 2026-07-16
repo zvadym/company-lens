@@ -237,6 +237,9 @@ pytest -q \
 make check
 ```
 
+Local focused evidence on 2026-07-16: `85 passed`.
+Full local quality gate on 2026-07-16: `451 passed, 3 skipped` with Ruff and mypy green.
+
 Expected:
 
 - facts-only preparation performs no SEC filing, document-processing, or embedding work;
@@ -347,6 +350,8 @@ pytest -q \
   tests/agent_workflow/test_operation_reconciliation_flow.py \
   tests/agent_workflow/test_prompt_and_repair_context.py \
   tests/evals/test_agent_runner_infrastructure.py \
+  tests/evals/test_operation_reconciliation_outcomes.py \
+  tests/test_agent_openai_provider.py \
   tests/test_observability_security.py
 make check
 ```
@@ -359,9 +364,12 @@ Expected:
   reconciliation sequence and produces final `quarter_over_quarter_growth` branches;
 - the reconciler may update only operation, window, years, and base; topology and source requests
   remain unchanged;
+- calculation `window` is accepted only for rolling averages; source periods such as "last eight
+  quarters" remain in source requests;
 - an add-company follow-up inherits the previous final reconciled operation;
 - provider/response exhaustion produces infrastructure plus `gate_status=not_evaluated` and zero
   tools;
+- a model refusal takes that infrastructure path immediately without a reconciliation retry;
 - a schema-valid incompatible mapping produces observed `operation_reconciliation_failed`, a failed
   quality gate, and zero tools;
 - prompt metadata, model purpose, retries, tokens, latency, and sanitized conflict/outcome metadata

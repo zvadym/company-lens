@@ -96,9 +96,12 @@ Rules:
 - `calculation_intents` may contain multiple operations for a mixed calculation request.
 - `metrics` associates an intent with compatible planner inputs, including two-input operations such
   as margin or correlation; an empty tuple means the parser cannot identify a metric constraint.
-- Null parameters mean the user did not specify that parameter; they do not conflict with a
-  compatible planner default.
-- Explicit non-null `window`, `years`, or `base` values are authoritative intent constraints.
+- Null parameters mean the user did not specify that applicable parameter; they do not conflict with
+  a compatible planner default.
+- `window` is required and non-null only for `rolling_average`; source-selection periods such as
+  "last eight quarters" remain in the typed source request and never use calculation `window`.
+- `years` is required and non-null only for `cagr`; `base` may be non-null only for
+  `normalised_index`. These applicable non-null values are authoritative intent constraints.
 - A vague compatible follow-up such as `Add MongoDB too` emits no new explicit intents and sets
   `inherit_previous_calculation_intents=true`.
 - A follow-up that explicitly requests a new operation emits explicit intents and does not inherit
@@ -135,7 +138,8 @@ A conflict exists when any of the following is true:
 - a planner calculation operation is not represented by a compatible effective intent;
 - an effective intent is not represented by a compatible calculation branch;
 - a planner operation is associated with the wrong metric;
-- an explicit intent parameter conflicts with planner `window`, `years`, or `base`;
+- an applicable explicit intent parameter conflicts with planner `window`, `years`, or `base`, or an
+  inapplicable scalar is non-null;
 - the parser requests inheritance but the planner changes the inherited operation or explicit
   parameters;
 - a calculation plan has no effective typed intent;
@@ -212,7 +216,8 @@ Validation requires:
 - source requests, companies, metrics, and retrieval configuration remain unchanged;
 - operation input arity remains compatible with the unchanged inputs;
 - required parameters are present for operations such as CAGR and rolling average;
-- parameter values satisfy existing domain bounds;
+- parameter values satisfy existing domain bounds and are null for operations to which they do not
+  apply;
 - decision `window` and `years` are applied exactly, including null to clear an irrelevant value;
   decision `base=null` preserves the branch's existing non-null base, while a non-null base replaces
   it;
@@ -230,7 +235,9 @@ The reconciler cannot repair an incompatible topology. It fails closed instead.
 
 ### Provider or response infrastructure failure
 
-Timeout, connection failure, 429, 500, or schema-invalid structured output after bounded retries:
+A model refusal immediately takes the provider-response infrastructure path without retry. Timeout,
+connection failure, 429, 500, or schema-invalid structured output follows the existing recoverable
+policy and reaches this path after bounded retries are exhausted:
 
 - preserve the existing provider error category and sanitized failure code;
 - evaluation classifies the case as infrastructure;

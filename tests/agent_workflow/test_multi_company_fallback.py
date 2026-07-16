@@ -74,6 +74,12 @@ def test_multi_company_chart_fallback_plan_handles_planner_provider_failure() ->
         ),
         chart_requested=True,
         is_follow_up=True,
+        calculation_intents=(
+            CalculationIntent(
+                operation="year_over_year_growth",
+                metrics=("revenue",),
+            ),
+        ),
         reason_codes=("multi_company_comparison", "explicit_chart_request"),
     )
     model = PlanFailureModelProvider(
@@ -106,6 +112,7 @@ def test_multi_company_chart_fallback_replaces_under_scoped_model_plan() -> None
         ),
         chart_requested=True,
         is_follow_up=True,
+        inherit_previous_calculation_intents=True,
         reason_codes=("multi_company_comparison", "explicit_chart_request"),
     )
     previous_plan = ExecutionPlan(
@@ -174,7 +181,7 @@ def test_multi_company_chart_fallback_replaces_under_scoped_model_plan() -> None
         "generate_chart_spec",
     ]
     assert all(
-        branch.operation == "year_over_year_growth"
+        branch.operation == "quarter_over_quarter_growth"
         for branch in plan.branches
         if isinstance(branch, CalculationBranch)
     )
@@ -192,6 +199,12 @@ def test_multi_company_growth_fallback_splits_non_chart_company_series() -> None
         required_capabilities=(
             AgentCapability.FINANCIAL_FACTS,
             AgentCapability.CALCULATIONS,
+        ),
+        calculation_intents=(
+            CalculationIntent(
+                operation="quarter_over_quarter_growth",
+                metrics=("revenue",),
+            ),
         ),
         reason_codes=("multi_company_comparison", "quarter_over_quarter_growth"),
     )

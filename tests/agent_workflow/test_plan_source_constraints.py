@@ -102,6 +102,12 @@ def test_hybrid_growth_plan_gets_deterministic_calculation_when_model_omits_it()
             AgentCapability.FINANCIAL_FACTS,
             AgentCapability.CALCULATIONS,
         ),
+        calculation_intents=(
+            CalculationIntent(
+                operation="year_over_year_growth",
+                metrics=("revenue",),
+            ),
+        ),
     )
     plan = ExecutionPlan(
         route=ResearchRoute.HYBRID,

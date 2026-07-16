@@ -365,15 +365,18 @@ LLM-owned semantic intent emitted by parsing.
 |---|---|---|
 | `operation` | CalculationOperation | One of the existing supported calculation operations |
 | `metrics` | string[] | Canonical typed metric constraints; empty when unspecified; supports two-input operations |
-| `window` | integer/null | Positive when explicitly specified; required by a reconciled rolling average |
-| `years` | decimal/null | Positive when explicitly specified; required by a reconciled CAGR |
-| `base` | decimal/null | Explicit normalized-index base when specified |
+| `window` | integer/null | Positive and required only for `rolling_average`; null for every other operation |
+| `years` | decimal/null | Positive and required only for `cagr`; null for every other operation |
+| `base` | decimal/null | Optional explicit base only for `normalised_index`; null for every other operation |
 
 `QuestionAnalysis.calculation_intents` defaults to an empty tuple for repository fixtures.
 `QuestionAnalysis.inherit_previous_calculation_intents` defaults to false. Explicit current intents
 take precedence over inheritance. A vague compatible follow-up sets inheritance true and derives its
 effective intents from `SessionMemory.last_execution_plan` after that plan has been reconciled and
 validated.
+
+Source-selection periods such as "last eight quarters" remain in typed source requests and are not
+encoded as calculation `window`. That field always means the rolling-average calculation window.
 
 ### EffectiveCalculationIntent
 
@@ -383,7 +386,7 @@ Workflow-local projection used for comparison; it is not added to `AgentState` o
 |---|---|---|
 | `operation` | CalculationOperation | Copied from explicit intent or final previous plan |
 | `metrics` | string[] | Matched against numeric source requests, never free-form text |
-| `window`, `years`, `base` | scalar/null | Non-null values are authoritative conflict constraints |
+| `window`, `years`, `base` | scalar/null | Applicable non-null values are authoritative conflict constraints; inapplicable non-null values are invalid |
 | `source` | `current` or `inherited` | Privacy-safe provenance for conflict metadata |
 
 One effective intent may cover multiple company-specific calculation branches with the same source
@@ -410,12 +413,13 @@ Structured repair-model decision.
 |---|---|---|
 | `branch_id` | string | Must identify one existing calculation branch |
 | `operation` | CalculationOperation | Final operation for that branch |
-| `window` | integer/null | Positive; required for rolling average |
-| `years` | decimal/null | Positive; required for CAGR |
-| `base` | decimal/null | Valid normalized-index base when applicable |
+| `window` | integer/null | Positive and required only for `rolling_average`; null otherwise |
+| `years` | decimal/null | Positive and required only for `cagr`; null otherwise |
+| `base` | decimal/null | Valid only for `normalised_index`; null otherwise |
 
 Decision `window` and `years` apply exactly, so null clears an irrelevant prior value. Decision
-`base=null` preserves the existing non-null branch base; a non-null decision replaces it.
+`base=null` preserves the existing non-null branch base; an applicable non-null decision replaces
+it. Any inapplicable non-null scalar makes the reconciliation semantically invalid.
 
 ### OperationReconciliation
 
@@ -429,6 +433,7 @@ Application invariants:
   fields remain byte-for-byte unchanged;
 - only `operation`, `window`, `years`, and `base` may change;
 - operation arity must remain compatible with unchanged inputs;
+- scalar parameters must be applicable to the selected operation;
 - every effective intent must be represented after application;
 - complete domain plan validation runs before cache hydration or tools;
 - provider/response exhaustion preserves provider error categories;

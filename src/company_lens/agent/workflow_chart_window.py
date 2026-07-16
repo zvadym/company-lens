@@ -36,24 +36,16 @@ def _normalize_default_chart_window(
         for branch in plan.branches
         if isinstance(branch, MacroSeriesBranch) and branch.branch_id in plotted_refs
     }
-    use_quarterly_default = not _explicit_annual_growth_requested(analysis.normalized_question)
-    force_yoy = use_quarterly_default and not _explicit_quarter_growth_requested(
-        analysis.normalized_question
-    )
     normalized: list[ExecutionBranch] = []
     applied_default_window = False
     for branch in plan.branches:
-        if isinstance(branch, CalculationBranch) and branch.branch_id in growth_calculations:
-            if force_yoy and branch.operation != "year_over_year_growth":
-                branch = branch.model_copy(update={"operation": "year_over_year_growth"})
-                applied_default_window = True
-        elif isinstance(branch, FinancialFactsBranch) and branch.branch_id in financial_refs:
+        if isinstance(branch, FinancialFactsBranch) and branch.branch_id in financial_refs:
             if (
-                use_quarterly_default
-                and branch.request.period_start is None
+                branch.request.period_start is None
                 and branch.request.period_end is None
                 and not branch.request.fiscal_years
                 and not branch.request.fiscal_periods
+                and not branch.request.period_types
             ):
                 financial_request = branch.request.model_copy(
                     update={
@@ -81,24 +73,6 @@ def _normalize_default_chart_window(
             dict.fromkeys((*plan.reason_codes, DEFAULT_CHART_WINDOW_REASON))
         )
     return plan.model_copy(update=updates)
-
-
-def _explicit_quarter_growth_requested(question: str) -> bool:
-    normalized = question.casefold()
-    return any(
-        token in normalized
-        for token in (
-            "quarter-over-quarter",
-            "quarter over quarter",
-            "quarter_over_quarter",
-            "qoq",
-        )
-    )
-
-
-def _explicit_annual_growth_requested(question: str) -> bool:
-    normalized = question.casefold()
-    return any(token in normalized for token in ("annual", "yearly", "fiscal year"))
 
 
 def _normalize_chart_branch(plan: ExecutionPlan) -> ChartBranch | None:
@@ -139,8 +113,6 @@ def _default_chart_references(plan: ExecutionPlan) -> tuple[str, ...]:
 
 __all__ = (
     "_normalize_default_chart_window",
-    "_explicit_quarter_growth_requested",
-    "_explicit_annual_growth_requested",
     "_normalize_chart_branch",
     "_default_chart_references",
 )  # noqa: E501

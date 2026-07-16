@@ -28,7 +28,7 @@ The reconciliation prompt receives a canonical JSON object containing:
     {
       "operation": "quarter_over_quarter_growth",
       "metrics": ["revenue"],
-      "window": 8,
+      "window": null,
       "years": null,
       "base": null,
       "source": "current"
@@ -66,7 +66,7 @@ The response schema is `OperationReconciliation`:
     {
       "branch_id": "cloudflare_growth",
       "operation": "quarter_over_quarter_growth",
-      "window": 8,
+      "window": null,
       "years": null,
       "base": null
     }
@@ -81,6 +81,9 @@ Required response invariants:
 3. No branch ID appears twice.
 4. The response contains no topology, source-request, company, metric, dependency, or input fields.
 5. Required scalar parameters are present and valid for the selected operation.
+6. Non-null `window`, `years`, and `base` values are allowed only for `rolling_average`, `cagr`, and
+   `normalised_index`, respectively. A source-selection period such as "last eight quarters" belongs
+   to the unchanged source request and never to calculation `window`.
 
 ## Application
 
@@ -91,8 +94,10 @@ The workflow applies decisions by copying each existing calculation branch and u
 - `years`;
 - `base`.
 
-`window` and `years` are applied exactly, including null to clear an irrelevant value.
-`base=null` preserves the existing non-null branch base; a non-null base replaces it.
+`window` and `years` are applied exactly, including null to clear an irrelevant value. `window` must
+be non-null only for `rolling_average`; `years` must be non-null only for `cagr`. `base=null`
+preserves the existing non-null branch base; a non-null base is valid only for `normalised_index`
+and replaces the existing value.
 
 The workflow then verifies topology equality against the pre-reconciliation plan, re-runs structured
 intent conflict detection, and executes full domain plan validation. Cache hydration and tools remain
@@ -103,7 +108,8 @@ unreachable until every check passes.
 | Failure | Agent outcome | Evaluation gate | Workflow exit |
 |---|---|---|---|
 | timeout, connection, 429, 500 | provider infrastructure error | `not_evaluated` | `2` |
-| refusal or schema-invalid response after retries | provider response infrastructure error | `not_evaluated` | `2` |
+| model refusal, without retry | provider response infrastructure error | `not_evaluated` | `2` |
+| schema-invalid response after bounded retries | provider response infrastructure error | `not_evaluated` | `2` |
 | missing/duplicate/unknown decision | `operation_reconciliation_failed` behavior error | `failed` | `1` |
 | incompatible arity/parameter | `operation_reconciliation_failed` behavior error | `failed` | `1` |
 | remaining typed conflict | `operation_reconciliation_failed` behavior error | `failed` | `1` |

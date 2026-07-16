@@ -336,8 +336,10 @@ change is required.
 - Implement effective-intent resolution and conflict detection in
   `workflow_operation_conflicts.py`. Explicit current intents win; requested inheritance derives
   only from `SessionMemory.last_execution_plan`, which already stores the final validated plan.
-  Compare typed operations, source metrics, and explicit `window|years|base` values. One intent may
-  cover multiple company branches. Do not inspect free-form text in this module.
+  Compare typed operations, source metrics, and applicable explicit `window|years|base` values;
+  reject inapplicable non-null scalars. Source-selection periods remain in source requests and never
+  use calculation `window`. One intent may cover multiple company branches. Do not inspect
+  free-form text in this module.
 - Implement `workflow_operation_reconciliation.py` as a dedicated node between `plan_request` and
   `hydrate_cached_results`. Skip without a provider call when structures agree. On conflict, send
   the current question, typed intents, inherited final-plan summaries, and privacy-safe branch
@@ -358,7 +360,8 @@ change is required.
 - Preserve failure taxonomy. Exhausted provider/schema response failures retain provider categories
   and become infrastructure/not-evaluated. A schema-valid but incomplete, duplicate, unknown,
   incompatible, or still-conflicting mapping becomes observed quality failure
-  `operation_reconciliation_failed`. Both paths execute zero tools for the affected plan.
+  `operation_reconciliation_failed`. A model refusal is immediate provider-response infrastructure
+  without retry. All failure paths execute zero tools for the affected plan.
 
 Implementation order is test-first and dependency-bound:
 

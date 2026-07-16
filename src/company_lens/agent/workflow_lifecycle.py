@@ -95,13 +95,19 @@ def _parse_question(state: AgentState, runtime: Runtime[ResearchAgentRuntime]) -
 def _domain_question_analysis(output: ModelQuestionAnalysis) -> QuestionAnalysis:
     capabilities = output.required_capabilities
     chart_requested = output.chart_requested
+    calculation_intents = tuple(
+        domain_calculation_intent(intent) for intent in output.calculation_intents
+    )
+    inherit_previous_calculation_intents = output.inherit_previous_calculation_intents
     reason_codes = output.reason_codes
     route = output.route
     if output.route is ResearchRoute.UNSUPPORTED:
-        if capabilities or chart_requested:
+        if capabilities or chart_requested or calculation_intents:
             reason_codes = tuple(dict.fromkeys((*reason_codes, "unsupported_analysis_normalized")))
         capabilities = ()
         chart_requested = False
+        calculation_intents = ()
+        inherit_previous_calculation_intents = False
     elif _growth_calculation_capability_needed(output):
         capabilities = tuple(dict.fromkeys((*capabilities, AgentCapability.CALCULATIONS)))
         reason_codes = tuple(dict.fromkeys((*reason_codes, "calculation_capability_inferred")))
@@ -113,6 +119,8 @@ def _domain_question_analysis(output: ModelQuestionAnalysis) -> QuestionAnalysis
         required_capabilities=capabilities,
         chart_requested=chart_requested,
         is_follow_up=output.is_follow_up,
+        calculation_intents=calculation_intents,
+        inherit_previous_calculation_intents=inherit_previous_calculation_intents,
         reason_codes=reason_codes,
     )
 
@@ -125,21 +133,7 @@ def _growth_calculation_capability_needed(output: ModelQuestionAnalysis) -> bool
         {AgentCapability.FINANCIAL_FACTS, AgentCapability.MACRO_SERIES}
     ):
         return False
-    context = " ".join((output.normalized_question, *output.reason_codes)).casefold()
-    return any(
-        marker in context
-        for marker in (
-            "growth",
-            "quarter-over-quarter",
-            "quarter over quarter",
-            "quarter_over_quarter",
-            "qoq",
-            "year-over-year",
-            "year over year",
-            "year_over_year",
-            "yoy",
-        )
-    )
+    return bool(output.calculation_intents)
 
 
 __all__ = (
