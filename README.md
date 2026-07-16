@@ -2,97 +2,79 @@
 
 # CompanyLens
 
-### Agentic public-company research with adaptive retrieval, structured facts, and cited answers
-
-![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)
-![LangGraph](https://img.shields.io/badge/LangGraph-agent%20workflow-1C3C3C)
-![PostgreSQL + pgvector](https://img.shields.io/badge/PostgreSQL%20%2B%20pgvector-retrieval-4169E1?logo=postgresql&logoColor=white)
-![OpenAI](https://img.shields.io/badge/OpenAI-models-111111?logo=openai&logoColor=white)
-![React](https://img.shields.io/badge/React-research%20UI-61DAFB?logo=react&logoColor=111111)
-![Docker](https://img.shields.io/badge/Docker-dev%20stack-2496ED?logo=docker&logoColor=white)
-![Reranker](https://img.shields.io/badge/Reranker-optional%20ML%20service-7C3AED)
+### A learning project about building — and evaluating — an AI research agent
 
 </div>
 
-CompanyLens is a portfolio project that shows how an AI research agent can answer
-public-company questions without treating every problem as plain text search.
+CompanyLens is a learning project I built to better understand what it really takes to create and
+improve an AI research agent.
 
-Narrative questions go through filing and PDF retrieval. Numerical questions use
-structured SEC facts and deterministic calculations. Hybrid questions can combine
-company filings, SEC Company Facts, FRED macro series, charts, and citation validation
-inside one bounded agent run.
+My goal was not just to build another chatbot. I wanted to explore how an agent finds trustworthy
+information, decides which sources matter, combines written evidence with financial data, and
+produces answers that can be checked.
+
+To make that concrete, CompanyLens researches public companies. It can work with SEC filings,
+investor PDFs, structured financial facts, and FRED macroeconomic data; calculate metrics; prepare
+charts; and cite the evidence behind its claims.
 
 ![CompanyLens research UI](docs/Screenshot.png)
 
-## What It Shows
+## What I Explored — and What Comes Next
 
-- **Adaptive Retrieval**: exact entity filters, dense vector search, lexical search,
-  hybrid Reciprocal Rank Fusion, hierarchy expansion, dedupe, diversity, and bounded context.
-- **Typed Agent Graph**: a LangGraph workflow plans source branches, runs safe tool calls,
-  merges evidence, generates an answer, and validates citations.
-- **Structured Financial Facts**: revenue, margins, growth, and related metrics come from
-  typed SEC facts instead of embedding numerical tables as prose.
-- **Optional Reranking**: a separate ML reranker service can rescore retrieved chunks before
-  final evidence selection while the backend remains lightweight by default.
-- **Citation Validation**: generated claims must cite evidence IDs that were actually supplied
-  to the model, with company, period, unit, and calculation lineage checks.
-- **Persistent Sessions**: PostgreSQL-backed LangGraph checkpoints support follow-up questions,
-  cached source reuse, run inspection, resume, expiry, and safe cancellation.
+- **RAG (Retrieval-Augmented Generation)**: before answering, the agent searches its source
+  collection and gives the model the most relevant passages. This keeps the answer connected to
+  evidence instead of relying only on what the model already knows.
+- **Re-ranking**: search usually finds several possible passages. An optional reranker reads the
+  question and passages together, then moves the strongest evidence toward the top.
+- **Query rewriting**: some questions are too vague for search. Query rewriting turns them into
+  more focused search phrases. This is the next planned retrieval experiment; the current agent
+  does not use it yet.
 
-## Example Question
+## Evaluation Was Half the Project
 
-> Compare Cloudflare, Datadog, and MongoDB revenue growth over the last eight quarters.
-> Identify the two most frequently reported business risks for each company, explain whether
-> management's outlook changed, and plot revenue growth against the federal funds rate.
+A convincing demo can still be a lucky run. I wanted a repeatable way to see whether the agent was
+actually getting better.
 
-For that kind of request, CompanyLens resolves the companies and periods, prepares missing source
-data, queries structured SEC facts, retrieves relevant filing passages, optionally reranks document
-chunks, fetches FRED observations, calculates growth, builds a chart spec, and validates every cited
-answer before final output.
+CompanyLens keeps reviewed test questions in the repository and runs the agent against them.
+**Langfuse** makes each evaluation run visible: I can inspect what the agent did, review scores for
+individual cases, and compare the overall result after changing a prompt, model, retrieval strategy,
+or workflow step.
 
-## How It Works
+This helped me:
 
-```mermaid
-flowchart LR
-    Q["User question"] --> A["Parse and resolve entities"]
-    A --> P["Build typed execution plan"]
-    P --> F["SEC facts"]
-    P --> R["Filing/PDF retrieval"]
-    P --> M["FRED macro series"]
-    F --> C["Calculations and chart spec"]
-    R --> E["Evidence merge"]
-    M --> C
-    C --> E
-    E --> G["Generate grounded answer"]
-    G --> V["Validate citations"]
-    V --> O["Final answer or safe abstention"]
-```
+- trace a failure to a specific part of the agent instead of guessing;
+- catch regressions in tool choice, follow-up questions, citations, and operational limits;
+- compare changes using the same questions and scoring rules;
+- notice when the evaluation itself was wrong.
 
-The agent is deliberately bounded: it uses typed plans, fixed tool ports, retry budgets, public
-trace events, and citation repair/abstention instead of an unrestricted autonomous loop.
+For example, one run looked as if the agent had exceeded its API-call budget. The Langfuse trace
+showed that the case had legitimately been retried, but both attempts were being measured against a
+one-attempt limit. That led to a clearer, replay-aware evaluation rule.
 
-## Read The Deep Dives
+Read the technical explanation in [Evaluation and Langfuse](docs/portfolio/evaluation-and-langfuse.md).
 
-| Topic | What to read |
+## Technology
+
+The project uses **Python**, **FastAPI**, and **LangGraph** for the agent and API;
+**PostgreSQL with pgvector** for data and retrieval; **OpenAI models** for planning and answers;
+**Langfuse** for evaluation visibility; **React** for the research interface; and **Docker** for the
+development stack. Re-ranking can run as a separate cross-encoder service.
+
+## Technical Deep Dives
+
+The README stays intentionally simple. More detailed documentation lives here:
+
+| Topic | Document |
 |---|---|
+| RAG, adaptive retrieval, re-ranking, and planned query rewriting | [Retrieval and reranking](docs/portfolio/retrieval-and-reranking.md) |
+| Evaluation workflow and Langfuse | [Evaluation and Langfuse](docs/portfolio/evaluation-and-langfuse.md) |
 | Agent workflow | [Research graph](docs/portfolio/research-graph.md) |
-| Retrieval, source graph, reranking | [Retrieval and reranking](docs/portfolio/retrieval-and-reranking.md) |
-| End-to-end hybrid example | [Hybrid query walkthrough](docs/portfolio/hybrid-query-walkthrough.md) |
-| API events and public traces | [Research API and SSE](docs/research-api.md) |
-| Operations and safety boundaries | [Operations runbook](docs/operations.md) |
-| Architecture decisions | [ADR index](docs/architecture/adr-0004-langgraph-research-tools.md) |
+| Complete research example | [Hybrid query walkthrough](docs/portfolio/hybrid-query-walkthrough.md) |
+| API and operations | [Research API](docs/research-api.md) · [Operations runbook](docs/operations.md) |
 
-## Data Sources
+## Run It Locally
 
-- SEC filings: 10-K, 10-Q, selected 8-K filings, exhibits, and source metadata.
-- Investor documents: annual reports, investor decks, shareholder letters, and earnings PDFs.
-- SEC Company Facts: typed XBRL observations with metrics, periods, units, and lineage.
-- FRED: macro series such as federal funds rate, CPI, unemployment, Treasury yields, and GDP growth.
-
-## Local Development
-
-Copy the environment file, then use the Docker dev stack:
+Create an environment file and fill in the credentials required for the features you want to run:
 
 ```bash
 cp .env.example .env
@@ -101,24 +83,17 @@ make start-dev-docker
 make index-dev
 ```
 
-The React app runs at `http://localhost:5173`; the API runs at `http://localhost:8000`.
+The research interface runs at `http://localhost:5173`; the API runs at
+`http://localhost:8000`.
 
-Reranking is disabled by default. To run the optional local reranker service:
-
-```bash
-COMPOSE_PROFILES=reranker \
-COMPANY_LENS_RERANKER_PROVIDER=http \
-make start-dev-docker
-```
-
-Common checks:
+Run the local quality gate with:
 
 ```bash
 make check
 ```
 
-Use the Docker dev stack for development data and database checks. Local files such as
-`company_lens.db` are not the source of truth for dev.
+Development data lives in the Docker PostgreSQL stack. Local database files such as
+`company_lens.db` are not the source of truth for development.
 
 ## License
 
